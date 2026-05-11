@@ -13,17 +13,15 @@ from banner.navigation import (
     start_over,
     wait_for_save_success,
 )
+from data_processing.shared.logging import log
 
-FORM = "SOAHOLD"
 
-
-def log(msg: str) -> None:
-    print(f"[SOAHOLD] {msg}", flush=True)
+LOG_PREFIX = "SOAHOLD"
 
 
 def open_form_soahold(page: Page) -> None:
     open_form(page, FORM, wait_selector="[id='inp:key_block_id']")
-    log("SOAHOLD key block field detected.")
+    log("SOAHOLD key block field detected.", prefix=LOG_PREFIX)
 
 
 def set_keyblock_id(page: Page, sid: str) -> None:
@@ -43,7 +41,7 @@ def get_insert_row_number(page: Page) -> str:
     if not row_num:
         raise RuntimeError("Could not determine inserted row number from Hold Type input.")
 
-    log(f"Inserted row number detected: {row_num}")
+    log(f"Inserted row number detected: {row_num}", prefix=LOG_PREFIX)
     return row_num
 
 
@@ -66,7 +64,7 @@ def set_hold_type(page: Page, row_num: str, hold_type: str) -> None:
     page.keyboard.press("Tab")
     page.wait_for_timeout(600)
 
-    log(f"Entered Hold Type: {hold_type}")
+    log(f"Entered Hold Type: {hold_type}", prefix=LOG_PREFIX)
 
 
 def fill_active_editor_input(page: Page, row_num: str, value: str, label: str) -> None:
@@ -89,7 +87,7 @@ def fill_active_editor_input(page: Page, row_num: str, value: str, label: str) -
     page.keyboard.press("Tab")
     page.wait_for_timeout(500)
 
-    log(f"{label} set OK: {value}")
+    log(f"{label} set OK: {value}", prefix=LOG_PREFIX)
 
 
 def fill_origination_code_input(page: Page, row_num: str, value: str) -> None:
@@ -120,7 +118,7 @@ def fill_origination_code_input(page: Page, row_num: str, value: str) -> None:
     page.keyboard.press("Tab")
     page.wait_for_timeout(600)
 
-    log(f"Origination Code set OK: {value}")
+    log(f"Origination Code set OK: {value}", prefix=LOG_PREFIX)
 
 
 def enter_hold_details(
@@ -137,12 +135,12 @@ def enter_hold_details(
     fill_active_editor_input(page, row_num, amount, "Amount")
     fill_origination_code_input(page, row_num, orig_code)
 
-    log("Completed hold detail entry.")
+    log("Completed hold detail entry.", prefix=LOG_PREFIX)
 
 
 def finalize_student_entry(page: Page, *, mode: RunMode) -> None:
     if mode == RunMode.TEST:
-        log("TEST MODE: discarding changes via Start Over -> No.")
+        log("TEST MODE: discarding changes via Start Over -> No.", prefix=LOG_PREFIX)
         start_over(page)
         click_no_on_save_warning(page)
         return

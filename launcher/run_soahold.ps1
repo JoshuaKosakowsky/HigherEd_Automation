@@ -1,4 +1,5 @@
 param(
+    [ValidateSet("test", "prod", "debug")]
     [string]$Mode
 )
 

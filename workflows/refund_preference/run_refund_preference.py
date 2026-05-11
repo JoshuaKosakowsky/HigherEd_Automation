@@ -10,7 +10,6 @@ from bankmobile.config import get_bankmobile_profile
 from bankmobile.login import login_if_needed
 from bankmobile.refund_preference import (
     goto_card_search,
-    log,
     lookup_refund_preference_for_sid,
     normalize_sid,
 )

@@ -11,7 +11,6 @@ from bankmobile.timeout_reversal import (
     download_timeout_reversal_excel,
     get_latest_batch_job,
     goto_tandr_start,
-    log,
     open_batch_detail,
     set_last_90_days_and_submit,
 )
