@@ -3,13 +3,13 @@
 from playwright.sync_api import Page
 
 from banner.actions import click_first_available
-from banner.config import BANNER_URL
+from banner.config import BANNER_ADMIN_URL
 
 
 def open_form(page: Page, form: str, *, wait_selector: str | None = None) -> None:
-    url = f"https://banner.cccs.edu/BannerAdmin/?form={form}"
+    url = f"{BANNER_ADMIN_URL}?form={form}"
     page.goto(url, wait_until="domcontentloaded")
-    print(f"Opened Banner form {form}.")
+    print(f"Opened Banner form {form}.", flush=True)
 
     if wait_selector:
         page.wait_for_selector(wait_selector, timeout=120_000)

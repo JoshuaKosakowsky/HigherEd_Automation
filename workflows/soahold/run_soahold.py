@@ -22,6 +22,10 @@ from banner.navigation import (
 )
 from data_processing.shared.dates import compute_current_term_code
 from data_processing.shared.files import ensure_dir
+from data_processing.shared.logging import log
+
+
+LOG_PREFIX = "SOAHOLD"
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -119,18 +123,18 @@ def main() -> int:
     ensure_dir(HOLDS_DIR)
 
     if mode == RunMode.TEST:
-        log("TEST MODE ENABLED - HOLDS WILL NOT BE SAVED.")
+        log("TEST MODE ENABLED - HOLDS WILL NOT BE SAVED.", prefix=LOG_PREFIX)
     elif mode == RunMode.DEBUG:
-        log("DEBUG MODE ENABLED - HOLDS WILL BE SAVED WITH EXTRA LOGGING.")
+        log("DEBUG MODE ENABLED - HOLDS WILL BE SAVED WITH EXTRA LOGGING.", prefix=LOG_PREFIX)
     else:
-        log("PRODUCTION MODE ENABLED - HOLDS WILL BE SAVED.")
+        log("PRODUCTION MODE ENABLED - HOLDS WILL BE SAVED.", prefix=LOG_PREFIX)
 
-    log(f"Using holds input file: {input_file}")
+    log(f"Using holds input file: {input_file}", prefix=LOG_PREFIX)
 
     df = load_holds_file(input_file)
     total_rows = len(df)
 
-    log(f"Loaded {total_rows} hold records.")
+    log(f"Loaded {total_rows} hold records.", prefix=LOG_PREFIX)
 
     processed = 0
     failed = 0
@@ -149,7 +153,7 @@ def main() -> int:
 
         try:
             page.goto(BANNER_URL, wait_until="domcontentloaded")
-            log("Opened Banner App Navigator.")
+            log("Opened Banner App Navigator.", prefix=LOG_PREFIX)
 
             login_if_needed(page)
             open_form_soahold(page)
@@ -161,7 +165,7 @@ def main() -> int:
                 amount = str(row["AMOUNT"]).strip()
                 orig_code = str(row["ORIGINATION CODE"]).strip()
 
-                log(f"Starting row {idx + 1}/{total_rows} for SID {sid}")
+                log(f"Starting row {idx + 1}/{total_rows} for SID {sid}", prefix=LOG_PREFIX)
 
                 try:
                     apply_hold_to_student(
@@ -179,17 +183,17 @@ def main() -> int:
                     if mode == RunMode.TEST:
                         log(
                             f"SUCCESS row {idx + 1}/{total_rows} | SID {sid} | "
-                            "TEST MODE discarded changes."
+                            "TEST MODE discarded changes.", prefix=LOG_PREFIX
                         )
                     else:
                         log(
                             f"SUCCESS row {idx + 1}/{total_rows} | SID {sid} | "
-                            "Changes saved."
+                            "Changes saved.", prefix=LOG_PREFIX
                         )
 
                 except Exception as e:
                     failed += 1
-                    log(f"FAILED row {idx + 1}/{total_rows} | SID {sid} | {e}")
+                    log(f"FAILED row {idx + 1}/{total_rows} | SID {sid} | {e}", prefix=LOG_PREFIX)
                     recover_soahold_state(page, mode=mode)
 
                 completed = processed + failed
@@ -202,7 +206,7 @@ def main() -> int:
                 log(
                     f"Progress: {completed}/{total_rows} ({pct:.1f}%) | "
                     f"Successes: {processed} | Failures: {failed} | "
-                    f"ETA: {format_eta(eta_seconds)}"
+                    f"ETA: {format_eta(eta_seconds)}", prefix=LOG_PREFIX
                 )
 
                 page.wait_for_timeout(400)
@@ -211,7 +215,7 @@ def main() -> int:
 
             log(
                 f"Run complete. Successes: {processed} | Failures: {failed} | "
-                f"Total: {total_rows} | Elapsed: {format_eta(total_elapsed)}"
+                f"Total: {total_rows} | Elapsed: {format_eta(total_elapsed)}", prefix=LOG_PREFIX
             )
 
             return 0 if failed == 0 else 2

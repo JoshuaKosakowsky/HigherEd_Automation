@@ -16,6 +16,9 @@ from bankmobile.timeout_reversal import (
     set_last_90_days_and_submit,
 )
 from data_processing.shared.files import ensure_dir
+from data_processing.shared.logging import log
+
+LOG_PREFIX = "Timeout/Reversal"
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -38,11 +41,11 @@ def main() -> int:
     batch_id, job_file = get_latest_batch_job(JOBS_DIR)
 
     if not batch_id or not job_file:
-        log(f"No new batch jobs found in {JOBS_DIR}. Exiting quietly.")
+        log(f"No new batch jobs found in {JOBS_DIR}. Exiting quietly.", prefix=LOG_PREFIX)
         return 0
 
-    log(f"Found batch job: {batch_id}")
-    log(f"Job file: {job_file}")
+    log(f"Found batch job: {batch_id}", prefix=LOG_PREFIX)
+    log(f"Job file: {job_file}", prefix=LOG_PREFIX)
 
     profile = get_bankmobile_profile("chrome")
     ensure_dir(profile.profile_dir)
@@ -69,7 +72,7 @@ def main() -> int:
                 output_dir=OUTPUT_DIR,
             )
 
-            log(f"Completed timeout/reversal download: {output_file}")
+            log(f"Completed timeout/reversal download: {output_file}", prefix=LOG_PREFIX)
 
         finally:
             context.close()

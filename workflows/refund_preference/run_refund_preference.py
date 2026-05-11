@@ -15,9 +15,13 @@ from bankmobile.refund_preference import (
     normalize_sid,
 )
 from data_processing.shared.files import ensure_dir
+from data_processing.shared.logging import log
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+LOG_PREFIX = "Refund Preference"
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 INPUT_EXCEL = (
     Path.home()
@@ -85,14 +89,14 @@ def main() -> int:
     records = load_sids_from_excel(INPUT_EXCEL)
 
     if not records:
-        log("No valid SIDs found. Exiting.")
+        log("No valid SIDs found. Exiting.", prefix=LOG_PREFIX)
         return 0
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = OUTPUT_DIR / f"RefundPreference_{timestamp}.xlsx"
 
-    log(f"Loaded {len(records)} SIDs.")
-    log(f"Output file: {output_file}")
+    log(f"Loaded {len(records)} SIDs.", prefix=LOG_PREFIX)
+    log(f"Output file: {output_file}", prefix=LOG_PREFIX)
 
     results = []
 
@@ -114,7 +118,7 @@ def main() -> int:
                 sid = record["SID"]
                 dnr_name = record["DNR_Name"]
 
-                log(f"[{idx}/{len(records)}] Looking up SID: {sid}")
+                log(f"[{idx}/{len(records)}] Looking up SID: {sid}", prefix=LOG_PREFIX)
 
                 try:
                     result = lookup_refund_preference_for_sid(page, sid)
@@ -146,7 +150,7 @@ def main() -> int:
 
     pd.DataFrame(results).to_excel(output_file, index=False)
 
-    log(f"Wrote output: {output_file}")
+    log(f"Wrote output: {output_file}", prefix=LOG_PREFIX)
     return 0
 
 

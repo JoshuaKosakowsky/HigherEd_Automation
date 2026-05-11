@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 BANNER_URL = "https://banner.cccs.edu/applicationNavigator/seamless"
-
+BANNER_ADMIN_URL = "https://banner.cccs.edu/BannerAdmin/"
 
 @dataclass(frozen=True)
 class BrowserProfile:
