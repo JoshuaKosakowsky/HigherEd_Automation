@@ -12,7 +12,6 @@ from banner.login import login_if_needed
 from banner.modes import RunMode
 from banner.soahold import (
     apply_hold_to_student,
-    log,
     open_form_soahold,
 )
 from banner.navigation import (

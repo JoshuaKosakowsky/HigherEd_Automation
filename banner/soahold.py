@@ -17,7 +17,7 @@ from data_processing.shared.logging import log
 
 
 LOG_PREFIX = "SOAHOLD"
-
+FORM = "SOAHOLD"
 
 def open_form_soahold(page: Page) -> None:
     open_form(page, FORM, wait_selector="[id='inp:key_block_id']")
