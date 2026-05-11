@@ -7,7 +7,7 @@ from playwright.sync_api import TimeoutError as PWTimeoutError
 
 from banner.login import login_if_needed
 from data_processing.shared.files import ensure_dir
-from data_processing.shared.dates import stamp_yyyymmdd, compute_term_code
+from data_processing.shared.dates import stamp_yyyymmdd, compute_future_term_code
 
 
 FORM = "TZRCRSF"
@@ -418,7 +418,7 @@ def run_tzrcrsf(
     set_process_and_go(page)
     wait_for_gjapctl_params(page)
 
-    term_code = compute_term_code()
+    term_code = compute_future_term_code()
     run_stamp = stamp_yyyymmdd()
 
     print("Computed TERM CODE:", term_code)

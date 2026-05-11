@@ -19,7 +19,7 @@ from data_processing.course_fees.transform import (
     add_expected_fee_fields,
     finalize_course_fee_output,
 )
-from data_processing.shared.dates import compute_term_code, stamp_yyyymmdd
+from data_processing.shared.dates import compute_future_term_code, stamp_yyyymmdd
 
 
 def run_course_fees_pipeline(
@@ -30,7 +30,7 @@ def run_course_fees_pipeline(
     third_party_dir: Path | None = None,
     write_debug_outputs: bool = False,
 ) -> Path:
-    term_code = compute_term_code()
+    term_code = compute_future_term_code()
     run_stamp = stamp_yyyymmdd()
 
     config = build_course_fee_config(

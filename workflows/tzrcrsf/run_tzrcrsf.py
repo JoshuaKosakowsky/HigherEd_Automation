@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 from banner.config import BANNER_URL, get_banner_profile
 from banner.tzrcrsf import run_tzrcrsf
 from data_processing.course_fees.pipeline import run_course_fees_pipeline
-from data_processing.shared.dates import compute_term_code
+from data_processing.shared.dates import compute_future_term_code
 from data_processing.shared.files import ensure_dir
 
 
@@ -54,7 +54,7 @@ def main() -> int:
 
             print(f"Completed TZRCRSF raw output: {raw_course_fees_file}")
 
-            term_code = compute_term_code()
+            term_code = compute_future_term_code()
             fiscal_year = term_code[2:4]
 
             csf_file = (

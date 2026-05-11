@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from data_processing.course_fees.pipeline import run_course_fees_pipeline
-from data_processing.shared.dates import compute_term_code, stamp_yyyymmdd
+from data_processing.shared.dates import compute_future_term_code, stamp_yyyymmdd
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    term_code = compute_term_code()
+    term_code = compute_future_term_code()
     fiscal_year = term_code[2:4]
     run_stamp = stamp_yyyymmdd()
 

@@ -20,8 +20,4 @@ DNR_EXCEL = (
     / "Reversals- DO NOT REFUND PA.xlsx"
 )
 
-FGIGLAC_DIR = Path(
-    r"C:\Users\S03112819\OneDrive - Colorado Community College System"
-    r"\Accounts Receivable - AR Supervisors - AR Supervisors"
-    r"\Daily Reports\FGIGLAC"
-)
+FGIGLAC_DIR = AR_REPORTS_ROOT / "FGIGLAC"
