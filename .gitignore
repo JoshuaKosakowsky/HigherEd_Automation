@@ -11,6 +11,10 @@ logs/
 # Data Files
 data/
 *.zip
+*.xlsx
+*.csv
+*.xlsm
+.json
 
 # OS files
 .DS_Store

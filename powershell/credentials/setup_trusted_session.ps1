@@ -1,10 +1,10 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Banner", "BankMobile", "Cognos")]
+    [ValidateSet("Mines", "Trailhead", "Banner", "BankMobile", "Cognos")]
     [string]$System,
 
     [ValidateSet("edge", "chrome")]
-    [string]$Browser = "edge"
+    [string]$Browser = "chrome"
 )
 
 $ErrorActionPreference = "Stop"

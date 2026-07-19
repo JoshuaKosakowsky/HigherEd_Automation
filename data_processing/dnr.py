@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from data_processing.shared.sid import normalize_sid
+from data_processing.shared.cwid import normalize_sid
 from data_processing.shared.excel import (
     read_excel_sheet,
     validate_required_columns,

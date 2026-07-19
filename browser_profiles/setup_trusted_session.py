@@ -11,6 +11,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from banner.config import BANNER_URL, BrowserProfile, get_banner_profile
+from mymines.config import MINES_URL, BrowserProfile, get_mines_profile
 
 
 NAV_TIMEOUT_MS = 180_000
@@ -33,6 +34,13 @@ def get_trusted_session_config(system_name: str, browser: str) -> TrustedSession
             login_url=BANNER_URL,
             browser_profile=get_banner_profile(browser),
         )
+    
+    if system_name == "Mines":
+        return TrustedSessionConfig(
+            system_name="Mines",
+            login_url=MINES_URL,
+            browser_profile=get_mines_profile(browser),
+        )
 
     raise ValueError(f"Unsupported system: {system_name}")
 
@@ -45,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--system",
         required=True,
-        choices=["Banner"],
+        choices=["Mines", "Trailhead", "Banner", "BankMobile", "Cognos"],
         help="System to log into.",
     )
 
