@@ -24,7 +24,7 @@ DEFAULT_OUTPUT_FILE = (
 
 DEFAULT_FILE_PATTERN = "TGIACCD_fy*.xlsx"
 
-PIPELINE_VERSION = "Yearly Analytics"
+PIPELINE_VERSION = "Yearly Analytics_2026.07.30-v4.4"
 
 DEFAULT_COLLECTION_CODES = (
     "COLL",
@@ -43,6 +43,17 @@ DEFAULT_CHARGE_GROUPS = (
     (
         "Fees",
         ("FEE",),
+    ),
+)
+
+ANNUAL_EXACT_REPORTING_GROUPS = (
+    (
+        "Write-Off Bad Debt",
+        "WOFF",
+    ),
+    (
+        "BDRC - Bad Debt Recovery",
+        "BDRC",
     ),
 )
 

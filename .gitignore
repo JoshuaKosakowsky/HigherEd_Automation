@@ -1,26 +1,67 @@
-# Python virtual environment
+# Python virtual environments
 .venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
 
 # Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Logs
-logs/
+# Preserve directories containing .gitkeep, but ignore their contents
+logs/**
+!logs/**/
+!logs/**/.gitkeep
+*.log
 
-# Data Files
-data/
+# Data files and archives
 *.zip
 *.xlsx
-*.csv
+*.xls
 *.xlsm
-.json
+*.csv
+*.tsv
+*.parquet
+
+# JSON data
+*.json
+
+# Allow specific JSON files that belong to the application
+# Add exceptions here as needed:
+# !config/example.json
+# !package.json
+# !package-lock.json
+
+# Private keys and certificates
+*.ppk
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# VSCode
+# VS Code
 .vscode/
 
 # Jupyter

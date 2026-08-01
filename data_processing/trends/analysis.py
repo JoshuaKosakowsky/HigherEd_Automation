@@ -9,7 +9,11 @@ from data_processing.shared.tgiaccd import (
     iter_tgiaccd_rows,
 )
 
-from .config import REQUIRED_COLUMNS, TrendsConfig
+from .config import (
+    ANNUAL_EXACT_REPORTING_GROUPS,
+    REQUIRED_COLUMNS,
+    TrendsConfig,
+)
 
 
 @dataclass
@@ -22,6 +26,14 @@ class DetailCodeTotal:
     transaction_count: int = 0
     total_amount: float = 0.0
     signed_ar_effect: float = 0.0
+    student_ids: set[str] = field(
+        default_factory=set,
+        repr=False,
+    )
+
+    @property
+    def student_count(self) -> int:
+        return len(self.student_ids)
 
 
 @dataclass
@@ -87,6 +99,19 @@ class ChargeAverage:
             / self.all_student_count
         )
 
+@dataclass(frozen=True)
+class ReportingGroupTotal:
+    fiscal_year: int
+    label: str
+    included_codes: str
+    transaction_count: int
+    charge_transaction_count: int
+    payment_credit_transaction_count: int
+    student_count_with_activity: int
+    all_student_count: int
+    charge_amount: float
+    payment_credit_amount: float
+    net_amount: float
 
 @dataclass
 class TermGroupTotal:
@@ -493,6 +518,10 @@ def analyze_tgiaccd_file(
         detail_total.signed_ar_effect += (
             signed_ar_effect
         )
+        if student_id:
+            detail_total.student_ids.add(
+                student_id
+            )
 
     if (
         config.strict_detail_codes
@@ -702,6 +731,183 @@ def analyze_tgiaccd_file(
         term_collection_totals,
     )
 
+def build_reporting_group_totals(
+    *,
+    fiscal_year_results: list[
+        FiscalYearAnalysis
+    ],
+    detail_code_results: list[
+        DetailCodeTotal
+    ],
+    group_average_results: list[
+        ChargeAverage
+    ],
+) -> list[ReportingGroupTotal]:
+    """
+    Build annual category-group and exact-code totals.
+
+    Tuition, Room and Board, and Fees come from configured
+    Banner categories. WOFF and BDRC use exact detail codes.
+    """
+    group_results_by_year: dict[
+        int,
+        list[ChargeAverage],
+    ] = defaultdict(list)
+
+    for result in group_average_results:
+        group_results_by_year[
+            result.fiscal_year
+        ].append(result)
+
+    detail_results_by_year_and_code = {
+        (
+            result.fiscal_year,
+            result.detail_code.upper(),
+        ): result
+        for result in detail_code_results
+    }
+
+    reporting_totals: list[
+        ReportingGroupTotal
+    ] = []
+
+    for fiscal_year_result in fiscal_year_results:
+        fiscal_year = (
+            fiscal_year_result.fiscal_year
+        )
+
+        for group_result in group_results_by_year[
+            fiscal_year
+        ]:
+            reporting_totals.append(
+                ReportingGroupTotal(
+                    fiscal_year=fiscal_year,
+                    label=group_result.label,
+                    included_codes=(
+                        group_result.category_codes
+                    ),
+                    transaction_count=(
+                        group_result.transaction_count
+                    ),
+                    charge_transaction_count=(
+                        group_result
+                        .charge_transaction_count
+                    ),
+                    payment_credit_transaction_count=(
+                        group_result
+                        .payment_credit_transaction_count
+                    ),
+                    student_count_with_activity=(
+                        group_result
+                        .student_count_with_activity
+                    ),
+                    all_student_count=(
+                        group_result.all_student_count
+                    ),
+                    charge_amount=(
+                        group_result.charge_amount
+                    ),
+                    payment_credit_amount=(
+                        group_result
+                        .payment_credit_amount
+                    ),
+                    net_amount=(
+                        group_result.net_category_amount
+                    ),
+                )
+            )
+
+        for (
+            reporting_label,
+            detail_code,
+        ) in ANNUAL_EXACT_REPORTING_GROUPS:
+            detail_result = (
+                detail_results_by_year_and_code.get(
+                    (
+                        fiscal_year,
+                        detail_code,
+                    )
+                )
+            )
+
+            if detail_result is None:
+                transaction_count = 0
+                student_count = 0
+                charge_transaction_count = 0
+                payment_transaction_count = 0
+                charge_amount = 0.0
+                payment_amount = 0.0
+                net_amount = 0.0
+            else:
+                code_type = (
+                    detail_result.code_type.upper()
+                )
+                is_charge = code_type == "C"
+                is_payment = code_type == "P"
+
+                transaction_count = (
+                    detail_result.transaction_count
+                )
+                student_count = (
+                    detail_result.student_count
+                )
+
+                charge_transaction_count = (
+                    transaction_count
+                    if is_charge
+                    else 0
+                )
+                payment_transaction_count = (
+                    transaction_count
+                    if is_payment
+                    else 0
+                )
+
+                charge_amount = (
+                    detail_result.total_amount
+                    if is_charge
+                    else 0.0
+                )
+                payment_amount = (
+                    detail_result.total_amount
+                    if is_payment
+                    else 0.0
+                )
+                net_amount = (
+                    detail_result.signed_ar_effect
+                )
+
+            reporting_totals.append(
+                ReportingGroupTotal(
+                    fiscal_year=fiscal_year,
+                    label=reporting_label,
+                    included_codes=(
+                        f"Detail Code: {detail_code}"
+                    ),
+                    transaction_count=(
+                        transaction_count
+                    ),
+                    charge_transaction_count=(
+                        charge_transaction_count
+                    ),
+                    payment_credit_transaction_count=(
+                        payment_transaction_count
+                    ),
+                    student_count_with_activity=(
+                        student_count
+                    ),
+                    all_student_count=(
+                        fiscal_year_result.student_count
+                    ),
+                    charge_amount=charge_amount,
+                    payment_credit_amount=(
+                        payment_amount
+                    ),
+                    net_amount=net_amount,
+                )
+            )
+
+    return reporting_totals
 
 def analyze_all_files(
     files: list[Path],

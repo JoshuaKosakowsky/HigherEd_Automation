@@ -1,123 +1,24 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.styles import Alignment
 
 from data_processing.shared.files import ensure_dir
+
+from data_processing.shared.xlsx_output_format import (
+    write_table_sheet as _write_table_sheet,
+)
 
 from .analysis import (
     ChargeAverage,
     DetailCodeTotal,
     FiscalYearAnalysis,
+    ReportingGroupTotal,
     TermDetailCodeTotal,
     TermGroupTotal,
 )
-
-
-HEADER_FILL = PatternFill(
-    "solid",
-    fgColor="1F4E78",
-)
-
-HEADER_FONT = Font(
-    color="FFFFFF",
-    bold=True,
-)
-
-CURRENCY_FORMAT = (
-    '$#,##0.00;[Red]($#,##0.00);-'
-)
-
-COUNT_FORMAT = "#,##0"
-
-
-def _write_table_sheet(
-    workbook: Workbook,
-    *,
-    sheet_name: str,
-    table_name: str,
-    headers: list[str],
-    rows: Iterable[Iterable[object]],
-    currency_headers: set[str] | None = None,
-    count_headers: set[str] | None = None,
-) -> None:
-    worksheet = workbook.create_sheet(
-        title=sheet_name
-    )
-    worksheet.sheet_view.showGridLines = False
-    worksheet.freeze_panes = "A2"
-    worksheet.append(headers)
-
-    for row in rows:
-        worksheet.append(list(row))
-
-    for cell in worksheet[1]:
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-        )
-
-    currency_headers = currency_headers or set()
-    count_headers = count_headers or set()
-
-    for column_number, header in enumerate(
-        headers,
-        start=1,
-    ):
-        column_letter = get_column_letter(
-            column_number
-        )
-
-        if header in currency_headers:
-            for cell in worksheet[
-                column_letter
-            ][1:]:
-                cell.number_format = CURRENCY_FORMAT
-
-        if header in count_headers:
-            for cell in worksheet[
-                column_letter
-            ][1:]:
-                cell.number_format = COUNT_FORMAT
-
-        max_length = max(
-            (
-                len(str(cell.value))
-                for cell in worksheet[
-                    column_letter
-                ]
-                if cell.value is not None
-            ),
-            default=0,
-        )
-
-        worksheet.column_dimensions[
-            column_letter
-        ].width = min(
-            max(max_length + 2, 11),
-            38,
-        )
-
-    if worksheet.max_row > 1:
-        table = Table(
-            displayName=table_name,
-            ref=worksheet.dimensions,
-        )
-        table.tableStyleInfo = TableStyleInfo(
-            name="TableStyleMedium2",
-            showFirstColumn=False,
-            showLastColumn=False,
-            showRowStripes=True,
-            showColumnStripes=False,
-        )
-        worksheet.add_table(table)
 
 
 def _write_definitions_sheet(
@@ -199,9 +100,10 @@ def _write_definitions_sheet(
         ),
         (
             "Reporting Group Totals",
-            "Summed activity for Tuition, Room and Board, "
-            "Fees, and the exact WOFF detail code. WOFF is "
-            "not grouped with other BIL category codes.",
+            "Annual summed activity for Tuition, Room and "
+            "Board, Fees, and the exact WOFF and BDRC detail "
+            "codes. WOFF and BDRC are not grouped with other "
+            "codes from their broader Banner categories.",
         ),
         (
             "Reporting Group Totals by Term",
@@ -243,6 +145,22 @@ def _write_definitions_sheet(
             "Sum of the exported Amount for WOFF rows. Because "
             "WOFF is type P, its Signed AR Effect is negative.",
         ),
+         (
+            "BDRC Transactions",
+            "Number of transaction rows with exact detail "
+            "code BDRC (Bad Debt Recovery).",
+        ),
+        (
+            "BDRC Students",
+            "Distinct students with at least one BDRC "
+            "transaction row.",
+        ),
+        (
+            "BDRC Amount",
+            "Sum of Amount for exact detail code BDRC. Its "
+            "configured type determines whether it appears "
+            "as a charge or payment/credit.",
+        ),
     ]
 
     _write_table_sheet(
@@ -269,6 +187,9 @@ def export_trends_workbook(
     fiscal_year_results: list[FiscalYearAnalysis],
     detail_code_results: list[DetailCodeTotal],
     group_average_results: list[ChargeAverage],
+    reporting_group_total_results: list[
+        ReportingGroupTotal
+    ],
     category_average_results: list[ChargeAverage],
     term_group_total_results: list[TermGroupTotal],
     term_collection_total_results: list[
@@ -457,55 +378,22 @@ def export_trends_workbook(
         "Net Amount",
     ]
 
-    group_results_by_year = {
-        fiscal_year: [
-            result
-            for result in group_average_results
-            if result.fiscal_year == fiscal_year
-        ]
-        for fiscal_year in {
-            result.fiscal_year
-            for result in fiscal_year_results
-        }
-    }
-
-    total_rows: list[tuple[object, ...]] = []
-
-    for fiscal_year_result in fiscal_year_results:
-        for result in group_results_by_year[
-            fiscal_year_result.fiscal_year
-        ]:
-            total_rows.append(
-                (
-                    result.fiscal_year,
-                    result.label,
-                    result.category_codes,
-                    result.transaction_count,
-                    result.charge_transaction_count,
-                    result.payment_credit_transaction_count,
-                    result.student_count_with_activity,
-                    result.all_student_count,
-                    result.charge_amount,
-                    result.payment_credit_amount,
-                    result.net_category_amount,
-                )
-            )
-
-        total_rows.append(
-            (
-                fiscal_year_result.fiscal_year,
-                "WOFF",
-                "Detail Code: WOFF",
-                fiscal_year_result.writeoff_count,
-                0,
-                fiscal_year_result.writeoff_count,
-                fiscal_year_result.writeoff_student_count,
-                fiscal_year_result.student_count,
-                0.0,
-                fiscal_year_result.writeoff_amount,
-                -fiscal_year_result.writeoff_amount,
-            )
+    total_rows = [
+        (
+            result.fiscal_year,
+            result.label,
+            result.included_codes,
+            result.transaction_count,
+            result.charge_transaction_count,
+            result.payment_credit_transaction_count,
+            result.student_count_with_activity,
+            result.all_student_count,
+            result.charge_amount,
+            result.payment_credit_amount,
+            result.net_amount,
         )
+        for result in reporting_group_total_results
+    ]
 
     _write_table_sheet(
         workbook,

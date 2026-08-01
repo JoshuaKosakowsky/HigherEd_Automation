@@ -5,19 +5,16 @@ HOME = Path.home()
 
 DOWNLOAD_DIR = HOME / "Downloads"
 
-ONEDRIVE_ROOT = HOME / "OneDrive - Colorado Community College System"
+ONEDRIVE_ROOT = HOME / "OneDrive - Colorado School of Mines"
 
-AR_REPORTS_ROOT = (
+BURSAR_OFFICE_ROOT = (
     ONEDRIVE_ROOT
-    / "Accounts Receivable - AR Supervisors - AR Supervisors"
-    / "Daily Reports"
+    / "GRP-Bursar Office - General"
 )
 
-DNR_EXCEL = (
+CONTROLLER_OFFICE_ROOT = (
     ONEDRIVE_ROOT
-    / "Refunds"
-    / "Auto and Manual Refunds"
-    / "Reversals- DO NOT REFUND PA.xlsx"
+    / "GRP-Office of the Controller - Documents"
+    / "Accounting"
+    / "Accounting (Shared)"
 )
-
-FGIGLAC_DIR = AR_REPORTS_ROOT / "FGIGLAC"
