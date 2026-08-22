@@ -8,6 +8,7 @@ SELECT
     t.tbraccd_term_code      AS "Term",
     t.tbraccd_detail_code    AS "Detail Code",
     d.tbbdetc_desc           AS "Detail Code Description",
+    d.tbbdetc_dcat_code      AS "Category",
     t.tbraccd_amount         AS "Amount",
     t.tbraccd_balance        AS "Balance",
 

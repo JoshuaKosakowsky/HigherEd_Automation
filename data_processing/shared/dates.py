@@ -22,7 +22,7 @@ def compute_current_term_code(today: date | None = None) -> str:
         m in (1, 2, 3, 4)
         or (m == 5 and d <= 15)
     ):
-        return f"{y}30"
+        return f"{y}10"
 
     # Summer
     if (
@@ -30,10 +30,10 @@ def compute_current_term_code(today: date | None = None) -> str:
         or m in (6, 7)
         or (m == 8 and d <= 15)
     ):
-        return f"{y + 1}10"
+        return f"{y + 1}55"
 
     # Fall
-    return f"{y + 1}20"
+    return f"{y + 1}80"
 
 
 def compute_future_term_code(today: date | None = None) -> str:
@@ -45,12 +45,12 @@ def compute_future_term_code(today: date | None = None) -> str:
     d = today.day
 
     if (m == 1) or (m == 2 and d <= 15):
-        return f"{y}30"
+        return f"{y}10"
 
     if (m == 2 and d >= 16) or m in (3, 4, 5):
-        return f"{y + 1}10"
+        return f"{y + 1}55"
 
     if m in (6, 7, 8):
-        return f"{y + 1}20"
+        return f"{y + 1}80"
 
-    return f"{y + 1}30"
+    return f"{y + 1}10"

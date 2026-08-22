@@ -9,18 +9,18 @@
         PrivateKeyFileName  = "id_rsa.ppk"
 
         HostKeyFingerprint = "ssh-ed25519 255 xx3gST/JDsRuRP2aztHEBqYqVbzaoqySJN7Svx5Fswg"
-    } 
+    }
 
     Remote = @{
         SourceDirectory = "/accounts"
 
         Finaid = @{
-            FilePattern       = "finaid_*.csv"
+            FilePattern        = "finaid_*.csv"
             CompletedDirectory = "/accounts/Processed by Mines/Finaid/{TermCode} {TermName}"
         }
 
         IA = @{
-            FilePattern       = "ia_*.csv"
+            FilePattern        = "ia_*.csv"
             CompletedDirectory = "/accounts/Processed by Mines/IA/{TermCode} {TermName}"
         }
     }

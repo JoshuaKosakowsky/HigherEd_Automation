@@ -36,9 +36,12 @@ logs/**
 *.csv
 *.tsv
 *.parquet
+*.lis
+*.xml
 
 # JSON data
-*.json
+# Detail-code data is generated locally and may contain operational metadata.
+detail_codes.json
 
 # Allow specific JSON files that belong to the application
 # Add exceptions here as needed:
@@ -57,8 +60,9 @@ id_dsa
 id_ecdsa
 id_ed25519
 
-# OS files
+# OS and local application files
 .DS_Store
+.Rhistory
 Thumbs.db
 
 # VS Code

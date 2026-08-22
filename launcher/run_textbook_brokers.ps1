@@ -27,6 +27,14 @@ $configPath = Join-Path `
     $repositoryRoot `
     "config\textbook_brokers.psd1"
 
+$pythonRunnerPath = Join-Path `
+    $repositoryRoot `
+    "workflows\textbook_brokers\run_textbook_brokers.py"
+
+$pythonExecutablePath = Join-Path `
+    $repositoryRoot `
+    ".venv\Scripts\python.exe"
+
 
 # ------------------------------------------------------------
 # VALIDATE AND LOAD CONFIGURATION
@@ -86,6 +94,40 @@ function Write-Log {
     Add-Content `
         -LiteralPath $logPath `
         -Value $logEntry
+}
+
+function Read-YesNoResponse {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [string]$Prompt
+    )
+
+    while ($true) {
+        $response = (Read-Host "$Prompt [Y/N]").Trim()
+
+        switch ($response.ToUpperInvariant()) {
+            "Y" {
+                return $true
+            }
+
+            "YES" {
+                return $true
+            }
+
+            "N" {
+                return $false
+            }
+
+            "NO" {
+                return $false
+            }
+
+            default {
+                Write-Host "Please enter Y for Yes or N for No."
+            }
+        }
+    }
 }
 
 Write-Log "Textbook Brokers workflow started."
@@ -311,6 +353,7 @@ foreach ($sourceDefinition in $sourceDefinitions) {
 }
 Write-Log "Banner output directory: $outputDirectory"
 Write-Log "Banner output file: $outputFilePath"
+Write-Log "Python runner: $pythonRunnerPath"
 Write-Log "Completed source archive: $completedSourceDirectory"
 Write-Log "Uploaded Banner archive: $uploadedDirectory"
 Write-Log "Error directory: $errorDirectory"
@@ -352,18 +395,19 @@ try {
     ).Count
 
     Write-Log (
-        "Transfer summary: {0} downloaded, {1} already present, " +
-        "{2} conflicts, {3} failed." -f `
-            $downloadedCount,
-            $existingCount,
-            $conflictCount,
-            $failedCount
+        "Transfer summary: $downloadedCount downloaded, " +
+        "$existingCount already present, " +
+        "$conflictCount conflicts, " +
+        "$failedCount failed."
     )
 
     if ($transferResults.Count -eq 0) {
         Write-Log `
             -Level "WARNING" `
-            -Message "No pending Finaid or IA files were found."
+            -Message (
+                "No matching Finaid or IA files were found " +
+                "on the remote server."
+            )
     }
 
     if (($conflictCount + $failedCount) -gt 0) {
@@ -373,22 +417,48 @@ try {
         )
     }
 
+    # Inventory every locally pending Finaid and IA file.
     $readySourceFiles = @(
-        $transferResults |
-            Where-Object {
-                $_.Status -in @(
-                    "Downloaded",
-                    "AlreadyPresent"
-                )
+        foreach ($sourceDefinition in $sourceDefinitions) {
+            $matchingLocalFiles = @(
+                Get-ChildItem `
+                    -LiteralPath $inputDirectory `
+                    -File `
+                    -Filter $sourceDefinition.FilePattern |
+                    Sort-Object Name
+            )
+
+            foreach ($localFile in $matchingLocalFiles) {
+                [pscustomobject]@{
+                    SourceType   = $sourceDefinition.SourceType
+                    FileName     = $localFile.Name
+                    LocalPath    = $localFile.FullName
+                    Length       = $localFile.Length
+                    LastWriteTime = $localFile.LastWriteTime
+                    Status       = "Ready"
+                }
             }
+        }
     )
 
-    foreach ($readyFile in $readySourceFiles) {
+    if ($readySourceFiles.Count -eq 0) {
+        Write-Log `
+            -Level "WARNING" `
+            -Message "No local files are ready for transformation."
+    }
+    else {
         Write-Log (
-            "Ready for transformation: [{0}] {1}" -f `
-                $readyFile.SourceType,
-                $readyFile.LocalPath
+            "Local pending summary: " +
+            "$($readySourceFiles.Count) file(s) ready for transformation."
         )
+
+        foreach ($readyFile in $readySourceFiles) {
+            Write-Log (
+                "Ready for transformation: [{0}] {1}" -f `
+                    $readyFile.SourceType,
+                    $readyFile.LocalPath
+            )
+        }
     }
 
     Write-Log "Textbook Brokers download stage completed successfully."
@@ -403,8 +473,340 @@ catch {
 
 
 # ------------------------------------------------------------
-# FUTURE WORKFLOW EXECUTION
+# TRANSFORM PENDING FILES INTO TSPLOAD.CSV
 # ------------------------------------------------------------
 
-# The Python transformation, source-file archival, remote-file
-# archival, and future Banner upload will be called below this point.
+if ($readySourceFiles.Count -eq 0) {
+    Write-Log `
+        -Level "WARNING" `
+        -Message "Transformation was skipped because no local source files are pending."
+}
+else {
+    try {
+        if (-not (Test-Path -LiteralPath $pythonExecutablePath -PathType Leaf)) {
+            throw "Repository Python executable was not found: $pythonExecutablePath"
+        }
+
+        if (-not (Test-Path -LiteralPath $pythonRunnerPath -PathType Leaf)) {
+            throw "Textbook Brokers Python runner was not found: $pythonRunnerPath"
+        }
+
+        $pythonArguments = @(
+            $pythonRunnerPath
+            "--term-code"
+            $TermCode
+            "--output"
+            $outputFilePath
+        )
+
+        foreach ($readyFile in $readySourceFiles) {
+            $pythonArguments += $readyFile.LocalPath
+        }
+
+        Write-Log (
+            "Starting Textbook Brokers transformation for {0} source file(s)." -f `
+                $readySourceFiles.Count
+        )
+
+        $pythonOutput = @(
+            & $pythonExecutablePath @pythonArguments 2>&1
+        )
+
+        $pythonExitCode = $LASTEXITCODE
+
+        foreach ($outputLine in $pythonOutput) {
+            Write-Log "Python: $outputLine"
+        }
+
+        if ($pythonExitCode -ne 0) {
+            throw "Python transformation exited with code $pythonExitCode."
+        }
+
+        if (-not (Test-Path -LiteralPath $outputFilePath -PathType Leaf)) {
+            throw "Python reported success, but TSPLOAD.csv was not created."
+        }
+
+        $outputFile = Get-Item -LiteralPath $outputFilePath
+
+        if ($outputFile.Length -eq 0) {
+            throw "TSPLOAD.csv was created but is empty: $outputFilePath"
+        }
+
+        Write-Log "TSPLOAD output verified: $outputFilePath"
+        Write-Log "TSPLOAD output size: $($outputFile.Length) bytes"
+        Write-Log "Textbook Brokers transformation completed successfully."
+    }
+    catch {
+        Write-Log `
+            -Level "ERROR" `
+            -Message "Textbook Brokers transformation failed: $($_.Exception.Message)"
+
+        throw
+    }
+}
+
+
+# ------------------------------------------------------------
+# CONFIRM MANUAL BANNER UPLOAD
+# ------------------------------------------------------------
+
+$bannerUploadConfirmed = Read-YesNoResponse `
+    -Prompt (
+        "Have you uploaded TSPLOAD.csv through GJAJFLU and " +
+        "confirmed that the transactions were applied successfully?"
+    )
+
+if (-not $bannerUploadConfirmed) {
+    Write-Log (
+        "Banner upload was not confirmed. TSPLOAD.csv, local source " +
+        "files, and remote source files were left unchanged."
+    )
+
+    Write-Log "Textbook Brokers workflow paused for manual Banner upload."
+    return
+}
+
+Write-Log "Manual Banner upload and transaction application were confirmed."
+
+$archiveConfirmed = Read-YesNoResponse `
+    -Prompt (
+        "Archive the completed TSPLOAD and source files locally and " +
+        "on the Textbook Brokers SFTP server now?"
+    )
+
+if (-not $archiveConfirmed) {
+    Write-Log (
+        "File archival was declined. TSPLOAD.csv, local source files, " +
+        "and remote source files were left unchanged."
+    )
+
+    Write-Log "Textbook Brokers workflow completed without file archival."
+    return
+}
+
+
+# ------------------------------------------------------------
+# PREPARE LOCAL ARCHIVE OPERATIONS
+# ------------------------------------------------------------
+
+try {
+    $archiveTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+
+    $uploadedFileName = `
+        $config.Local.UploadedFileNamePattern.Replace(
+            "{DateTime}",
+            $archiveTimestamp
+        )
+
+    $uploadedFilePath = Join-Path `
+        $uploadedDirectory `
+        $uploadedFileName
+
+    $localMoveOperations = @()
+
+    foreach ($readyFile in $readySourceFiles) {
+        $archivedSourcePath = Join-Path `
+            $completedSourceDirectory `
+            $readyFile.FileName
+
+        $localMoveOperations += [pscustomobject]@{
+            Description     = "$($readyFile.SourceType) source file"
+            SourcePath      = $readyFile.LocalPath
+            DestinationPath = $archivedSourcePath
+        }
+    }
+
+    # TSPLOAD is moved last and acts as the completion marker.
+    $localMoveOperations += [pscustomobject]@{
+        Description     = "TSPLOAD output"
+        SourcePath      = $outputFilePath
+        DestinationPath = $uploadedFilePath
+    }
+
+    # Validate every local move before changing the SFTP server.
+    foreach ($operation in $localMoveOperations) {
+        if (-not (
+            Test-Path `
+                -LiteralPath $operation.SourcePath `
+                -PathType Leaf
+        )) {
+            throw (
+                "Local archive source was not found: " +
+                $operation.SourcePath
+            )
+        }
+
+        if (Test-Path -LiteralPath $operation.DestinationPath) {
+            throw (
+                "Local archive destination already exists: " +
+                $operation.DestinationPath
+            )
+        }
+
+        $destinationDirectory = Split-Path `
+            -Parent `
+            $operation.DestinationPath
+
+        if (-not (
+            Test-Path `
+                -LiteralPath $destinationDirectory `
+                -PathType Container
+        )) {
+            throw (
+                "Local archive directory was not found: " +
+                $destinationDirectory
+            )
+        }
+    }
+
+
+    # ------------------------------------------------------------
+    # ARCHIVE FILES ON THE TEXTBOOK BROKERS SFTP SERVER
+    # ------------------------------------------------------------
+
+    $remoteArchiveResults = @(
+        Move-TextbookBrokersRemoteSourceFiles `
+            -Connection $config.Connection `
+            -OneDriveRoot $oneDriveRoot `
+            -RemoteSourceDirectory $remoteSourceDirectory `
+            -SourceFiles $readySourceFiles `
+            -SourceDefinitions $sourceDefinitions `
+            -Log ${function:Write-Log}
+    )
+
+    $remoteMovedCount = @(
+        $remoteArchiveResults |
+            Where-Object Status -eq "Moved"
+    ).Count
+
+    $remoteAlreadyArchivedCount = @(
+        $remoteArchiveResults |
+            Where-Object Status -eq "AlreadyArchived"
+    ).Count
+
+    $remoteNotPresentCount = @(
+        $remoteArchiveResults |
+            Where-Object Status -eq "NotPresent"
+    ).Count
+
+    Write-Log (
+        "Remote archive summary: $remoteMovedCount moved, " +
+        "$remoteAlreadyArchivedCount already archived, " +
+        "$remoteNotPresentCount not present."
+    )
+
+
+    # ------------------------------------------------------------
+    # ARCHIVE LOCAL FILES
+    # ------------------------------------------------------------
+
+    $completedLocalMoves = @()
+
+    try {
+        foreach ($operation in $localMoveOperations) {
+            Write-Log (
+                "Moving local {0}: {1} -> {2}" -f `
+                    $operation.Description,
+                    $operation.SourcePath,
+                    $operation.DestinationPath
+            )
+
+            Move-Item `
+                -LiteralPath $operation.SourcePath `
+                -Destination $operation.DestinationPath
+
+            $completedLocalMoves += $operation
+
+            if (Test-Path -LiteralPath $operation.SourcePath) {
+                throw (
+                    "Local source still exists after move: " +
+                    $operation.SourcePath
+                )
+            }
+
+            if (-not (
+                Test-Path `
+                    -LiteralPath $operation.DestinationPath `
+                    -PathType Leaf
+            )) {
+                throw (
+                    "Local destination was not found after move: " +
+                    $operation.DestinationPath
+                )
+            }
+
+            Write-Log (
+                "Local move verified: " +
+                $operation.DestinationPath
+            )
+        }
+    }
+    catch {
+        $localMoveError = $_.Exception.Message
+
+        Write-Log `
+            -Level "ERROR" `
+            -Message (
+                "Local archival failed; starting rollback: " +
+                $localMoveError
+            )
+
+        for (
+            $index = $completedLocalMoves.Count - 1;
+            $index -ge 0
+            $index--
+        ) {
+            $completedOperation = $completedLocalMoves[$index]
+
+            try {
+                if (
+                    (Test-Path `
+                        -LiteralPath $completedOperation.DestinationPath) -and
+                    (-not (
+                        Test-Path `
+                            -LiteralPath $completedOperation.SourcePath
+                    ))
+                ) {
+                    Move-Item `
+                        -LiteralPath $completedOperation.DestinationPath `
+                        -Destination $completedOperation.SourcePath
+
+                    Write-Log (
+                        "Rollback restored: " +
+                        $completedOperation.SourcePath
+                    )
+                }
+            }
+            catch {
+                Write-Log `
+                    -Level "ERROR" `
+                    -Message (
+                        "Rollback failed for {0}: {1}" -f `
+                            $completedOperation.DestinationPath,
+                            $_.Exception.Message
+                    )
+            }
+        }
+
+        throw "Local archival failed: $localMoveError"
+    }
+
+    Write-Log "Archived TSPLOAD output: $uploadedFilePath"
+
+    Write-Log (
+        "Archived {0} local source file(s): {1}" -f `
+            $readySourceFiles.Count,
+            $completedSourceDirectory
+    )
+
+    Write-Log "Textbook Brokers archival completed successfully."
+}
+catch {
+    Write-Log `
+        -Level "ERROR" `
+        -Message "Textbook Brokers archival failed: $($_.Exception.Message)"
+
+    throw
+}
+
+Write-Log "Textbook Brokers workflow completed successfully."

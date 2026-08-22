@@ -316,3 +316,267 @@ function Receive-TextbookBrokersFiles {
 
     return $results
 }
+
+function Move-TextbookBrokersRemoteSourceFiles {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [hashtable]$Connection,
+
+        [Parameter(Mandatory)]
+        [string]$OneDriveRoot,
+
+        [Parameter(Mandatory)]
+        [string]$RemoteSourceDirectory,
+
+        [Parameter(Mandatory)]
+        [object[]]$SourceFiles,
+
+        [Parameter(Mandatory)]
+        [object[]]$SourceDefinitions,
+
+        [Parameter(Mandatory)]
+        [scriptblock]$Log
+    )
+
+    $winSCPAssemblyPath = Get-WinSCPAssemblyPath
+
+    & $Log "Loading WinSCP assembly: $winSCPAssemblyPath"
+
+    if (-not ("WinSCP.Session" -as [type])) {
+        Add-Type -Path $winSCPAssemblyPath
+    }
+
+    $privateKeyDirectory = Join-Path `
+        $OneDriveRoot `
+        $Connection.PrivateKeyDirectory
+
+    $privateKeyPath = Join-Path `
+        $privateKeyDirectory `
+        $Connection.PrivateKeyFileName
+
+    if (-not (Test-Path -LiteralPath $privateKeyPath -PathType Leaf)) {
+        throw "WinSCP private key was not found: $privateKeyPath"
+    }
+
+    $sessionOptions = New-Object WinSCP.SessionOptions -Property @{
+        Protocol               = [WinSCP.Protocol]::Sftp
+        HostName               = $Connection.HostName
+        PortNumber             = $Connection.PortNumber
+        UserName               = $Connection.UserName
+        SshPrivateKeyPath      = $privateKeyPath
+        SshHostKeyFingerprint  = $Connection.HostKeyFingerprint
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    $movePlans = [System.Collections.Generic.List[object]]::new()
+    $conflicts = [System.Collections.Generic.List[string]]::new()
+    $session = New-Object WinSCP.Session
+
+    try {
+        & $Log (
+            "Connecting to {0}@{1}:{2} for remote archival" -f `
+                $Connection.UserName,
+                $Connection.HostName,
+                $Connection.PortNumber
+        )
+
+        $session.Open($sessionOptions)
+
+        & $Log "WinSCP archival connection opened successfully."
+
+        # Preflight every remote file before moving anything.
+        foreach ($sourceFile in $SourceFiles) {
+            $sourceType = [string]$sourceFile.SourceType
+            $fileName = [string]$sourceFile.FileName
+
+            $matchingDefinitions = @(
+                $SourceDefinitions |
+                    Where-Object {
+                        $_.SourceType -eq $sourceType
+                    }
+            )
+
+            if ($matchingDefinitions.Count -ne 1) {
+                throw (
+                    "Exactly one source definition is required for " +
+                    "$sourceType; found $($matchingDefinitions.Count)."
+                )
+            }
+
+            $completedDirectory = `
+                [string]$matchingDefinitions[0].CompletedDirectory
+
+            $remoteSourcePath = [WinSCP.RemotePath]::Combine(
+                $RemoteSourceDirectory,
+                $fileName
+            )
+
+            $remoteDestinationPath = [WinSCP.RemotePath]::Combine(
+                $completedDirectory,
+                $fileName
+            )
+
+            $sourceExists = $session.FileExists(
+                $remoteSourcePath
+            )
+
+            $completedDirectoryExists = $session.FileExists(
+                $completedDirectory
+            )
+
+            $destinationExists = if ($completedDirectoryExists) {
+                $session.FileExists($remoteDestinationPath)
+            }
+            else {
+                $false
+            }
+
+            if ($sourceExists -and $destinationExists) {
+                $message = (
+                    "Remote archive conflict for {0}. Both locations " +
+                    "contain the file: {1}; {2}" -f `
+                        $fileName,
+                        $remoteSourcePath,
+                        $remoteDestinationPath
+                )
+
+                $conflicts.Add($message)
+                & $Log -Level "ERROR" -Message $message
+                continue
+            }
+
+            if (-not $sourceExists) {
+                if ($destinationExists) {
+                    & $Log (
+                        "Remote file is already archived: " +
+                        $remoteDestinationPath
+                    )
+
+                    $status = "AlreadyArchived"
+                }
+                else {
+                    & $Log `
+                        -Level "WARNING" `
+                        -Message (
+                            "Remote file is no longer present; " +
+                            "no remote move was required: " +
+                            $remoteSourcePath
+                        )
+
+                    $status = "NotPresent"
+                }
+
+                $results.Add(
+                    [pscustomobject]@{
+                        SourceType      = $sourceType
+                        FileName        = $fileName
+                        SourcePath      = $remoteSourcePath
+                        DestinationPath = $remoteDestinationPath
+                        Status          = $status
+                    }
+                )
+
+                continue
+            }
+
+            $movePlans.Add(
+                [pscustomobject]@{
+                    SourceType         = $sourceType
+                    FileName           = $fileName
+                    SourcePath         = $remoteSourcePath
+                    CompletedDirectory = $completedDirectory
+                    DestinationPath    = $remoteDestinationPath
+                }
+            )
+        }
+        if ($conflicts.Count -gt 0) {
+            throw (
+                "Remote archival stopped before moving files because " +
+                "$($conflicts.Count) conflict(s) were found."
+            )
+        }
+        
+        $requiredCompletedDirectories = @(
+            $movePlans |
+                ForEach-Object {
+                    $_.CompletedDirectory
+                } |
+                Sort-Object -Unique
+        )
+
+        foreach ($requiredDirectory in $requiredCompletedDirectories) {
+            if (-not $session.FileExists($requiredDirectory)) {
+                & $Log (
+                    "Creating remote term directory: " +
+                    $requiredDirectory
+                )
+
+                $session.CreateDirectory($requiredDirectory)
+            }
+            else {
+                & $Log (
+                    "Remote term directory already exists: " +
+                    $requiredDirectory
+                )
+            }
+
+            if (-not $session.FileExists($requiredDirectory)) {
+                throw (
+                    "Remote term directory could not be verified: " +
+                    $requiredDirectory
+                )
+            }
+        }
+
+        foreach ($movePlan in $movePlans) {
+            & $Log (
+                "Moving remote {0} file: {1} -> {2}" -f `
+                    $movePlan.SourceType,
+                    $movePlan.SourcePath,
+                    $movePlan.DestinationPath
+            )
+
+            $session.MoveFile(
+                $movePlan.SourcePath,
+                $movePlan.DestinationPath
+            )
+
+            if ($session.FileExists($movePlan.SourcePath)) {
+                throw (
+                    "Remote source still exists after move: " +
+                    $movePlan.SourcePath
+                )
+            }
+
+            if (-not $session.FileExists(
+                $movePlan.DestinationPath
+            )) {
+                throw (
+                    "Remote destination was not found after move: " +
+                    $movePlan.DestinationPath
+                )
+            }
+
+            & $Log (
+                "Remote move verified: " +
+                $movePlan.DestinationPath
+            )
+
+            $results.Add(
+                [pscustomobject]@{
+                    SourceType      = $movePlan.SourceType
+                    FileName        = $movePlan.FileName
+                    SourcePath      = $movePlan.SourcePath
+                    DestinationPath = $movePlan.DestinationPath
+                    Status          = "Moved"
+                }
+            )
+        }
+    }
+    finally {
+        $session.Dispose()
+    }
+
+    return $results
+}
