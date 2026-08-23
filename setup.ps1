@@ -322,13 +322,14 @@ import openpyxl
 import pandas
 import requests
 from playwright.sync_api import sync_playwright
-print("Required Python packages are available.")
 "@
 
     Invoke-CheckedCommand `
         -Command $VenvPython `
         -Arguments @("-c", $verificationCode) `
         -FailureMessage "One or more required Python packages could not be imported."
+
+    Write-Host "Required Python packages are available." -ForegroundColor Green
 
     Write-SetupStep "Installing Playwright browser support"
     Invoke-CheckedCommand `
