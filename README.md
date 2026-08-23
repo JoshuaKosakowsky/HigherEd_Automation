@@ -1,54 +1,71 @@
-# Automation Repository
+# HigherEd Automation
 
-This repository contains automation tools that help run repeatable work processes.
+This repository contains the Colorado School of Mines automation tools used by
+the Bursar's Office and related business processes.
 
-Most users only need to run the setup steps once. After setup, workflows can be started with simple shortcut commands.
+The instructions below are written for Windows users. You do not need to know
+Python to set up or run the standard workflows.
 
----
+## First-time setup
 
-## First-Time Setup
+### 1. Confirm the prerequisites
 
-Open PowerShell in this folder and run:
+Before starting, make sure:
+
+- You are using a Mines-managed Windows computer.
+- The complete `HigherEd_Automation` folder is synchronized to your computer.
+- You have an internet connection.
+- Python 3.11 or newer is installed.
+
+If Python is not installed, download the current 64-bit Windows installer from
+[python.org](https://www.python.org/downloads/windows/). During installation,
+select **Add python.exe to PATH**.
+
+### 2. Open PowerShell in this folder
+
+Open the `HigherEd_Automation` folder in File Explorer. Right-click an empty
+area in the folder and select **Open in Terminal**.
+
+The PowerShell prompt should now show that it is inside the
+`HigherEd_Automation` folder.
+
+### 3. Run setup
+
+Copy this command, paste it into PowerShell, and press Enter:
 
 ```powershell
 .\setup.ps1
 ```
 
-This prepares the automation tools by creating the local Python environment and installing required packages.
+Setup creates a private Python environment inside this repository, installs
+the required packages, verifies them, installs Playwright browser support, and
+asks for your name and initials. Your user details are stored only
+under your Windows account and can be changed by running setup again. Setup may
+take several minutes the first time.
 
----
+Setup is successful when the terminal displays:
 
-## Set Up Credentials
-
-Some workflows need a username and password for systems like Banner, BankMobile, or Cashnet.
-
-Run the credential setup for each system you need.
-
-Example for Banner:
-
-```powershell
-.\powershell\credentials\setup_credentials.ps1 -Target Banner
+```text
+SETUP COMPLETE
 ```
 
-Example for BankMobile:
+You do not need to activate Python manually. You can safely run `setup.ps1`
+again after an update or if package installation was interrupted.
+
+### If PowerShell says scripts are disabled
+
+Run this command once:
 
 ```powershell
-.\powershell\credentials\setup_credentials.ps1 -Target BankMobile
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-Example for Cashnet:
+Enter `Y` if PowerShell asks for confirmation, then run `setup.ps1` again.
 
-```powershell
-.\powershell\credentials\setup_credentials.ps1 -Target Cashnet
-```
+### 4. Install the PowerShell shortcuts
 
-You will be asked to enter your username and password.
-
-Credentials are saved securely on your computer using Windows Credential Manager. They are not saved in this folder.
-
----
-
-## Set Up Shortcuts
+The shortcuts are the normal way to run the automation tools on computers that
+do not have a development application such as VS Code.
 
 Run:
 
@@ -56,96 +73,90 @@ Run:
 .\powershell\credentials\setup_profile.ps1
 ```
 
-Then run:
+Then load the shortcuts into the current PowerShell window:
 
 ```powershell
 . $PROFILE
 ```
 
-This loads the shortcut commands into your PowerShell window.
+The following commands will now be available:
 
----
+| Shortcut | Action |
+| --- | --- |
+| `open-auto` | Opens the repository folder in PowerShell. |
+| `start-setup` | Runs setup again. |
+| `test-automation` | Runs all automated repository tests. |
+| `start-population-testing` | Runs Population Testing with default settings. |
+| `start-trends` | Runs Historical Trends with default settings. |
+| `start-textbook-brokers` | Runs Textbook Brokers. |
+| `archive-textbook-brokers` | Archives the current Textbook Brokers term after Banner upload. |
+| `setup-report-watcher` | Installs or updates the Cashier Downloads watcher for the signed-in employee. |
 
-## Running a Workflow
+## Cashier report filing watcher
 
-After setup, you can run the FGIGLAC workflow with:
+This optional role-specific tool watches the signed-in employee's Downloads
+folder and ignores unrelated files silently. A matching PDF opens a confirmation
+window showing the report date, cashier initials, final filename, fiscal period,
+and complete destination before anything moves.
 
-```powershell
-banner.fgiglac
-```
+The first report filename is intentionally a placeholder until its website
+naming convention is confirmed. Configuration and installation instructions are
+in [workflows/report_filing/README.md](workflows/report_filing/README.md).
 
-You can also run it directly with:
+## Trusted browser sessions
 
-```powershell
-.\launcher\run.fgiglac.ps1
-```
+Mines and Banner can use saved browser sessions so you do not have to complete
+2FA every time.
 
----
-
-## Useful Shortcuts
-
-```powershell
-open-auto
-```
-
-Moves PowerShell to this automation folder.
-
-```powershell
-start-setup
-```
-
-Runs the setup script again.
+For Banner, run:
 
 ```powershell
-banner.fgiglac
+.\powershell\credentials\setup_trusted_session.ps1 -System Banner -Browser edge
 ```
 
-Runs the Banner FGIGLAC workflow.
-
----
-
-## If Something Goes Wrong
-
-Try running setup again:
+For Mines, run:
 
 ```powershell
-auto-setup
+.\powershell\credentials\setup_trusted_session.ps1 -System Mines -Browser edge
 ```
 
-or:
+A browser window will open. Log in normally, complete 2FA, and select
+**remember this device** if prompted. When login is complete, return to
+PowerShell and press Enter.
+
+Never copy or commit the browser-profile folders to this repository.
+
+## Troubleshooting
+
+### Python was not found
+
+Install the current 64-bit Windows version of Python from
+[python.org](https://www.python.org/downloads/windows/). Select
+**Add python.exe to PATH**, close PowerShell, reopen it in this folder, and run
+`setup.ps1` again.
+
+### The `.venv` environment is incomplete or uses an old Python version
+
+Close any automation programs, rename the `.venv` folder to `.venv_old`, and
+run `setup.ps1` again. After setup succeeds and the workflows run correctly,
+the old folder can be deleted.
+
+### Package or browser installation failed
+
+Confirm that the computer is connected to the internet and rerun:
 
 ```powershell
 .\setup.ps1
 ```
 
-If your password changed, rerun the credential setup:
+Setup is safe to rerun and will reuse a valid existing environment.
 
-```powershell
-.\powershell\credentials\setup_credentials.ps1 -Target Banner
-```
+### A workflow cannot find its input
 
----
+Read the missing-file path shown in the error. Confirm that the input filename
+matches exactly and that OneDrive has finished synchronizing it.
 
-## Logs
+### A workflow failed after it started
 
-Workflow logs are saved in the `logs` folder.
-
-If a workflow fails, check the most recent log file or share it with the person supporting the automation.
-
-## Set Up Daily Trusted Browser Session
-
-Some workflows use a saved browser session so you do not have to complete 2FA every time.
-
-Run:
-
-```powershell
-.\powershell\setup\setup_trusted_session.ps1 -System Banner -Browser edge
-```
-
-A browser window will open.
-
-Log in normally, complete 2FA, and select “remember this device” if prompted.
-
-When fully logged in, return to PowerShell and press Enter.
-
-This saves the trusted browser session on your computer.
+Review the newest file under `logs`. Preserve that log when requesting support;
+it identifies the stage that failed without requiring another production run.

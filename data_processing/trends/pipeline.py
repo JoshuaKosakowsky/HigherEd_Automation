@@ -27,14 +27,7 @@ def run_trends_pipeline(
         config.detail_codes_file
     )
 
-    (
-        fiscal_year_results,
-        detail_code_results,
-        group_average_results,
-        category_average_results,
-        term_group_total_results,
-        term_collection_total_results,
-    ) = analyze_all_files(
+    analysis_result = analyze_all_files(
         files,
         detail_codes=detail_codes,
         config=config,
@@ -43,38 +36,38 @@ def run_trends_pipeline(
     reporting_group_total_results = (
         build_reporting_group_totals(
             fiscal_year_results=(
-                fiscal_year_results
+                analysis_result.fiscal_years
             ),
             detail_code_results=(
-                detail_code_results
+                analysis_result.detail_codes
             ),
             group_average_results=(
-                group_average_results
+                analysis_result.group_averages
             ),
         )
     )
 
     return export_trends_workbook(
         fiscal_year_results=(
-            fiscal_year_results
+            analysis_result.fiscal_years
         ),
         detail_code_results=(
-            detail_code_results
+            analysis_result.detail_codes
         ),
         group_average_results=(
-            group_average_results
+            analysis_result.group_averages
         ),
         reporting_group_total_results=(
             reporting_group_total_results
         ),
         category_average_results=(
-            category_average_results
+            analysis_result.category_averages
         ),
         term_group_total_results=(
-            term_group_total_results
+            analysis_result.term_groups
         ),
         term_collection_total_results=(
-            term_collection_total_results
+            analysis_result.term_collections
         ),
         output_file=config.output_file,
     )

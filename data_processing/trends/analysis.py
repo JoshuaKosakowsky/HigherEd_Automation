@@ -268,6 +268,26 @@ class FiscalYearAnalysis:
         return self.net_ar / self.student_count
 
 
+@dataclass(frozen=True)
+class TrendsFileAnalysisResult:
+    fiscal_year: FiscalYearAnalysis
+    detail_codes: list[DetailCodeTotal]
+    group_averages: list[ChargeAverage]
+    category_averages: list[ChargeAverage]
+    term_groups: list[TermGroupTotal]
+    term_collections: list[TermDetailCodeTotal]
+
+
+@dataclass(frozen=True)
+class TrendsAnalysisResult:
+    fiscal_years: list[FiscalYearAnalysis]
+    detail_codes: list[DetailCodeTotal]
+    group_averages: list[ChargeAverage]
+    category_averages: list[ChargeAverage]
+    term_groups: list[TermGroupTotal]
+    term_collections: list[TermDetailCodeTotal]
+
+
 def _clean_text(value: object) -> str:
     return str(value or "").strip()
 
@@ -289,14 +309,7 @@ def analyze_tgiaccd_file(
     *,
     detail_codes: dict[str, dict[str, object]],
     config: TrendsConfig,
-) -> tuple[
-    FiscalYearAnalysis,
-    list[DetailCodeTotal],
-    list[ChargeAverage],
-    list[ChargeAverage],
-    list[TermGroupTotal],
-    list[TermDetailCodeTotal],
-]:
+) -> TrendsFileAnalysisResult:
     """
     Calculate fiscal-year and detail-code statistics.
     """
@@ -719,16 +732,16 @@ def analyze_tgiaccd_file(
                 )
             )
 
-    return (
-        analysis,
-        sorted(
+    return TrendsFileAnalysisResult(
+        fiscal_year=analysis,
+        detail_codes=sorted(
             detail_totals.values(),
             key=lambda item: item.detail_code,
         ),
-        group_averages,
-        category_averages,
-        term_group_totals,
-        term_collection_totals,
+        group_averages=group_averages,
+        category_averages=category_averages,
+        term_groups=term_group_totals,
+        term_collections=term_collection_totals,
     )
 
 def build_reporting_group_totals(
@@ -914,14 +927,7 @@ def analyze_all_files(
     *,
     detail_codes: dict[str, dict[str, object]],
     config: TrendsConfig,
-) -> tuple[
-    list[FiscalYearAnalysis],
-    list[DetailCodeTotal],
-    list[ChargeAverage],
-    list[ChargeAverage],
-    list[TermGroupTotal],
-    list[TermDetailCodeTotal],
-]:
+) -> TrendsAnalysisResult:
     fiscal_year_results: list[
         FiscalYearAnalysis
     ] = []
@@ -947,43 +953,36 @@ def analyze_all_files(
             flush=True,
         )
 
-        (
-            fiscal_year_result,
-            detail_code_result,
-            group_average_result,
-            category_average_result,
-            term_group_total_result,
-            term_collection_total_result,
-        ) = analyze_tgiaccd_file(
+        file_result = analyze_tgiaccd_file(
             path,
             detail_codes=detail_codes,
             config=config,
         )
 
         fiscal_year_results.append(
-            fiscal_year_result
+            file_result.fiscal_year
         )
         detail_code_results.extend(
-            detail_code_result
+            file_result.detail_codes
         )
         group_average_results.extend(
-            group_average_result
+            file_result.group_averages
         )
         category_average_results.extend(
-            category_average_result
+            file_result.category_averages
         )
         term_group_total_results.extend(
-            term_group_total_result
+            file_result.term_groups
         )
         term_collection_total_results.extend(
-            term_collection_total_result
+            file_result.term_collections
         )
 
-    return (
-        fiscal_year_results,
-        detail_code_results,
-        group_average_results,
-        category_average_results,
-        term_group_total_results,
-        term_collection_total_results,
+    return TrendsAnalysisResult(
+        fiscal_years=fiscal_year_results,
+        detail_codes=detail_code_results,
+        group_averages=group_average_results,
+        category_averages=category_average_results,
+        term_groups=term_group_total_results,
+        term_collections=term_collection_total_results,
     )

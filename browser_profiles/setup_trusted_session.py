@@ -1,21 +1,46 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Protocol
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-from banner.config import BANNER_URL, BrowserProfile, get_banner_profile
-from mymines.config import MINES_URL, BrowserProfile, get_mines_profile
+from banner.config import BANNER_URL, get_banner_profile
+from mymines.config import MINES_URL, get_mines_profile
 
 
 NAV_TIMEOUT_MS = 180_000
 SESSION_TIMEOUT_SECONDS = 300
+
+
+class BrowserProfile(Protocol):
+    channel: str
+    profile_dir: Path
+
+
+@dataclass(frozen=True)
+class TrustedSessionSystem:
+    login_url: str
+    profile_factory: Callable[[str], BrowserProfile]
+
+
+# Add new trusted-session websites here. Each entry supplies the URL opened
+# for login and the function that returns its persistent browser profile.
+TRUSTED_SESSION_SYSTEMS: dict[str, TrustedSessionSystem] = {
+    "Mines": TrustedSessionSystem(
+        login_url=MINES_URL,
+        profile_factory=get_mines_profile,
+    ),
+    "Banner": TrustedSessionSystem(
+        login_url=BANNER_URL,
+        profile_factory=get_banner_profile,
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -25,35 +50,40 @@ class TrustedSessionConfig:
     browser_profile: BrowserProfile
 
 
-def get_trusted_session_config(system_name: str, browser: str) -> TrustedSessionConfig:
+def get_trusted_session_config(
+    system_name: str,
+    browser: str,
+) -> TrustedSessionConfig:
     system_name = system_name.strip()
 
-    if system_name == "Banner":
-        return TrustedSessionConfig(
-            system_name="Banner",
-            login_url=BANNER_URL,
-            browser_profile=get_banner_profile(browser),
-        )
-    
-    if system_name == "Mines":
-        return TrustedSessionConfig(
-            system_name="Mines",
-            login_url=MINES_URL,
-            browser_profile=get_mines_profile(browser),
-        )
+    try:
+        system = TRUSTED_SESSION_SYSTEMS[system_name]
+    except KeyError as error:
+        supported_systems = ", ".join(TRUSTED_SESSION_SYSTEMS)
+        raise ValueError(
+            f"Unsupported system: {system_name}. "
+            f"Supported systems: {supported_systems}."
+        ) from error
 
-    raise ValueError(f"Unsupported system: {system_name}")
+    return TrustedSessionConfig(
+        system_name=system_name,
+        login_url=system.login_url,
+        browser_profile=system.profile_factory(browser),
+    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Open a Playwright browser profile so the user can complete login/2FA."
+        description=(
+            "Open a Playwright browser profile so the user can "
+            "complete login/2FA."
+        )
     )
 
     parser.add_argument(
         "--system",
         required=True,
-        choices=["Mines", "Trailhead", "Banner", "BankMobile", "Cognos"],
+        choices=tuple(TRUSTED_SESSION_SYSTEMS),
         help="System to log into.",
     )
 
@@ -72,8 +102,8 @@ def main() -> int:
 
     try:
         config = get_trusted_session_config(args.system, args.browser)
-    except ValueError as e:
-        print(e)
+    except ValueError as error:
+        print(error)
         return 1
 
     print(f"SYSTEM:      {config.system_name}")
@@ -87,7 +117,10 @@ def main() -> int:
 
     def wait_for_enter() -> None:
         try:
-            input("When fully logged in, press Enter to close and save the session...")
+            input(
+                "When fully logged in, press Enter to close and "
+                "save the session..."
+            )
         except EOFError:
             pass
         done.set()
@@ -125,7 +158,11 @@ def main() -> int:
         print()
         print("Log in manually and complete 2FA.")
         print("Select 'remember this device' if prompted.")
-        print(f"This window will auto-close after {SESSION_TIMEOUT_SECONDS // 60} minutes.")
+        timeout_minutes = SESSION_TIMEOUT_SECONDS // 60
+        print(
+            "This window will auto-close after "
+            f"{timeout_minutes} minutes."
+        )
         print()
 
         start = time.time()

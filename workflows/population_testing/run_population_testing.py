@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 
@@ -10,13 +9,6 @@ PROJECT_ROOT = (
     .resolve()
     .parents[2]
 )
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(
-        0,
-        str(PROJECT_ROOT),
-    )
-
 
 from data_processing.population_testing.config import (
     DEFAULT_INPUT_FILE,
@@ -74,7 +66,8 @@ def parse_args() -> argparse.Namespace:
         ),
         help=(
             "Percentage selected from every regular "
-            "bucket. The default is 20."
+            "bucket. The default is "
+            f"{DEFAULT_SAMPLE_FRACTION * 100:g}."
         ),
     )
 

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "institution": "Colorado School of Mines",
+  "termCodeYear": "calendarYear",
+  "terms": [
+    {
+      "name": "Spring",
+      "codeSuffix": "10",
+      "startMonthDay": "01-01",
+      "endMonthDay": "05-15"
+    },
+    {
+      "name": "Summer",
+      "codeSuffix": "55",
+      "startMonthDay": "05-16",
+      "endMonthDay": "07-15"
+    },
+    {
+      "name": "Fall",
+      "codeSuffix": "80",
+      "startMonthDay": "07-16",
+      "endMonthDay": "12-31"
+    }
+  ]
+}

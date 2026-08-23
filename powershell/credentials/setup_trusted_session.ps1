@@ -1,11 +1,14 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Mines", "Trailhead", "Banner", "BankMobile", "Cognos")]
     [string]$System,
 
     [ValidateSet("edge", "chrome")]
     [string]$Browser = "chrome"
 )
+
+# Supported systems are defined in
+# browser_profiles\setup_trusted_session.py under TRUSTED_SESSION_SYSTEMS.
+# Add future websites there; this wrapper delegates validation to Python.
 
 $ErrorActionPreference = "Stop"
 

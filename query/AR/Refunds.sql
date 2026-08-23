@@ -1,5 +1,5 @@
 /*
-Student Refund Review — Fall 202680
+Student Refund Review
 Colorado School of Mines | Banner Insights (PostgreSQL-flavored SQL)
 
 PURPOSE
@@ -7,11 +7,10 @@ PURPOSE
   This query does not approve a refund or create a Transact/TSARFND file.
 
 CONFIRMED CONTROLS
-  * Candidate accounts come from the exact GLIEXTR population identified by:
-      Application AR_STU, Selection AR_REFUND_ED,
-      Creator JPHOU, User JPHOU.
-  * Full-account balance is used because payments can be posted in one term
-    for charges in another term.
+  * Candidate accounts come directly from TBRACCD. Every account whose fully
+    classified, accounting-signed balance is negative is included.
+  * The balance covers the full account, without a term restriction, because
+    payments can be posted in one term for charges in another term.
   * TBRACCD_AMOUNT is converted to an accounting-signed amount using
     TBBDETC_TYPE_IND: payments are negative and charges are positive.
   * TBBACCT_DELI_CODE = 'RH' means Refund Hold and blocks processing.
@@ -21,7 +20,9 @@ CONFIRMED CONTROLS
     9999-12-31; ED identifies the student eRefund route.
   * FDPL is the active Parent PLUS detail code.
   * RLRPAPP_PLUS_TO_STUDENT is matched by PIDM and the aid-year code carried
-    on the 202680 FDPL transaction.
+    on the target-term FDPL transaction.
+  * Third-party accounts are identified by a TPS-prefixed CWID or the legacy
+    CWID list below. They always require manual review.
   * ACH/card detail codes requiring a Transact review are:
       ACHK, CRDS, CRED, CRVC, CRAM, CRMC
 
@@ -32,21 +33,20 @@ BALANCE-SOURCE EXPLANATION
   This explains which newest credits cover the balance; it does not independently
   determine legal ownership of the refund.
 
-PROVISIONAL POLICY — BOSS APPROVAL REQUIRED
-  For exactly one 202680 FDPL transaction when PLUS-to-student is not Y:
+PARENT PLUS REFUND SPLIT
+  For exactly one target-term FDPL transaction when PLUS-to-student is not Y:
     Later student credits = negative payment transactions with a transaction
       number greater than the FDPL transaction number, across the full account.
-    Provisional parent amount = least of:
+    Parent amount = least of:
       (a) full refund amount,
       (b) FDPL amount, and
       (c) full refund amount less later student credits.
     Proposed student amount = full refund amount less parent amount.
 
-  Every result using this rule is marked POLICY_APPROVAL_REQUIRED.
-
 FIRST-RUN VALIDATION
   1. Confirm FULL_ACCOUNT_BALANCE equals the TSAAREV full Query Balance.
-  2. Confirm the output population/count matches GLIEXTR AR_REFUND_ED.
+  2. Confirm every active TBRACCD detail code has a C or P type in TBBDETC;
+     accounts containing an unclassified type cannot be signed reliably.
   3. Confirm the known example returns $6,583 total, $5,105 student,
      and $1,478 parent.
   4. Spot-check BALANCE_SOURCES against TSAAREV: the newest selected credits
@@ -56,99 +56,101 @@ FIRST-RUN VALIDATION
 */
 
 WITH
+term_context AS (
+    SELECT
+        CURRENT_DATE AS run_date,
+        /*
+        Leave NULL to derive the Mines term containing RUN_DATE. Set a valid
+        six-digit Banner term only for an intentional prior-term or work-ahead run.
+        */
+        CAST(NULL AS varchar(6)) AS target_term_override
+),
+
 params AS (
     SELECT
-        CAST('202680' AS varchar(6)) AS target_term,
-        CAST('202655' AS varchar(6)) AS prior_term,
-        CAST('AR_STU' AS varchar(30)) AS population_application,
-        CAST('AR_REFUND_ED' AS varchar(30)) AS population_selection,
-        CAST('JPHOU' AS varchar(30)) AS population_creator_id,
-        CAST('JPHOU' AS varchar(30)) AS population_user_id,
+        CAST(
+            COALESCE(
+                target_term_override,
+                CONCAT(
+                    CAST(EXTRACT(YEAR FROM run_date) AS integer),
+                    CASE
+                        WHEN run_date <= MAKE_DATE(
+                            CAST(EXTRACT(YEAR FROM run_date) AS integer),
+                            5,
+                            15
+                        ) THEN '10'
+                        WHEN run_date <= MAKE_DATE(
+                            CAST(EXTRACT(YEAR FROM run_date) AS integer),
+                            7,
+                            15
+                        ) THEN '55'
+                        ELSE '80'
+                    END
+                )
+            ) AS varchar(6)
+        ) AS target_term,
         /* Replace NULL with 'SMITH%' for an optional last-name validation run. */
         CAST(NULL AS varchar(60)) AS last_name_filter
-),
-
-/* Exact population currently displayed in GLIEXTR. */
-refund_population AS (
-    SELECT
-        TRIM(g.glbextr_key) AS population_key,
-        COUNT(*) AS population_row_count,
-        STRING_AGG(
-            DISTINCT COALESCE(NULLIF(TRIM(g.glbextr_sys_ind), ''), '[blank]'),
-            ', '
-        ) AS population_sys_ind,
-        MAX(g.glbextr_activity_date) AS population_activity_date
-    FROM general.glbextr g
-    CROSS JOIN params p
-    WHERE UPPER(TRIM(g.glbextr_application)) = p.population_application
-      AND UPPER(TRIM(g.glbextr_selection)) = p.population_selection
-      AND UPPER(TRIM(g.glbextr_creator_id)) = p.population_creator_id
-      AND UPPER(TRIM(g.glbextr_user_id)) = p.population_user_id
-    GROUP BY TRIM(g.glbextr_key)
-),
-
-/* AR_STU population keys are resolved to the current SPRIDEN PIDM. */
-population_pidms AS (
-    SELECT
-        rp.population_key,
-        rp.population_row_count,
-        rp.population_sys_ind,
-        rp.population_activity_date,
-        s.spriden_pidm AS pidm
-    FROM refund_population rp
-    LEFT JOIN saturn.spriden s
-        ON s.spriden_pidm = CASE
-            WHEN rp.population_key ~ '^[0-9]+$'
-                THEN CAST(rp.population_key AS numeric)
-            ELSE NULL
-        END
-       AND s.spriden_change_ind IS NULL
+    FROM term_context
 ),
 
 /*
-The population comes from GLIEXTR; the full-account balance is calculated only
-after selection. Population members that are no longer negative are retained
-and clearly labeled instead of disappearing from the reconciliation.
+LEGACY THIRD-PARTY CWIDS
+New third-party accounts use a TPS-prefixed CWID. Add older CWIDs that do not
+follow that convention here. Keep the NULL placeholder and add one row per CWID:
+
+    -- , ('LEGACY_CWID_1')
+    -- , ('LEGACY_CWID_2')
+
+Remove only the leading -- when activating a row. Matching ignores case and
+surrounding spaces.
 */
-account_balances AS (
+legacy_third_party_cwids AS (
+    SELECT DISTINCT UPPER(TRIM(v.cwid)) AS cwid
+    FROM (
+        VALUES
+            (CAST(NULL AS varchar(30))),
+            -- , ('LEGACY_CWID_1')
+            -- , ('LEGACY_CWID_2')
+    ) AS v(cwid)
+    WHERE NULLIF(TRIM(v.cwid), '') IS NOT NULL
+),
+
+/*
+Calculate an accounting-signed balance for every PIDM with AR activity. Detail
+codes without a C/P type are counted so an indeterminate account is never
+presented as a reliable refund amount.
+*/
+account_balance_rollup AS (
     SELECT
-        p.population_key,
-        p.population_row_count,
-        p.population_sys_ind,
-        p.population_activity_date,
-        p.pidm,
-        CASE
-            WHEN COUNT(*) FILTER (
-                WHERE t.tbraccd_pidm IS NOT NULL
-                  AND UPPER(TRIM(COALESCE(d.tbbdetc_type_ind, '')))
-                      NOT IN ('C', 'P')
-            ) = 0
-            THEN ROUND(SUM(CASE
-                WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-                    THEN -COALESCE(t.tbraccd_amount, 0)
-                WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
-                    THEN COALESCE(t.tbraccd_amount, 0)
-                ELSE 0
-            END), 2)
-            ELSE NULL
-        END AS full_account_balance,
+        t.tbraccd_pidm AS pidm,
+        ROUND(SUM(CASE
+            WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
+                THEN -COALESCE(t.tbraccd_amount, 0)
+            WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
+                THEN COALESCE(t.tbraccd_amount, 0)
+            ELSE 0
+        END), 2) AS full_account_balance,
         COUNT(*) FILTER (
-            WHERE t.tbraccd_pidm IS NOT NULL
-              AND UPPER(TRIM(COALESCE(d.tbbdetc_type_ind, '')))
+            WHERE UPPER(TRIM(COALESCE(d.tbbdetc_type_ind, '')))
                   NOT IN ('C', 'P')
         ) AS unclassified_detail_type_count,
         MAX(t.tbraccd_activity_date) AS last_ar_activity_date
-    FROM population_pidms p
-    LEFT JOIN taismgr.tbraccd t
-        ON t.tbraccd_pidm = p.pidm
+    FROM taismgr.tbraccd t
     LEFT JOIN taismgr.tbbdetc d
         ON d.tbbdetc_detail_code = t.tbraccd_detail_code
-    GROUP BY
-        p.population_key,
-        p.population_row_count,
-        p.population_sys_ind,
-        p.population_activity_date,
-        p.pidm
+    GROUP BY t.tbraccd_pidm
+),
+
+/* Every fully classifiable account with a full-account credit balance. */
+account_balances AS (
+    SELECT
+        r.pidm,
+        r.full_account_balance,
+        r.last_ar_activity_date
+    FROM account_balance_rollup r
+    WHERE r.unclassified_detail_type_count = 0
+      AND r.full_account_balance < 0
 ),
 
 current_identity AS (
@@ -198,7 +200,7 @@ active_ed AS (
     GROUP BY h.sprhold_pidm
 ),
 
-/* Limit detailed transaction work to the GLIEXTR population. */
+/* Limit detailed transaction work to accounts with a credit balance. */
 candidate_transactions AS (
     SELECT
         t.tbraccd_pidm AS pidm,
@@ -241,6 +243,7 @@ selected source credits can be greater than the exact balance.
 balance_source_ranked AS (
     SELECT
         x.pidm,
+        x.term_code,
         x.tran_number,
         x.detail_code,
         x.detail_desc,
@@ -274,6 +277,12 @@ balance_source_ranked AS (
       AND x.amount < 0
 ),
 
+selected_balance_sources AS (
+    SELECT r.*
+    FROM balance_source_ranked r
+    WHERE r.prior_source_credit_total < r.refund_amount
+),
+
 balance_source_summary AS (
     SELECT
         r.pidm,
@@ -289,12 +298,11 @@ balance_source_summary AS (
                 ' (', TRIM(r.detail_desc), ')'
             )
         ) AS balance_sources
-    FROM balance_source_ranked r
-    WHERE r.prior_source_credit_total < r.refund_amount
+    FROM selected_balance_sources r
     GROUP BY r.pidm
 ),
 
-/* Fall Parent PLUS transaction. Multiple rows are intentionally exceptions. */
+/* Target-term Parent PLUS transaction. Multiple rows are exceptions. */
 fdpl_summary AS (
     SELECT
         x.pidm,
@@ -317,9 +325,10 @@ fdpl_summary AS (
 ),
 
 /*
-For the provisional FRCC rule, student credits are payment-type credits posted
-after the one Fall FDPL transaction. The term is intentionally not restricted:
-the refund amount and TSAAREV Query Balance cover the full account.
+For the Parent PLUS allocation, student credits are payment-type
+credits posted after the one target-term FDPL transaction. The later credits
+are intentionally not restricted by term: the refund amount and TSAAREV Query
+Balance cover the full account.
 */
 later_payment_summary AS (
     SELECT
@@ -336,11 +345,6 @@ later_payment_summary AS (
                 THEN -x.amount
             ELSE 0
         END), 2) AS later_non_fdpl_payment_total,
-        COUNT(*) FILTER (
-            WHERE x.amount < 0
-              AND UPPER(TRIM(x.detail_code)) <> 'FDPL'
-              AND x.type_ind IS NULL
-        ) AS unclassified_later_credit_count,
         STRING_AGG(
             CASE
                 WHEN x.amount < 0
@@ -363,7 +367,7 @@ later_payment_summary AS (
     GROUP BY x.pidm
 ),
 
-/* Authorization is matched to the aid year stored on the Fall FDPL row. */
+/* Authorization is matched to the aid year stored on the target-term FDPL row. */
 plus_authorization AS (
     SELECT
         f.pidm,
@@ -392,42 +396,36 @@ plus_authorization AS (
 ),
 
 /*
-Presence of an ACH/card payment cannot prove that Transact can return it to the
-same original account. It only creates a manual Transact review flag.
-Summer 202655 is included because a payment may have been made there for Fall.
+An ACH/card payment is relevant when it is one of the newest credits funding
+the current full-account credit balance. Its term is intentionally unrestricted.
+Presence cannot prove that Transact can return it to the original account, so
+it creates a manual Transact review flag.
 */
 original_payment_summary AS (
     SELECT
-        x.pidm,
+        s.pidm,
         COUNT(*) AS original_payment_row_count,
-        ROUND(SUM(-x.amount), 2) AS original_payment_total,
-        MAX(x.tran_number) AS latest_original_payment_tran,
-        MAX(x.activity_date) AS latest_original_payment_activity_date,
+        ROUND(SUM(s.source_credit_amount), 2) AS original_payment_total,
+        MAX(s.tran_number) AS latest_original_payment_tran,
+        MAX(s.activity_date) AS latest_original_payment_activity_date,
         STRING_AGG(
             CONCAT(
-                COALESCE(x.term_code, '[no term]'),
-                ' / #', x.tran_number,
-                ' / ', x.detail_code,
-                ' / ', TO_CHAR(-x.amount, 'FM999999990.00')
+                COALESCE(s.term_code, '[no term]'),
+                ' / #', s.tran_number,
+                ' / ', s.detail_code,
+                ' / ', TO_CHAR(s.source_credit_amount, 'FM999999990.00')
             ),
-            ' | ' ORDER BY x.tran_number
+            ' | ' ORDER BY s.tran_number
         ) AS original_payment_detail
-    FROM candidate_transactions x
-    CROSS JOIN params p
-    WHERE x.amount < 0
-      AND UPPER(TRIM(x.detail_code)) IN (
+    FROM selected_balance_sources s
+    WHERE UPPER(TRIM(s.detail_code)) IN (
           'ACHK', 'CRDS', 'CRED', 'CRVC', 'CRAM', 'CRMC'
       )
-      AND x.term_code IN (p.prior_term, p.target_term)
-    GROUP BY x.pidm
+    GROUP BY s.pidm
 ),
 
 joined AS (
     SELECT
-        b.population_key,
-        b.population_row_count,
-        b.population_sys_ind,
-        b.population_activity_date,
         b.pidm,
         i.cwid,
         i.last_name,
@@ -435,8 +433,20 @@ joined AS (
         pc.deceased_ind,
         pc.deceased_date,
         pc.confidential_ind,
+        CASE
+            WHEN UPPER(TRIM(COALESCE(i.cwid, ''))) LIKE 'TPS%'
+              OR legacy_tps.cwid IS NOT NULL
+                THEN 'Y'
+            ELSE 'N'
+        END AS third_party_review_required_ind,
+        CASE
+            WHEN UPPER(TRIM(COALESCE(i.cwid, ''))) LIKE 'TPS%'
+                THEN 'TPS_CWID_PREFIX'
+            WHEN legacy_tps.cwid IS NOT NULL
+                THEN 'LEGACY_CWID_LIST'
+            ELSE NULL
+        END AS third_party_match_source,
         b.full_account_balance,
-        b.unclassified_detail_type_count,
         GREATEST(-b.full_account_balance, 0) AS total_refund_amount,
         bs.balance_sources,
         COALESCE(bs.balance_source_transaction_count, 0)
@@ -470,8 +480,6 @@ joined AS (
         f.fdpl_aidy_code,
         COALESCE(lp.later_payment_count, 0) AS later_payment_count,
         COALESCE(lp.later_non_fdpl_payment_total, 0) AS later_non_fdpl_payment_total,
-        COALESCE(lp.unclassified_later_credit_count, 0)
-            AS unclassified_later_credit_count,
         lp.later_payment_detail,
         COALESCE(pa.plus_auth_row_count, 0) AS plus_auth_row_count,
         pa.plus_auth_y_count,
@@ -496,6 +504,8 @@ joined AS (
         ON i.pidm = b.pidm
     LEFT JOIN person_controls pc
         ON pc.pidm = b.pidm
+    LEFT JOIN legacy_third_party_cwids legacy_tps
+        ON legacy_tps.cwid = UPPER(TRIM(i.cwid))
     LEFT JOIN account_controls ac
         ON ac.pidm = b.pidm
     LEFT JOIN active_ed ed
@@ -512,7 +522,7 @@ joined AS (
         ON op.pidm = b.pidm
 ),
 
-provisional_calculation AS (
+parent_plus_calculation AS (
     SELECT
         j.*,
         CASE
@@ -530,7 +540,7 @@ provisional_calculation AS (
                 2
             )
             ELSE NULL
-        END AS provisional_fdpl_created_credit
+        END AS calculated_fdpl_created_credit
     FROM joined j
 ),
 
@@ -541,7 +551,7 @@ refund_split AS (
             WHEN c.fdpl_row_count = 0 THEN CAST(0 AS numeric)
             WHEN c.fdpl_row_count = 1
              AND c.plus_to_student_status = 'Y' THEN CAST(0 AS numeric)
-            WHEN c.fdpl_row_count = 1 THEN c.provisional_fdpl_created_credit
+            WHEN c.fdpl_row_count = 1 THEN c.calculated_fdpl_created_credit
             ELSE NULL
         END AS proposed_parent_refund_amount,
         CASE
@@ -549,16 +559,10 @@ refund_split AS (
             WHEN c.fdpl_row_count = 1
              AND c.plus_to_student_status = 'Y' THEN c.total_refund_amount
             WHEN c.fdpl_row_count = 1
-                THEN c.total_refund_amount - c.provisional_fdpl_created_credit
+                THEN c.total_refund_amount - c.calculated_fdpl_created_credit
             ELSE NULL
-        END AS proposed_student_refund_amount,
-        CASE
-            WHEN c.fdpl_row_count = 1
-             AND c.plus_to_student_status <> 'Y'
-                THEN 'POLICY_APPROVAL_REQUIRED'
-            ELSE 'NOT_APPLICABLE'
-        END AS parent_split_policy_status
-    FROM provisional_calculation c
+        END AS proposed_student_refund_amount
+    FROM parent_plus_calculation c
 ),
 
 delivery AS (
@@ -566,6 +570,8 @@ delivery AS (
         s.*,
         CASE
             WHEN COALESCE(s.proposed_student_refund_amount, 0) <= 0 THEN 'NONE'
+            WHEN s.third_party_review_required_ind = 'Y'
+                THEN 'THIRD_PARTY_REVIEW'
             WHEN s.active_ed_ind = 'Y'
              AND s.refund_account_selected_ind = 'Y'
                 THEN 'CONFLICT_ED_AND_TSARFND'
@@ -588,32 +594,24 @@ final_review AS (
         d.*,
         CONCAT_WS(
             '; ',
-            CASE WHEN d.pidm IS NULL THEN 'GLBEXTR_KEY_NOT_RESOLVED_TO_PIDM' END,
-            CASE WHEN d.population_row_count > 1
-                THEN CONCAT('DUPLICATE_GLBEXTR_ROWS_', d.population_row_count) END,
-            CASE WHEN d.full_account_balance >= 0
-                THEN 'NO_LONGER_IN_FULL_ACCOUNT_CREDIT' END,
-            CASE WHEN d.unclassified_detail_type_count > 0
-                THEN CONCAT(
-                    'UNCLASSIFIED_TBBDETC_TYPE_ROWS_',
-                    d.unclassified_detail_type_count
-                ) END,
             CASE WHEN d.full_account_balance < 0
                    AND d.balance_source_credit_total < d.total_refund_amount
                 THEN 'BALANCE_SOURCE_CREDITS_BELOW_REFUND' END,
             CASE WHEN d.refund_hold_ind = 'Y' THEN 'REFUND_HOLD_RH' END,
             CASE WHEN UPPER(TRIM(COALESCE(d.deceased_ind, ''))) = 'Y'
                 THEN 'DECEASED_PERSON' END,
+            CASE WHEN d.third_party_review_required_ind = 'Y'
+                THEN 'THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED' END,
             CASE WHEN d.cwid IS NULL THEN 'CURRENT_SPRIDEN_MISSING' END,
             CASE WHEN d.account_control_row_count <> 1
                 THEN CONCAT('TBBACCT_ROW_COUNT_', d.account_control_row_count) END,
             CASE WHEN d.active_ed_row_count > 1
                 THEN CONCAT('MULTIPLE_ACTIVE_ED_ROWS_', d.active_ed_row_count) END,
             CASE WHEN d.fdpl_row_count > 1
-                THEN CONCAT('MULTIPLE_202680_FDPL_ROWS_', d.fdpl_row_count) END,
+                THEN CONCAT('MULTIPLE_TARGET_TERM_FDPL_ROWS_', d.fdpl_row_count) END,
             CASE WHEN d.fdpl_row_count = 1
                    AND COALESCE(d.fdpl_credit_amount, 0) <= 0
-                THEN '202680_FDPL_NOT_A_NEGATIVE_CREDIT' END,
+                THEN 'TARGET_TERM_FDPL_NOT_A_NEGATIVE_CREDIT' END,
             CASE WHEN d.fdpl_row_count = 1 AND d.fdpl_aidy_count <> 1
                 THEN 'FDPL_AID_YEAR_MISSING_OR_CONFLICTING' END,
             CASE WHEN d.fdpl_row_count = 1 AND d.plus_to_student_status = 'MISSING'
@@ -622,15 +620,8 @@ final_review AS (
                 THEN 'PLUS_AUTH_VALUES_CONFLICT' END,
             CASE WHEN d.fdpl_row_count = 1 AND d.plus_auth_row_count > 1
                 THEN CONCAT('MULTIPLE_PLUS_AUTH_ROWS_', d.plus_auth_row_count) END,
-            CASE WHEN d.unclassified_later_credit_count > 0
-                THEN CONCAT(
-                    'UNCLASSIFIED_LATER_NEGATIVE_TRANSACTIONS_',
-                    d.unclassified_later_credit_count
-                ) END,
             CASE WHEN d.original_payment_row_count > 0
                 THEN 'REVIEW_ACH_CC_IN_TRANSACT' END,
-            CASE WHEN d.parent_split_policy_status = 'POLICY_APPROVAL_REQUIRED'
-                THEN 'PARENT_SPLIT_POLICY_APPROVAL_REQUIRED' END,
             CASE WHEN d.proposed_student_delivery = 'CONFLICT_ED_AND_TSARFND'
                 THEN 'ED_AND_REFUND_ACCOUNT_BOTH_SELECTED' END,
             CASE WHEN d.proposed_student_delivery = 'UNKNOWN_REFUND_IND_VALUE'
@@ -645,26 +636,28 @@ SELECT
     f.last_name,
     f.first_name,
     f.cwid,
+    f.pidm AS banner_pidm,
+    p.target_term AS parent_plus_target_term,
+    f.third_party_review_required_ind,
+    f.third_party_match_source,
     f.full_account_balance,
     f.total_refund_amount,
     f.balance_sources,
-    f.unclassified_detail_type_count,
     f.refund_hold_ind,
     f.raw_delinquency_code,
     f.active_ed_ind,
     f.raw_refund_account_ind,
     f.refund_account_selected_ind,
     f.fdpl_row_count,
-    f.last_fdpl_tran_number AS current_fdpl_tran_number,
-    f.fdpl_credit_amount AS current_202680_fdpl_amount,
+    f.last_fdpl_tran_number AS target_term_fdpl_tran_number,
+    f.fdpl_credit_amount AS target_term_fdpl_amount,
     f.fdpl_aidy_code,
     f.plus_to_student_status,
-    f.later_non_fdpl_payment_total AS credits_after_current_fdpl,
-    f.later_payment_detail AS credits_after_current_fdpl_detail,
-    f.provisional_fdpl_created_credit AS calculated_parent_plus_credit,
+    f.later_non_fdpl_payment_total AS credits_after_target_term_fdpl,
+    f.later_payment_detail AS credits_after_target_term_fdpl_detail,
+    f.calculated_fdpl_created_credit AS calculated_parent_plus_credit,
     f.proposed_student_refund_amount AS student_refund_amount,
     f.proposed_parent_refund_amount AS parent_refund_amount,
-    f.parent_split_policy_status,
     f.original_payment_row_count,
     f.original_payment_total,
     f.original_payment_detail,
@@ -677,15 +670,12 @@ SELECT
     f.plus_auth_raw_values,
     f.later_payment_count,
     CASE
-        WHEN f.pidm IS NULL THEN 'MANUAL_REVIEW'
-        WHEN f.population_row_count > 1 THEN 'MANUAL_REVIEW'
-        WHEN f.unclassified_detail_type_count > 0 THEN 'MANUAL_REVIEW'
         WHEN f.full_account_balance < 0
          AND f.balance_source_credit_total < f.total_refund_amount
             THEN 'MANUAL_REVIEW'
-        WHEN f.full_account_balance >= 0 THEN 'NO_LONGER_IN_CREDIT'
         WHEN f.refund_hold_ind = 'Y' THEN 'HOLD'
         WHEN UPPER(TRIM(COALESCE(f.deceased_ind, ''))) = 'Y' THEN 'MANUAL_REVIEW'
+        WHEN f.third_party_review_required_ind = 'Y' THEN 'MANUAL_REVIEW'
         WHEN f.cwid IS NULL THEN 'MANUAL_REVIEW'
         WHEN f.account_control_row_count <> 1 THEN 'MANUAL_REVIEW'
         WHEN f.active_ed_row_count > 1 THEN 'MANUAL_REVIEW'
@@ -699,10 +689,7 @@ SELECT
             THEN 'MANUAL_REVIEW'
         WHEN f.fdpl_row_count = 1
          AND f.plus_auth_row_count > 1 THEN 'MANUAL_REVIEW'
-        WHEN f.unclassified_later_credit_count > 0 THEN 'MANUAL_REVIEW'
         WHEN f.original_payment_row_count > 0 THEN 'TRANSACT_REVIEW'
-        WHEN f.parent_split_policy_status = 'POLICY_APPROVAL_REQUIRED'
-            THEN 'POLICY_APPROVAL_REQUIRED'
         WHEN f.proposed_student_delivery IN (
             'CONFLICT_ED_AND_TSARFND',
             'UNKNOWN_REFUND_IND_VALUE'
@@ -712,10 +699,6 @@ SELECT
         ELSE 'READY_FOR_STAFF_REVIEW'
     END AS review_status,
     f.review_reasons,
-    f.population_key AS glbextr_key,
-    f.population_sys_ind AS glbextr_sys_ind,
-    f.population_row_count AS glbextr_row_count,
-    f.population_activity_date AS glbextr_activity_date,
     f.last_ar_activity_date,
     f.account_control_activity_date,
     f.ed_activity_date,

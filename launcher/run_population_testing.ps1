@@ -13,10 +13,6 @@ $PythonExe = Join-Path `
     $ProjectRoot `
     ".venv\Scripts\python.exe"
 
-$PyScript = Join-Path `
-    $ProjectRoot `
-    "workflows\population_testing\run_population_testing.py"
-
 if (-not (Test-Path $PythonExe)) {
     throw @"
 Python environment not found.
@@ -25,10 +21,9 @@ Run .\setup.ps1 from the repository root.
 "@
 }
 
-$env:PYTHONPATH = $ProjectRoot
-
 $Arguments = @(
-    $PyScript
+    "-m"
+    "workflows.population_testing.run_population_testing"
 )
 
 if (

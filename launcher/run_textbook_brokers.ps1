@@ -1,6 +1,8 @@
 param (
     [ValidatePattern('^\d{6}$')]
-    [string]$TermCode
+    [string]$TermCode,
+
+    [switch]$ArchiveOnly
 )
 
 Set-StrictMode -Version Latest
@@ -11,9 +13,10 @@ $ErrorActionPreference = "Stop"
 # REPOSITORY PATHS
 # ------------------------------------------------------------
 
-$repositoryRoot = Join-Path `
-    $env:OneDriveCommercial `
-    "HigherEd_Automation"
+# Resolve repository files from this launcher's location so the automation
+# repository can be installed outside OneDriveCommercial. Mines business data
+# is resolved separately from OneDriveCommercial later in this script.
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
 
 $termUtilityPath = Join-Path `
     $repositoryRoot `
@@ -26,10 +29,6 @@ $winSCPClientPath = Join-Path `
 $configPath = Join-Path `
     $repositoryRoot `
     "config\textbook_brokers.psd1"
-
-$pythonRunnerPath = Join-Path `
-    $repositoryRoot `
-    "workflows\textbook_brokers\run_textbook_brokers.py"
 
 $pythonExecutablePath = Join-Path `
     $repositoryRoot `
@@ -130,7 +129,47 @@ function Read-YesNoResponse {
     }
 }
 
+function Get-TextbookBrokersPendingFiles {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [string]$InputDirectory,
+
+        [Parameter(Mandatory)]
+        [object[]]$SourceDefinitions
+    )
+
+    foreach ($sourceDefinition in $SourceDefinitions) {
+        $matchingLocalFiles = @(
+            Get-ChildItem `
+                -LiteralPath $InputDirectory `
+                -File `
+                -Filter $sourceDefinition.FilePattern |
+                Sort-Object Name
+        )
+
+        foreach ($localFile in $matchingLocalFiles) {
+            [pscustomobject]@{
+                SourceType    = $sourceDefinition.SourceType
+                FileName      = $localFile.Name
+                LocalPath     = $localFile.FullName
+                Length        = $localFile.Length
+                LastWriteTime = $localFile.LastWriteTime
+                Status        = "Ready"
+            }
+        }
+    }
+}
+
+$workflowMode = if ($ArchiveOnly) {
+    "archive only"
+}
+else {
+    "download and transform"
+}
+
 Write-Log "Textbook Brokers workflow started."
+Write-Log "Workflow mode: $workflowMode"
 Write-Log "Repository root: $repositoryRoot"
 Write-Log "Configuration file: $configPath"
 Write-Log "Log file: $logPath"
@@ -183,19 +222,8 @@ if ([string]::IsNullOrWhiteSpace($TermCode)) {
     )
 }
 else {
-    $termYear = $TermCode.Substring(0, 4)
-    $termSuffix = $TermCode.Substring(4, 2)
-
-    $termSeason = switch ($termSuffix) {
-        "10" { "Spring" }
-        "55" { "Summer" }
-        "80" { "Fall" }
-        default {
-            throw "Unsupported Banner term-code suffix: $termSuffix"
-        }
-    }
-
-    $termName = "$termSeason $termYear"
+    $suppliedTerm = Get-BannerTermByCode -TermCode $TermCode
+    $termName = $suppliedTerm.Name
 
     Write-Log "Banner term code supplied manually: $TermCode"
     Write-Log "Resolved Banner term name: $termName"
@@ -353,7 +381,7 @@ foreach ($sourceDefinition in $sourceDefinitions) {
 }
 Write-Log "Banner output directory: $outputDirectory"
 Write-Log "Banner output file: $outputFilePath"
-Write-Log "Python runner: $pythonRunnerPath"
+Write-Log "Python module: workflows.textbook_brokers.run_textbook_brokers"
 Write-Log "Completed source archive: $completedSourceDirectory"
 Write-Log "Uploaded Banner archive: $uploadedDirectory"
 Write-Log "Error directory: $errorDirectory"
@@ -363,112 +391,124 @@ Write-Log "Error directory: $errorDirectory"
 # DOWNLOAD PENDING TEXTBOOK BROKERS FILES
 # ------------------------------------------------------------
 
-try {
-    $transferResults = @(
-        Receive-TextbookBrokersFiles `
-            -Connection $config.Connection `
-            -OneDriveRoot $oneDriveRoot `
-            -RemoteDirectory $remoteSourceDirectory `
-            -SourceDefinitions $sourceDefinitions `
-            -LocalDirectory $inputDirectory `
-            -Log ${function:Write-Log}
-    )
-
-    $downloadedCount = @(
-        $transferResults |
-            Where-Object Status -eq "Downloaded"
-    ).Count
-
-    $existingCount = @(
-        $transferResults |
-            Where-Object Status -eq "AlreadyPresent"
-    ).Count
-
-    $conflictCount = @(
-        $transferResults |
-            Where-Object Status -eq "Conflict"
-    ).Count
-
-    $failedCount = @(
-        $transferResults |
-            Where-Object Status -eq "Failed"
-    ).Count
-
-    Write-Log (
-        "Transfer summary: $downloadedCount downloaded, " +
-        "$existingCount already present, " +
-        "$conflictCount conflicts, " +
-        "$failedCount failed."
-    )
-
-    if ($transferResults.Count -eq 0) {
-        Write-Log `
-            -Level "WARNING" `
-            -Message (
-                "No matching Finaid or IA files were found " +
-                "on the remote server."
-            )
-    }
-
-    if (($conflictCount + $failedCount) -gt 0) {
-        throw (
-            "One or more files could not be prepared safely. " +
-            "Review the error entries in the workflow log."
+if (-not $ArchiveOnly) {
+    try {
+        $transferResults = @(
+            Receive-TextbookBrokersFiles `
+                -Connection $config.Connection `
+                -OneDriveRoot $oneDriveRoot `
+                -RemoteDirectory $remoteSourceDirectory `
+                -SourceDefinitions $sourceDefinitions `
+                -LocalDirectory $inputDirectory `
+                -Log ${function:Write-Log}
         )
-    }
 
-    # Inventory every locally pending Finaid and IA file.
-    $readySourceFiles = @(
-        foreach ($sourceDefinition in $sourceDefinitions) {
-            $matchingLocalFiles = @(
-                Get-ChildItem `
-                    -LiteralPath $inputDirectory `
-                    -File `
-                    -Filter $sourceDefinition.FilePattern |
-                    Sort-Object Name
+        $downloadedCount = @(
+            $transferResults |
+                Where-Object Status -eq "Downloaded"
+        ).Count
+
+        $existingCount = @(
+            $transferResults |
+                Where-Object Status -eq "AlreadyPresent"
+        ).Count
+
+        $conflictCount = @(
+            $transferResults |
+                Where-Object Status -eq "Conflict"
+        ).Count
+
+        $failedCount = @(
+            $transferResults |
+                Where-Object Status -eq "Failed"
+        ).Count
+
+        Write-Log (
+            "Transfer summary: $downloadedCount downloaded, " +
+            "$existingCount already present, " +
+            "$conflictCount conflicts, " +
+            "$failedCount failed."
+        )
+
+        if ($transferResults.Count -eq 0) {
+            Write-Log `
+                -Level "WARNING" `
+                -Message (
+                    "No matching Finaid or IA files were found " +
+                    "on the remote server."
+                )
+        }
+
+        if (($conflictCount + $failedCount) -gt 0) {
+            throw (
+                "One or more files could not be prepared safely. " +
+                "Review the error entries in the workflow log."
+            )
+        }
+
+        # Inventory every locally pending Finaid and IA file.
+        $readySourceFiles = @(
+            Get-TextbookBrokersPendingFiles `
+                -InputDirectory $inputDirectory `
+                -SourceDefinitions $sourceDefinitions
+        )
+
+        if ($readySourceFiles.Count -eq 0) {
+            Write-Log `
+                -Level "WARNING" `
+                -Message "No local files are ready for transformation."
+        }
+        else {
+            Write-Log (
+                "Local pending summary: " +
+                "$($readySourceFiles.Count) file(s) ready for transformation."
             )
 
-            foreach ($localFile in $matchingLocalFiles) {
-                [pscustomobject]@{
-                    SourceType   = $sourceDefinition.SourceType
-                    FileName     = $localFile.Name
-                    LocalPath    = $localFile.FullName
-                    Length       = $localFile.Length
-                    LastWriteTime = $localFile.LastWriteTime
-                    Status       = "Ready"
-                }
+            foreach ($readyFile in $readySourceFiles) {
+                Write-Log (
+                    "Ready for transformation: [{0}] {1}" -f `
+                        $readyFile.SourceType,
+                        $readyFile.LocalPath
+                )
             }
         }
+
+        Write-Log "Textbook Brokers download stage completed successfully."
+    }
+    catch {
+        Write-Log `
+            -Level "ERROR" `
+            -Message "Textbook Brokers download stage failed: $($_.Exception.Message)"
+
+        throw
+    }
+}
+else {
+    Write-Log (
+        "Archive-only mode selected. Remote download and Python " +
+        "transformation will be skipped."
+    )
+
+    $readySourceFiles = @(
+        Get-TextbookBrokersPendingFiles `
+            -InputDirectory $inputDirectory `
+            -SourceDefinitions $sourceDefinitions
     )
 
     if ($readySourceFiles.Count -eq 0) {
-        Write-Log `
-            -Level "WARNING" `
-            -Message "No local files are ready for transformation."
-    }
-    else {
-        Write-Log (
-            "Local pending summary: " +
-            "$($readySourceFiles.Count) file(s) ready for transformation."
+        throw (
+            "No pending Finaid or IA source files were found for term " +
+            "$TermCode in $inputDirectory"
         )
-
-        foreach ($readyFile in $readySourceFiles) {
-            Write-Log (
-                "Ready for transformation: [{0}] {1}" -f `
-                    $readyFile.SourceType,
-                    $readyFile.LocalPath
-            )
-        }
     }
 
-    Write-Log "Textbook Brokers download stage completed successfully."
-}
-catch {
-    Write-Log `
-        -Level "ERROR" `
-        -Message "Textbook Brokers download stage failed: $($_.Exception.Message)"
-
-    throw
+    foreach ($readyFile in $readySourceFiles) {
+        Write-Log (
+            "Pending archive source: [{0}] {1}" -f `
+                $readyFile.SourceType,
+                $readyFile.LocalPath
+        )
+    }
 }
 
 
@@ -476,10 +516,30 @@ catch {
 # TRANSFORM PENDING FILES INTO TSPLOAD.CSV
 # ------------------------------------------------------------
 
-if ($readySourceFiles.Count -eq 0) {
+if ($ArchiveOnly) {
+    if (-not (Test-Path -LiteralPath $outputFilePath -PathType Leaf)) {
+        throw (
+            "TSPLOAD.csv is not pending for term $TermCode. " +
+            "Expected: $outputFilePath"
+        )
+    }
+
+    $outputFile = Get-Item -LiteralPath $outputFilePath
+
+    if ($outputFile.Length -eq 0) {
+        throw "Pending TSPLOAD.csv is empty: $outputFilePath"
+    }
+
+    Write-Log "Pending TSPLOAD output verified: $outputFilePath"
+    Write-Log "Pending TSPLOAD output size: $($outputFile.Length) bytes"
+}
+elseif ($readySourceFiles.Count -eq 0) {
     Write-Log `
         -Level "WARNING" `
         -Message "Transformation was skipped because no local source files are pending."
+
+    Write-Log "Textbook Brokers workflow completed with no files to process."
+    return
 }
 else {
     try {
@@ -487,12 +547,9 @@ else {
             throw "Repository Python executable was not found: $pythonExecutablePath"
         }
 
-        if (-not (Test-Path -LiteralPath $pythonRunnerPath -PathType Leaf)) {
-            throw "Textbook Brokers Python runner was not found: $pythonRunnerPath"
-        }
-
         $pythonArguments = @(
-            $pythonRunnerPath
+            "-m"
+            "workflows.textbook_brokers.run_textbook_brokers"
             "--term-code"
             $TermCode
             "--output"
@@ -508,11 +565,18 @@ else {
                 $readySourceFiles.Count
         )
 
-        $pythonOutput = @(
-            & $pythonExecutablePath @pythonArguments 2>&1
-        )
+        Push-Location $repositoryRoot
 
-        $pythonExitCode = $LASTEXITCODE
+        try {
+            $pythonOutput = @(
+                & $pythonExecutablePath @pythonArguments 2>&1
+            )
+
+            $pythonExitCode = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+        }
 
         foreach ($outputLine in $pythonOutput) {
             Write-Log "Python: $outputLine"
@@ -563,26 +627,13 @@ if (-not $bannerUploadConfirmed) {
     )
 
     Write-Log "Textbook Brokers workflow paused for manual Banner upload."
+    Write-Host ""
+    Write-Host "After the Banner upload succeeds, run:"
+    Write-Host "archive-textbook-brokers"
     return
 }
 
 Write-Log "Manual Banner upload and transaction application were confirmed."
-
-$archiveConfirmed = Read-YesNoResponse `
-    -Prompt (
-        "Archive the completed TSPLOAD and source files locally and " +
-        "on the Textbook Brokers SFTP server now?"
-    )
-
-if (-not $archiveConfirmed) {
-    Write-Log (
-        "File archival was declined. TSPLOAD.csv, local source files, " +
-        "and remote source files were left unchanged."
-    )
-
-    Write-Log "Textbook Brokers workflow completed without file archival."
-    return
-}
 
 
 # ------------------------------------------------------------

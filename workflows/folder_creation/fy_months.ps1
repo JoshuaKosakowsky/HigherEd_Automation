@@ -1,16 +1,27 @@
+param(
+    [ValidateRange(2000, 2200)]
+    [int]$FiscalYear
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$fiscalPeriodScript = Join-Path $repositoryRoot "shared\fiscal_period.ps1"
+
+if (-not (Test-Path -LiteralPath $fiscalPeriodScript -PathType Leaf)) {
+    throw "Fiscal-period utility was not found: $fiscalPeriodScript"
+}
+
+. $fiscalPeriodScript
+
+if (-not $PSBoundParameters.ContainsKey("FiscalYear")) {
+    $FiscalYear = (Get-MinesFiscalPeriod -Date (Get-Date)).FiscalYear
+}
+
 $Folders = @(
-    "P01 - Jul '26"
-    "P02 - Aug '26"
-    "P03 - Sep '26"
-    "P04 - Oct '26"
-    "P05 - Nov '26"
-    "P06 - Dec '26"
-    "P07 - Jan '27"
-    "P08 - Feb '27"
-    "P09 - Mar '27"
-    "P10 - Apr '27"
-    "P11 - May '27"
-    "P12 - Jun '27"
+    Get-MinesFiscalPeriodFolders -FiscalYear $FiscalYear |
+        Select-Object -ExpandProperty PeriodDirectoryName
 )
 
 foreach ($Folder in $Folders) {
@@ -23,4 +34,4 @@ foreach ($Folder in $Folders) {
     }
 }
 
-Write-Host "`nNew FY folders completed."
+Write-Host "`nFY$FiscalYear period folders completed."
