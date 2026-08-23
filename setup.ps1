@@ -9,9 +9,12 @@ $VenvDir = Join-Path $ProjectRoot ".venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $RequirementsFile = Join-Path $ProjectRoot "requirements.txt"
 $UserSettingsScript = Join-Path $ProjectRoot "shared\user_settings.ps1"
+$ProfileSetupScript = Join-Path `
+    $ProjectRoot `
+    "powershell\credentials\setup_profile.ps1"
 $MinimumPythonVersion = [version]"3.11"
 $StepNumber = 0
-$StepCount = 6
+$StepCount = 7
 
 
 function Write-SetupStep {
@@ -343,6 +346,9 @@ from playwright.sync_api import sync_playwright
     Write-SetupStep "Saving your name and initials"
     Set-UpAutomationUserDetails
 
+    Write-SetupStep "Installing PowerShell shortcuts"
+    & $ProfileSetupScript
+
     Write-Host ""
     Write-Host "SETUP COMPLETE" -ForegroundColor Green
     Write-Host "==============" -ForegroundColor Green
@@ -350,11 +356,8 @@ from playwright.sync_api import sync_playwright
     Write-Host ""
     Write-Host "You do not need to activate Python manually."
     Write-Host ""
-    Write-Host "NEXT STEP: install the required PowerShell shortcuts:"
-    Write-Host ".\powershell\credentials\setup_profile.ps1"
-    Write-Host ""
-    Write-Host "Then load them into this PowerShell window:"
-    Write-Host ". `$PROFILE"
+    Write-Host "Close this PowerShell window and open a new one."
+    Write-Host "The automation shortcuts will load automatically."
 }
 catch {
     Write-Host ""

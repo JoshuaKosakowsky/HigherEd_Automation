@@ -39,9 +39,10 @@ Copy this command, paste it into PowerShell, and press Enter:
 
 Setup creates a private Python environment inside this repository, installs
 the required packages, verifies them, installs Playwright browser support, and
-asks for your name and initials. Your user details are stored only
-under your Windows account and can be changed by running setup again. Setup may
-take several minutes the first time.
+asks for your name and initials. It also installs the PowerShell shortcuts used
+to run the automation tools. Your user details are stored only under your
+Windows account and can be changed by running setup again. Setup may take
+several minutes the first time.
 
 Setup is successful when the terminal displays:
 
@@ -62,22 +63,12 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 Enter `Y` if PowerShell asks for confirmation, then run `setup.ps1` again.
 
-### 4. Install the PowerShell shortcuts
+### 4. Open a new PowerShell window
 
 The shortcuts are the normal way to run the automation tools on computers that
-do not have a development application such as VS Code.
-
-Run:
-
-```powershell
-.\powershell\credentials\setup_profile.ps1
-```
-
-Then load the shortcuts into the current PowerShell window:
-
-```powershell
-. $PROFILE
-```
+do not have a development application such as VS Code. Setup installs them
+automatically. Close PowerShell after setup completes, then open a new
+PowerShell window. The shortcuts will load without any additional commands.
 
 The following commands will now be available:
 

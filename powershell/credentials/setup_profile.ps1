@@ -32,9 +32,6 @@ if ($null -eq $ProfileContent) {
 $ExistingStart = $ProfileContent.IndexOf($StartMarker)
 
 if ($ExistingStart -ge 0) {
-    $backupPath = "$PROFILE.highered-backup-$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-    Copy-Item -LiteralPath $PROFILE -Destination $backupPath
-
     $ExistingEnd = $ProfileContent.IndexOf(
         $EndMarker,
         $ExistingStart
@@ -60,9 +57,16 @@ if ($ExistingStart -ge 0) {
         )
     }
 
-    Set-Content -LiteralPath $PROFILE -Value $updatedContent
-    Write-Host "Existing automation shortcuts were updated."
-    Write-Host "PowerShell profile backup: $backupPath"
+    if ($updatedContent -ceq $ProfileContent) {
+        Write-Host "Automation shortcuts are already current."
+    }
+    else {
+        $backupPath = "$PROFILE.highered-backup-$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        Copy-Item -LiteralPath $PROFILE -Destination $backupPath
+        Set-Content -LiteralPath $PROFILE -Value $updatedContent
+        Write-Host "Existing automation shortcuts were updated."
+        Write-Host "PowerShell profile backup: $backupPath"
+    }
 }
 else {
     Add-Content -LiteralPath $PROFILE -Value "`n$($ProfileBlock.TrimEnd())`n"
@@ -72,10 +76,8 @@ else {
 Write-Host ""
 Write-Host "Shortcut setup completed successfully."
 Write-Host ""
-Write-Host "Next, run:"
-Write-Host ". `$PROFILE"
-Write-Host ""
-Write-Host "Then you can use:"
+Write-Host "The shortcuts load automatically in each new PowerShell window."
+Write-Host "Available shortcuts:"
 Write-Host "open-auto"
 Write-Host "start-setup"
 Write-Host "test-automation"
