@@ -1,3 +1,4 @@
+/* Contact lookup only; this query does not identify outstanding checks. */
 SELECT	
 		s.spriden_id             	AS "CWID",
 	    s.spriden_first_name     	AS "First Name",
@@ -27,4 +28,4 @@ LEFT JOIN sprtele sp
 WHERE goremal_emal_code = 'UNIV'
 AND goremal_preferred_ind = 'Y'
 AND goremal_status_ind = 'A'
-AND g.goremal_activity_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '6 years'
+AND g.goremal_activity_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '2 years'

@@ -1,3 +1,4 @@
+/* Selected loan-detail-code activity for the configured historical window. */
 SELECT
     s.spriden_id                AS "CWID",
     s.spriden_first_name        AS "First Name",

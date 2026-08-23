@@ -1,3 +1,4 @@
+/* Current-month TBRACCD transaction detail. */
 SELECT
     -- Student ID Information
     s.spriden_id             AS "CWID",

@@ -1,3 +1,4 @@
+/* Current-month activity for the listed payment and card-fee detail codes. */
 SELECT
     s.spriden_id             AS "CWID",
     s.spriden_first_name     AS "First Name",

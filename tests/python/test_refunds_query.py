@@ -6,7 +6,13 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-REFUNDS_QUERY = REPOSITORY_ROOT / "query" / "AR" / "Refunds.sql"
+REFUNDS_QUERY = (
+    REPOSITORY_ROOT
+    / "query"
+    / "AR"
+    / "refunds"
+    / "Refunds.sql"
+)
 
 
 class RefundsQueryContractTests(unittest.TestCase):
