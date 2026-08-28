@@ -14,6 +14,7 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('TAISMGR', 'TBBDETC', 'DETAIL_CODE'),
         ('TAISMGR', 'TBBDETC', 'DESC'),
         ('TAISMGR', 'TBBDETC', 'TYPE_IND'),
+        ('TAISMGR', 'TBBDETC', 'PRIORITY'),
         ('TAISMGR', 'TBBACCT', 'PIDM'),
         ('TAISMGR', 'TBBACCT', 'DELI_CODE'),
         ('TAISMGR', 'TBBACCT', 'REFUND_IND'),
