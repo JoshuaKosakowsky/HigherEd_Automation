@@ -11,6 +11,7 @@ first configured in a new Insights environment.
 | [Refunds](refunds/README.md) | Refund decision support and refund-hold diagnostics | `Refunds.sql`, `Refund_info.sql` |
 | [Contact information](contact_information/README.md) | Preferred university email and primary phone lookup | `OS_Checks.sql` |
 | [Sponsors](sponsors/README.md) | Sponsored-student contracts and student/sponsor balances | `sponsored_student_summary.sql` |
+| [Loans](loans/README.md) | Students grouped by Summer enrollment band with selected institutional-loan activity | `all_enrollment_load_categories_institutional_loans_summer.sql` plus three category-specific reports |
 
 ## Shared operating principles
 

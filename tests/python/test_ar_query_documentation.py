@@ -17,6 +17,7 @@ class AccountsReceivableQueryDocumentationTests(unittest.TestCase):
             "refunds": "validate_refund_schema.sql",
             "contact_information": "validate_contact_schema.sql",
             "sponsors": "validate_sponsor_schema.sql",
+            "loans": "validate_loan_schema.sql",
         }
 
         self.assertTrue((AR_QUERY_ROOT / "README.md").is_file())
