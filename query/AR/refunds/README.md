@@ -12,52 +12,50 @@ staff review status. It does not approve or issue a refund.
 The detailed confirmed controls and first-run reconciliation steps remain in
 the header of the SQL file. Preserve those controls when changing the query.
 
-### Priority allocation and temporary FDPL assumption
+### Stored application balances and priority context
 
-**Allocation is limited to `params.target_term`, which defaults to the current
+**Source ownership is limited to `params.target_term`, which defaults to the current
 term using the existing Mines term-date boundaries.** `target_term_override`
-remains available for an intentional run for a different term. Charges,
-payments, reversals, and issued refunds from other terms are excluded before
-source grouping and are never reapplied to the target term.
+remains available for an intentional run for a different term. Transactions
+from other terms are not replayed into the target term.
 
 The candidate population, `full_account_balance`, and `total_refund_amount`
-still cover the full account. If target-term unused payments differ from that
+still cover the full account. If target-term negative payment balances differ from that
 full-account refund, the report retains the account, leaves recipient amounts
-NULL, and flags `TARGET_TERM_ALLOCATION_DIFFERS_FROM_FULL_ACCOUNT_REFUND`.
+NULL, and flags `TARGET_TERM_STORED_BALANCES_DIFFER_FROM_FULL_ACCOUNT_REFUND`.
 This avoids ignoring another term's debit or silently assigning its credits.
 Settled historical activity must not change the target-term split.
 
-The report reads `TBBDETC_PRIORITY` through the existing detail-code join for
-both charges and payments. Charges are processed in descending priority order;
-each charge consumes eligible payments in descending payment priority order.
-Each `0` in a payment priority matches any digit in the corresponding charge
-priority position. Leading zeros are preserved; numeric-looking values with
-one or two digits are padded to three digits. Invalid/missing priorities are
-not treated as unrestricted payments. Transaction numbers and posting dates
-are used only as reference information, not to allocate funds.
+The report now uses each target-term transaction's `TBRACCD_BALANCE` after
+Banner application. A negative payment balance is an unapplied refund source;
+a positive charge balance is an unpaid charge. This preserves corrections made
+when staff manually apply payments because configuration or prior application
+is wrong. Original transaction amounts still determine the full-account balance,
+but they are not replayed to infer which payment remains.
 
-**TEMPORARY BUSINESS ASSUMPTION: FDPL applies last among payments with the same
-priority (currently 800). This has not been confirmed as a Banner rule.**
-The single setting `params.fdpl_last_at_same_priority = TRUE` implements this.
-Change it to `FALSE` only if FDPL should apply first within the same priority;
-a different rule requires revising the allocation and tests. Priorities are
-read from the data, so the rule is not hard-coded to 800. The output column
-`fdpl_priority_tie_rule` displays the active assumption on every report row.
+`TBBDETC_PRIORITY` remains visible beside each remaining source as configuration
+context. A missing or malformed priority requires review but does not override
+a reconciled stored balance. The former FDPL same-priority tie assumption has
+been retired. The existing output column `fdpl_priority_tie_rule` now returns
+`NOT_APPLICABLE_BALANCE_BASED_SOURCE` so saved output consumers do not break.
 
-Payments are pooled by priority and FDPL/non-FDPL ownership. A partially used
-pool with multiple source groups cannot identify which individual sources
-remain: it lists all possible sources, flags `SAME_PRIORITY_SOURCE_SPLIT_UNRESOLVED`,
-and keeps the account in manual review. Ambiguity among non-FDPL sources does
-**not** suppress the expected parent/student totals: those sources share the
-same side of the ownership split. This avoids adding an unconfirmed tie rule
-for other payments while retaining calculable recipient totals. Fully used or
-wholly unused pools are unambiguous.
+The output places `proposed_student_delivery` immediately after
+`total_refund_amount` and `proposed_parent_delivery` immediately after
+`student_refund_amount`. These are proposed delivery detail codes, not approval
+to issue a refund. A parent amount with PLUS-to-student status `N` uses `RFDP`.
+A student amount without a refund hold uses `ARFD (System)` when an active ED
+record exists and `RFND (CHECK)` otherwise. A refund hold displays
+`Refund Hold - Student`.
 
-`student_refund_amount` and `parent_refund_amount` appear immediately after
-`total_refund_amount`. These are expected amounts, not approval to issue a refund.
-The output starts with CWID, last name, first name, full-account balance, total
-refund, student refund, parent refund, and balance sources, followed by the
-authorization and review details. `banner_pidm`, `target_term_fdpl_tran_number`,
+Remaining `ACHK` sources use `TBRACCD_EFFECTIVE_DATE` as the posting-date basis.
+Amounts more than 16 days old and less than 90 days old are netted with all ACHK
+activity in that same window, including reversals, before `AFRD (Transact)` is
+proposed. Recent ACHK balances display `ACHK Clearing Wait`; a partial net or an
+unusable date requires review. A remaining `CRVC` source uses `CRVC (Transact)`
+without an age delay. When a student refund spans more than one route, the
+delivery column lists each route with its allocated amount.
+
+`banner_pidm`, `target_term_fdpl_tran_number`,
 `calculated_parent_plus_credit`, and `invalid_priority_count` are omitted from
 the displayed output; the internal calculations and validation checks remain.
 `refund_split_status` distinguishes `CALCULATED_SUBJECT_TO_REVIEW` from
@@ -66,21 +64,17 @@ reviews remain separate from displaying the expected split. When the split
 itself cannot be determined, the amounts stay NULL and `review_reasons` explains
 the blockers; unknown amounts are never displayed as zero.
 
-Target-term reversals are netted within the same detail code, term, and aid year.
-Negative net groups, missing priorities, unpaid charges, and unmatched
-reconciliation require manual review; the account remains
-in the report, but proposed parent/student amounts are NULL. Existing multiple
-target-term FDPL and authorization checks remain in place. The allocation uses
-current detail-code configuration within the target term, not historical
-priority snapshots or Banner's stored application records; reconcile against
-actual Banner application before operational use.
+Missing transaction balances, unexpected balance signs, unpaid charge balances,
+and unmatched reconciliation require manual review; the account remains in the
+report, but proposed parent/student amounts are NULL. Missing priorities are
+reviewed without suppressing an otherwise reconciled split. Existing multiple
+target-term FDPL and authorization checks remain in place. The report uses the
+current stored application state; reconcile it against Banner before
+operational use because the balance can be wrong until application is corrected.
 
-`balance_sources` describes unused target-term priority pools and their exact
-remaining amounts, not the newest posted payments. ACH/card review follows
-those same target-term pools; historical card payments are not selected again.
-If an ACH/card pool's individual source amounts are unresolved,
-`original_payment_total` is NULL rather than a fabricated amount. Its row count
-now counts net source groups (detail code/term/aid year), not original transactions.
+`balance_sources` describes the exact target-term payment transactions with
+negative stored balances. ACH/card review uses the exact remaining balance on
+those transactions; historical card payments are not selected again.
 
 The obsolete output columns `credits_after_target_term_fdpl`,
 `credits_after_target_term_fdpl_detail`, and `later_payment_count` were removed.
@@ -88,10 +82,9 @@ Their replacements include `unused_fdpl_amount`, `unused_non_fdpl_amount`,
 `total_unused_payment_amount`, `unpaid_charge_amount`, and allocation review
 indicators. Update saved report consumers that referenced the removed columns.
 
-The approved synthetic example has $7,500 in charges and $9,500 in payments:
-tuition 899/$6,000, fees 897/$1,000, other charge 700/$500; payments
-899/$2,000, 890/$1,500, FDPL 800/$4,000, and 000/$2,000. Its remaining funds
-are $500 FDPL and $1,500 non-FDPL, regardless of transaction numbering.
+The synthetic regression example has $7,500 in charges and $9,500 in payments.
+Its stored payment balances identify $500 FDPL and $1,500 non-FDPL as the
+remaining sources, regardless of transaction numbering or priority order.
 
 ## `Refund_info.sql`
 
@@ -111,9 +104,8 @@ It returns each detail-code/term/aid-year group, its current charge/payment type
 and priority, raw net transaction amount, raw net stored balance, and counts
 for positive, negative, and missing amounts. It includes the full account and
 zero-net groups so prior-term activity and reversals remain visible.
-It does not treat stored balances as a replacement allocation rule or calculate
-refund ownership. Compare the inputs with the manual calculation before changing
-priority order, term scope, or the treatment of already-applied payments.
+It does not calculate refund ownership. Compare its stored balances with the
+manual Banner application before relying on the operational report.
 
 ## Run order and validation
 
@@ -143,8 +135,8 @@ REFUNDS_TEST_DSN='host=localhost dbname=refunds_test user=refunds_test' \
 
 `psql` must be on PATH, or set `REFUNDS_TEST_PSQL` to its executable path.
 Without `REFUNDS_TEST_DSN`, the PostgreSQL tests explicitly skip; contract tests
-alone do not verify allocation correctness. Coverage includes the worked
-example, changing the FDPL tie setting, priorities other than 800, transaction
-order independence, wildcard matching, reversals, unresolved sources, exact
-cents, account isolation, settled prior/future terms, cross-term balance
-mismatches, and existing authorization/hold controls.
+alone do not verify source-split correctness. Coverage includes stored-balance
+ownership, both completed-team patterns using synthetic amounts, transaction
+order independence, reversals, exact cents, account isolation, settled prior
+terms, cross-term balance mismatches, authorization/hold controls, delivery-code
+routing, ACHK age boundaries and net returns, and immediate CRVC routing.

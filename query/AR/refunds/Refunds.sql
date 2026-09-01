@@ -11,9 +11,9 @@ CONFIRMED CONTROLS
     classified, accounting-signed balance is negative is included.
   * The balance covers the full account, without a term restriction, because
     payments can be posted in one term for charges in another term.
-  * Priority allocation uses ONLY params.target_term (the current term unless
-    explicitly overridden). Other terms' charges, payments, and issued refunds
-    are not reapplied. A mismatch with the full-account refund requires review.
+  * Refund ownership uses each target-term transaction's current
+    TBRACCD_BALANCE after Banner payment application. Other terms' transactions
+    are not replayed. A mismatch with the full-account refund requires review.
   * TBRACCD_AMOUNT is converted to an accounting-signed amount using
     TBBDETC_TYPE_IND: payments are negative and charges are positive.
   * TBBACCT_DELI_CODE = 'RH' means Refund Hold and blocks processing.
@@ -28,38 +28,30 @@ CONFIRMED CONTROLS
     CWID list below. They always require manual review.
   * ACH/card detail codes requiring a Transact review are:
       ACHK, CRDS, CRED, CRVC, CRAM, CRMC
+  * ACHK clearing age is measured from TBRACCD_EFFECTIVE_DATE, consistent with
+    the AR aging queries. An ACHK is eligible for AFRD through Transact only
+    when it is more than 16 days old and less than 90 days old. Eligible ACHK
+    activity is netted within that window so returns can reduce or eliminate
+    the amount proposed for AFRD.
+  * CRVC unapplied balances are proposed for immediate return through Transact.
 
 BALANCE-SOURCE EXPLANATION
-  BALANCE_SOURCES lists target-term payment pools remaining after allocation.
-  A pool contains payments with the same priority and FDPL/non-FDPL ownership.
-  If a partially used pool has multiple sources, all possible sources are listed
-  and the account requires manual review; no posting-order tie rule is invented.
+  BALANCE_SOURCES lists target-term payment transactions whose current stored
+  balance is negative. The exact remaining transaction balance, not a replay of
+  original transaction amounts, determines the source of the current refund.
 
 PARENT PLUS REFUND SPLIT
-  Read charge AND payment priorities from TBBDETC_PRIORITY for the target term.
-  Process charges
-  from highest priority to lowest. For each charge, apply eligible payment
-  priorities from highest to lowest. Each zero in a payment priority is a
-  wildcard for the corresponding charge-priority digit; 000 matches any charge.
-  Track remaining amounts so a payment cannot be spent twice. Transaction
-  numbers and disbursement dates do not determine application or refund ownership.
+  TBBDETC_PRIORITY remains visible as configuration context, but it does not
+  reconstruct payment application. Local priorities can require correction and
+  staff may manually apply payments to charges. TBRACCD_BALANCE reflects that
+  resulting application state and therefore controls the current source split.
 
-  TEMPORARY BUSINESS ASSUMPTION -- CONFIRM WITH BANNER OPERATIONS:
-    FDPL applies LAST among payments with the SAME priority (currently 800).
-    This is not a confirmed Banner rule. The single setting
-    params.fdpl_last_at_same_priority controls this assumption; TRUE = last,
-    FALSE = first. No priority value is hard-coded. The active assumption is
-    also returned in FDPL_PRIORITY_TIE_RULE. Change the setting and rerun the
-    allocation tests if operations confirms the opposite rule.
-
-  Reversals are netted only within the same detail code, term, and aid year.
-  A negative net source, missing/invalid priority, unpaid charge, or unreconciled
-  allocation requires manual review and suppresses the proposed split.
-  Ambiguity among non-FDPL payment sources still requires source/delivery review,
-  but does NOT suppress a calculable FDPL/non-FDPL refund split. Target-term
-  unused payments must equal the full-account refund; otherwise leave the split
-  unresolved rather than assigning other terms' credits or charges to a recipient.
-  For exactly one target-term FDPL row with a resolved allocation, the parent
+  A missing transaction balance, a balance with the wrong sign for its detail
+  type, an unpaid charge balance, or a failure to reconcile target-term remaining
+  payments to the full-account refund suppresses the proposed split. A missing
+  or invalid priority remains a review reason but does not override a reconciled
+  stored balance.
+  For exactly one target-term FDPL row with a resolved source state, the parent
   portion is its unused amount, capped at the full-account refund. Existing
   PLUS-to-student authorization still controls the recipient.
 
@@ -67,17 +59,17 @@ FIRST-RUN VALIDATION
   1. Confirm FULL_ACCOUNT_BALANCE equals the TSAAREV full Query Balance.
   2. Confirm every active TBRACCD detail code has a C or P type in TBBDETC;
      accounts containing an unclassified type cannot be signed reliably.
-  3. Validate TBBDETC_PRIORITY on both sides and confirm the temporary FDPL tie
-     assumption above. Do not use the former posting-order example as proof.
-  4. Reconcile the applied and remaining amounts against actual Banner payment
-     application for the target term. Its unused payments must equal the full-
+  3. Validate TBBDETC_PRIORITY as configuration context. Correct application in
+     Banner when configuration or prior application is wrong before using this report.
+  4. Reconcile TBRACCD_BALANCE against actual Banner payment application for the
+     target term. Its unused payments must equal the full-
      account TOTAL_REFUND_AMOUNT with no unpaid target-term charges before the
      proposed split is considered resolved. Settled prior terms must not alter it.
   5. Rerun immediately before any Transact/TSARFND action and remove accounts
      whose balance or controls changed.
 */
 
-WITH RECURSIVE
+WITH
 term_context AS (
     SELECT
         CURRENT_DATE AS run_date,
@@ -112,9 +104,7 @@ params AS (
             ) AS varchar(6)
         ) AS target_term,
         /* Replace NULL with 'SMITH%' for an optional last-name validation run. */
-        CAST(NULL AS varchar(60)) AS last_name_filter,
-        /* TEMPORARY ASSUMPTION: FDPL is LAST within its actual payment priority. */
-        TRUE AS fdpl_last_at_same_priority
+        CAST(NULL AS varchar(60)) AS last_name_filter
     FROM term_context
 ),
 
@@ -271,190 +261,76 @@ candidate_transactions AS (
     WHERE t.tbraccd_term_code = p.target_term
 ),
 
-/* Net reversals within a source, without treating charge reductions as payments. */
-allocation_sources AS (
-    SELECT
-        x.pidm,
-        x.term_code,
-        x.aidy_code,
-        x.detail_code,
-        x.detail_desc,
-        x.type_ind,
-        x.priority_code,
-        CASE WHEN UPPER(TRIM(x.detail_code)) = 'FDPL' THEN 1 ELSE 0 END
-            AS is_fdpl,
-        SUM(x.raw_amount) AS source_amount,
-        MAX(x.tran_number) AS latest_tran_number,
-        MAX(x.activity_date) AS latest_activity_date
-    FROM candidate_transactions x
-    GROUP BY x.pidm, x.term_code, x.aidy_code, x.detail_code, x.detail_desc,
-             x.type_ind, x.priority_code
-    HAVING SUM(x.raw_amount) <> 0
-),
-
-allocation_input_checks AS (
+/*
+The stored transaction balance is Banner's current application result. Priority
+is retained for review, but original amounts are not replayed to reconstruct it.
+*/
+balance_input_checks AS (
     SELECT
         b.pidm,
         COUNT(*) FILTER (
-            WHERE s.source_amount <> 0 AND s.priority_code IS NULL
+            WHERE x.raw_transaction_balance <> 0 AND x.priority_code IS NULL
         ) AS invalid_priority_count,
-        COUNT(*) FILTER (WHERE s.source_amount < 0) AS negative_source_count
+        COUNT(*) FILTER (WHERE x.raw_amount < 0) AS negative_source_count,
+        COUNT(*) FILTER (WHERE x.raw_transaction_balance IS NULL)
+            AS missing_transaction_balance_count,
+        COUNT(*) FILTER (
+            WHERE (x.type_ind = 'P' AND x.raw_transaction_balance > 0)
+               OR (x.type_ind = 'C' AND x.raw_transaction_balance < 0)
+        ) AS unexpected_balance_sign_count
     FROM account_balances b
-    LEFT JOIN allocation_sources s ON s.pidm = b.pidm
+    LEFT JOIN candidate_transactions x ON x.pidm = b.pidm
     GROUP BY b.pidm
-),
-
-charge_priorities AS (
-    SELECT s.pidm, s.priority_code, SUM(s.source_amount) AS charge_amount
-    FROM allocation_sources s
-    INNER JOIN allocation_input_checks v ON v.pidm = s.pidm
-    WHERE s.type_ind = 'C'
-      AND v.invalid_priority_count = 0 AND v.negative_source_count = 0
-    GROUP BY s.pidm, s.priority_code
-),
-
-/*
-Only FDPL versus non-FDPL has a specified same-priority ordering. Pool other
-ties instead of inventing a transaction/date/detail-code application rule.
-*/
-payment_pools AS (
-    SELECT
-        s.pidm,
-        s.priority_code,
-        s.is_fdpl,
-        CONCAT(s.priority_code, '/', s.is_fdpl) AS payment_key,
-        SUM(s.source_amount) AS payment_amount,
-        COUNT(*) AS source_count,
-        STRING_AGG(
-            DISTINCT CONCAT(s.detail_code, ' (', TRIM(s.detail_desc), ')'),
-            ', ' ORDER BY CONCAT(s.detail_code, ' (', TRIM(s.detail_desc), ')')
-        ) AS source_details
-    FROM allocation_sources s
-    INNER JOIN allocation_input_checks v ON v.pidm = s.pidm
-    WHERE s.type_ind = 'P'
-      AND v.invalid_priority_count = 0 AND v.negative_source_count = 0
-    GROUP BY s.pidm, s.priority_code, s.is_fdpl
-),
-
-/* Every eligible pair is visited once: charge priority first, then payment. */
-allocation_pairs AS (
-    SELECT
-        c.pidm,
-        c.priority_code AS charge_priority,
-        c.charge_amount,
-        pay.payment_key,
-        pay.payment_amount,
-        ROW_NUMBER() OVER (
-            PARTITION BY c.pidm
-            ORDER BY c.priority_code DESC, pay.priority_code DESC,
-                /* TEMPORARY FDPL TIE ASSUMPTION; controlled only in params. */
-                CASE WHEN p.fdpl_last_at_same_priority
-                    THEN pay.is_fdpl ELSE -pay.is_fdpl END
-        ) AS allocation_step
-    FROM charge_priorities c
-    INNER JOIN payment_pools pay
-        ON pay.pidm = c.pidm
-       AND c.priority_code LIKE REPLACE(pay.priority_code, '0', '_')
-    CROSS JOIN params p
-),
-
-allocation_pair_counts AS (
-    SELECT pidm, COUNT(*) AS pair_count
-    FROM allocation_pairs
-    GROUP BY pidm
-),
-
-/*
-Each recursive step spends MIN(charge remaining, payment remaining). JSONB maps
-carry only the updated balances, keyed by charge priority and payment pool.
-Amounts stay NUMERIC; neither map nor step ordering uses transaction chronology.
-The recursion is bounded by the number of eligible priority/pool pairs.
-*/
-priority_allocation AS (
-    SELECT
-        b.pidm,
-        CAST(0 AS bigint) AS allocation_step,
-        CAST('{}' AS jsonb) AS charge_remaining,
-        CAST('{}' AS jsonb) AS payment_remaining
-    FROM account_balances b
-
-    UNION ALL
-
-    SELECT
-        a.pidm,
-        e.allocation_step,
-        JSONB_SET(a.charge_remaining, ARRAY[e.charge_priority],
-            TO_JSONB(r.charge_available - applied.amount)),
-        JSONB_SET(a.payment_remaining, ARRAY[e.payment_key],
-            TO_JSONB(r.payment_available - applied.amount))
-    FROM priority_allocation a
-    INNER JOIN allocation_pairs e
-        ON e.pidm = a.pidm AND e.allocation_step = a.allocation_step + 1
-    CROSS JOIN LATERAL (
-        SELECT
-            COALESCE(CAST(a.charge_remaining ->> e.charge_priority AS numeric),
-                e.charge_amount) AS charge_available,
-            COALESCE(CAST(a.payment_remaining ->> e.payment_key AS numeric),
-                e.payment_amount) AS payment_available
-    ) r
-    CROSS JOIN LATERAL (
-        SELECT LEAST(r.charge_available, r.payment_available) AS amount
-    ) applied
-),
-
-allocation_final AS (
-    SELECT a.*
-    FROM priority_allocation a
-    LEFT JOIN allocation_pair_counts n ON n.pidm = a.pidm
-    WHERE a.allocation_step = COALESCE(n.pair_count, 0)
-),
-
-payment_remaining AS (
-    SELECT
-        pay.*,
-        COALESCE(CAST(a.payment_remaining ->> pay.payment_key AS numeric),
-            pay.payment_amount) AS source_credit_amount
-    FROM payment_pools pay
-    INNER JOIN allocation_final a ON a.pidm = pay.pidm
 ),
 
 unpaid_charge_summary AS (
     SELECT
-        c.pidm,
-        SUM(COALESCE(CAST(a.charge_remaining ->> c.priority_code AS numeric),
-            c.charge_amount)) AS unpaid_charge_amount
-    FROM charge_priorities c
-    INNER JOIN allocation_final a ON a.pidm = c.pidm
-    GROUP BY c.pidm
+        x.pidm,
+        ROUND(SUM(CASE
+            WHEN x.type_ind = 'C' AND x.raw_transaction_balance > 0
+                THEN x.raw_transaction_balance
+            ELSE 0
+        END), 2) AS unpaid_charge_amount
+    FROM candidate_transactions x
+    GROUP BY x.pidm
 ),
 
 selected_balance_sources AS (
-    SELECT r.*
-    FROM payment_remaining r
-    WHERE r.source_credit_amount > 0
+    SELECT
+        x.pidm,
+        x.term_code,
+        x.aidy_code,
+        x.tran_number,
+        x.detail_code,
+        x.detail_desc,
+        x.priority_code,
+        CASE WHEN UPPER(TRIM(x.detail_code)) = 'FDPL' THEN 1 ELSE 0 END
+            AS is_fdpl,
+        ROUND(-x.raw_transaction_balance, 2) AS source_credit_amount,
+        x.effective_date,
+        x.activity_date
+    FROM candidate_transactions x
+    WHERE x.type_ind = 'P'
+      AND x.raw_transaction_balance < 0
 ),
 
 balance_source_summary AS (
     SELECT
         r.pidm,
-        SUM(r.source_count) AS balance_source_group_count,
+        COUNT(*) AS balance_source_group_count,
         ROUND(SUM(r.source_credit_amount), 2) AS balance_source_credit_total,
         ROUND(SUM(CASE WHEN r.is_fdpl = 1
             THEN r.source_credit_amount ELSE 0 END), 2) AS unused_fdpl_amount,
         ROUND(SUM(CASE WHEN r.is_fdpl = 0
             THEN r.source_credit_amount ELSE 0 END), 2) AS unused_non_fdpl_amount,
-        COUNT(*) FILTER (
-            WHERE r.source_count > 1 AND r.source_credit_amount < r.payment_amount
-        ) AS ambiguous_source_pool_count,
+        CAST(0 AS bigint) AS ambiguous_source_pool_count,
         STRING_AGG(
             CONCAT(
-                r.priority_code, ' / ', r.source_details, ' / remaining ',
-                TO_CHAR(r.source_credit_amount, 'FM999999990.00'),
-                CASE WHEN r.source_count > 1
-                      AND r.source_credit_amount < r.payment_amount
-                    THEN ' [SOURCE SPLIT UNRESOLVED]' ELSE '' END
+                COALESCE(r.priority_code, '[invalid priority]'),
+                ' / ', r.detail_code, ' (', TRIM(r.detail_desc), ')',
+                ' / remaining ', TO_CHAR(r.source_credit_amount, 'FM999999990.00')
             ),
-            ' | ' ORDER BY r.priority_code DESC, r.is_fdpl
+            ' | ' ORDER BY r.priority_code DESC NULLS LAST, r.tran_number
         ) AS balance_sources
     FROM selected_balance_sources r
     GROUP BY r.pidm
@@ -511,46 +387,107 @@ plus_authorization AS (
 ),
 
 /*
-An ACH/card source is relevant when its target-term priority pool has unused
-funds. Partially used pools with multiple sources do
-not establish individual amounts: list possible ACH/card sources, leave their
-total NULL, and require manual review. Presence alone cannot prove that Transact
-can return funds to the original account.
+An ACH/card source is relevant when that payment transaction has a negative
+stored balance. The delivery rules below distinguish confirmed ACHK and CRVC
+routes; other original-payment detail codes retain staff Transact review.
 */
 original_payment_summary AS (
     SELECT
         s.pidm,
         COUNT(*) AS original_payment_row_count,
-        CASE WHEN MAX(CASE WHEN s.source_count > 1
-                               AND s.source_credit_amount < s.payment_amount
-                          THEN 1 ELSE 0 END) = 1 THEN NULL
-            ELSE ROUND(SUM(CASE WHEN s.source_count = 1
-                THEN s.source_credit_amount ELSE x.source_amount END), 2)
-        END AS original_payment_total,
-        MAX(x.latest_tran_number) AS latest_original_payment_tran,
-        MAX(x.latest_activity_date) AS latest_original_payment_activity_date,
+        ROUND(SUM(s.source_credit_amount), 2) AS original_payment_total,
+        MAX(s.tran_number) AS latest_original_payment_tran,
+        MAX(s.activity_date) AS latest_original_payment_activity_date,
         STRING_AGG(
             CONCAT(
-                COALESCE(x.term_code, '[no term]'),
-                ' / ', x.detail_code,
+                COALESCE(s.term_code, '[no term]'),
+                ' / ', s.detail_code,
                 ' / priority ', s.priority_code,
-                ' / ', CASE WHEN s.source_count > 1
-                             AND s.source_credit_amount < s.payment_amount
-                    THEN 'AMOUNT UNRESOLVED'
-                    ELSE TO_CHAR(CASE WHEN s.source_count = 1
-                        THEN s.source_credit_amount ELSE x.source_amount END,
-                        'FM999999990.00') END
+                ' / ', TO_CHAR(s.source_credit_amount, 'FM999999990.00')
             ),
-            ' | ' ORDER BY x.term_code, x.detail_code, x.aidy_code
+            ' | ' ORDER BY s.term_code, s.tran_number
         ) AS original_payment_detail
     FROM selected_balance_sources s
-    INNER JOIN allocation_sources x
-        ON x.pidm = s.pidm AND x.priority_code = s.priority_code
-       AND x.is_fdpl = s.is_fdpl AND x.type_ind = 'P'
-    WHERE UPPER(TRIM(x.detail_code)) IN (
+    WHERE UPPER(TRIM(s.detail_code)) IN (
           'ACHK', 'CRDS', 'CRED', 'CRVC', 'CRAM', 'CRMC'
       )
     GROUP BY s.pidm
+),
+
+/*
+Separate the student original-payment sources that have confirmed delivery
+rules. ACHK uses strict age boundaries from policy: age > 16 and age < 90.
+Transactions at 16 days remain in the clearing wait; transactions at 90 days
+or older fall back to the normal student refund route.
+*/
+original_payment_source_amounts AS (
+    SELECT
+        s.pidm,
+        ROUND(SUM(CASE
+            WHEN UPPER(TRIM(s.detail_code)) = 'ACHK'
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS achk_remaining_amount,
+        ROUND(SUM(CASE
+            WHEN UPPER(TRIM(s.detail_code)) = 'ACHK'
+             AND s.effective_date IS NOT NULL
+             AND (tc.run_date - CAST(s.effective_date AS date)) > 16
+             AND (tc.run_date - CAST(s.effective_date AS date)) < 90
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS achk_window_remaining_amount,
+        ROUND(SUM(CASE
+            WHEN UPPER(TRIM(s.detail_code)) = 'ACHK'
+             AND s.effective_date IS NOT NULL
+             AND (tc.run_date - CAST(s.effective_date AS date)) BETWEEN 0 AND 16
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS achk_clearing_wait_amount,
+        ROUND(SUM(CASE
+            WHEN UPPER(TRIM(s.detail_code)) = 'ACHK'
+             AND (s.effective_date IS NULL
+               OR CAST(s.effective_date AS date) > tc.run_date)
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS achk_date_review_amount,
+        ROUND(SUM(CASE
+            WHEN UPPER(TRIM(s.detail_code)) = 'CRVC'
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS crvc_transact_amount
+    FROM selected_balance_sources s
+    CROSS JOIN term_context tc
+    GROUP BY s.pidm
+),
+
+/* Net original ACHK amounts in the eligible window, including reversals. */
+achk_window_net AS (
+    SELECT
+        x.pidm,
+        ROUND(GREATEST(SUM(x.raw_amount), 0), 2) AS achk_window_net_amount
+    FROM candidate_transactions x
+    CROSS JOIN term_context tc
+    WHERE UPPER(TRIM(x.detail_code)) = 'ACHK'
+      AND x.effective_date IS NOT NULL
+      AND (tc.run_date - CAST(x.effective_date AS date)) > 16
+      AND (tc.run_date - CAST(x.effective_date AS date)) < 90
+    GROUP BY x.pidm
+),
+
+student_delivery_sources AS (
+    SELECT
+        b.pidm,
+        COALESCE(o.achk_remaining_amount, 0) AS achk_remaining_amount,
+        ROUND(LEAST(
+            COALESCE(o.achk_window_remaining_amount, 0),
+            COALESCE(n.achk_window_net_amount, 0)
+        ), 2) AS achk_transact_eligible_amount,
+        COALESCE(o.achk_clearing_wait_amount, 0) AS achk_clearing_wait_amount,
+        ROUND(GREATEST(
+            COALESCE(o.achk_window_remaining_amount, 0)
+                - COALESCE(n.achk_window_net_amount, 0),
+            0
+        ), 2) AS achk_net_review_amount,
+        COALESCE(o.achk_date_review_amount, 0) AS achk_date_review_amount,
+        COALESCE(o.crvc_transact_amount, 0) AS crvc_transact_amount
+    FROM account_balances b
+    LEFT JOIN original_payment_source_amounts o ON o.pidm = b.pidm
+    LEFT JOIN achk_window_net n ON n.pidm = b.pidm
 ),
 
 joined AS (
@@ -584,10 +521,12 @@ joined AS (
         COALESCE(bs.unused_non_fdpl_amount, 0) AS unused_non_fdpl_amount,
         v.invalid_priority_count,
         v.negative_source_count,
+        v.missing_transaction_balance_count,
+        v.unexpected_balance_sign_count,
         COALESCE(uc.unpaid_charge_amount, 0) AS unpaid_charge_amount,
         COALESCE(bs.ambiguous_source_pool_count, 0) AS ambiguous_source_pool_count,
-        CASE WHEN v.invalid_priority_count > 0
-               OR v.negative_source_count > 0
+        CASE WHEN v.missing_transaction_balance_count > 0
+               OR v.unexpected_balance_sign_count > 0
                OR COALESCE(uc.unpaid_charge_amount, 0) <> 0
                OR COALESCE(bs.balance_source_credit_total, 0) <> -b.full_account_balance
             THEN 'Y' ELSE 'N' END AS refund_split_blocked_ind,
@@ -635,9 +574,15 @@ joined AS (
             ELSE op.original_payment_total END AS original_payment_total,
         op.latest_original_payment_tran,
         op.latest_original_payment_activity_date,
-        op.original_payment_detail
+        op.original_payment_detail,
+        ds.achk_remaining_amount,
+        ds.achk_transact_eligible_amount,
+        ds.achk_clearing_wait_amount,
+        ds.achk_net_review_amount,
+        ds.achk_date_review_amount,
+        ds.crvc_transact_amount
     FROM account_balances b
-    INNER JOIN allocation_input_checks v ON v.pidm = b.pidm
+    INNER JOIN balance_input_checks v ON v.pidm = b.pidm
     LEFT JOIN current_identity i
         ON i.pidm = b.pidm
     LEFT JOIN person_controls pc
@@ -657,6 +602,8 @@ joined AS (
         ON pa.pidm = b.pidm
     LEFT JOIN original_payment_summary op
         ON op.pidm = b.pidm
+    LEFT JOIN student_delivery_sources ds
+        ON ds.pidm = b.pidm
 ),
 
 parent_plus_calculation AS (
@@ -664,6 +611,7 @@ parent_plus_calculation AS (
         j.*,
         /* Source review is separate from whether the recipient totals are calculable. */
         CASE WHEN j.refund_split_blocked_ind = 'Y'
+               OR j.invalid_priority_count > 0
                OR j.ambiguous_source_pool_count > 0
             THEN 'Y' ELSE 'N' END AS allocation_review_required_ind,
         CASE
@@ -705,28 +653,92 @@ refund_split AS (
     FROM parent_plus_calculation c
 ),
 
+delivery_amounts AS (
+    SELECT
+        s.*,
+        ROUND(GREATEST(
+            COALESCE(s.proposed_student_refund_amount, 0)
+                - s.achk_transact_eligible_amount
+                - s.achk_clearing_wait_amount
+                - s.achk_net_review_amount
+                - s.achk_date_review_amount
+                - s.crvc_transact_amount,
+            0
+        ), 2) AS standard_student_delivery_amount,
+        (CASE WHEN s.achk_transact_eligible_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.achk_clearing_wait_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.achk_net_review_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.achk_date_review_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.crvc_transact_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN COALESCE(s.proposed_student_refund_amount, 0)
+                    - s.achk_transact_eligible_amount
+                    - s.achk_clearing_wait_amount
+                    - s.achk_net_review_amount
+                    - s.achk_date_review_amount
+                    - s.crvc_transact_amount > 0
+                THEN 1 ELSE 0 END) AS student_delivery_component_count
+    FROM refund_split s
+),
+
 delivery AS (
     SELECT
         s.*,
         CASE
             WHEN COALESCE(s.proposed_student_refund_amount, 0) <= 0 THEN 'NONE'
+            WHEN s.refund_hold_ind = 'Y' THEN 'Refund Hold - Student'
             WHEN s.third_party_review_required_ind = 'Y'
                 THEN 'THIRD_PARTY_REVIEW'
-            WHEN s.active_ed_ind = 'Y'
-             AND s.refund_account_selected_ind = 'Y'
-                THEN 'CONFLICT_ED_AND_TSARFND'
-            WHEN s.active_ed_ind = 'Y' THEN 'EREFUND'
-            WHEN s.refund_account_selected_ind = 'Y' THEN 'TSARFND_CHECK'
-            WHEN s.refund_account_selected_ind = 'UNKNOWN'
-                THEN 'UNKNOWN_REFUND_IND_VALUE'
-            ELSE 'DELIVERY_NOT_SELECTED'
+            WHEN s.student_delivery_component_count = 1
+             AND s.achk_transact_eligible_amount > 0 THEN 'AFRD (Transact)'
+            WHEN s.student_delivery_component_count = 1
+             AND s.achk_clearing_wait_amount > 0 THEN 'ACHK Clearing Wait'
+            WHEN s.student_delivery_component_count = 1
+             AND s.achk_net_review_amount > 0 THEN 'ACHK Return/Net Review'
+            WHEN s.student_delivery_component_count = 1
+             AND s.achk_date_review_amount > 0 THEN 'ACHK Date Review'
+            WHEN s.student_delivery_component_count = 1
+             AND s.crvc_transact_amount > 0 THEN 'CRVC (Transact)'
+            WHEN s.student_delivery_component_count = 1
+             AND s.standard_student_delivery_amount > 0
+                THEN CASE WHEN s.active_ed_ind = 'Y'
+                    THEN 'ARFD (System)' ELSE 'RFND (CHECK)' END
+            ELSE CONCAT_WS(
+                '; ',
+                CASE WHEN s.achk_transact_eligible_amount > 0 THEN CONCAT(
+                    'AFRD (Transact) ',
+                    TO_CHAR(s.achk_transact_eligible_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.crvc_transact_amount > 0 THEN CONCAT(
+                    'CRVC (Transact) ',
+                    TO_CHAR(s.crvc_transact_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.achk_clearing_wait_amount > 0 THEN CONCAT(
+                    'ACHK Clearing Wait ',
+                    TO_CHAR(s.achk_clearing_wait_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.achk_net_review_amount > 0 THEN CONCAT(
+                    'ACHK Return/Net Review ',
+                    TO_CHAR(s.achk_net_review_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.achk_date_review_amount > 0 THEN CONCAT(
+                    'ACHK Date Review ',
+                    TO_CHAR(s.achk_date_review_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.standard_student_delivery_amount > 0 THEN CONCAT(
+                    CASE WHEN s.active_ed_ind = 'Y'
+                        THEN 'ARFD (System) ' ELSE 'RFND (CHECK) ' END,
+                    TO_CHAR(s.standard_student_delivery_amount, 'FM999999990.00')
+                ) END
+            )
         END AS proposed_student_delivery,
         CASE
             WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
-                THEN 'PARENT_CHECK_REVIEW'
+             AND s.plus_to_student_status = 'N' THEN 'RFDP'
+            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
+                THEN 'PARENT_PLUS_AUTH_REVIEW'
             ELSE 'NONE'
         END AS proposed_parent_delivery
-    FROM refund_split s
+    FROM delivery_amounts s
 ),
 
 final_review AS (
@@ -736,14 +748,14 @@ final_review AS (
             '; ',
             CASE WHEN d.invalid_priority_count > 0
                 THEN 'MISSING_OR_INVALID_DETAIL_PRIORITY' END,
-            CASE WHEN d.negative_source_count > 0
-                THEN 'NEGATIVE_NET_SOURCE_REQUIRES_REVIEW' END,
+            CASE WHEN d.missing_transaction_balance_count > 0
+                THEN 'MISSING_TRANSACTION_BALANCE' END,
+            CASE WHEN d.unexpected_balance_sign_count > 0
+                THEN 'UNEXPECTED_TRANSACTION_BALANCE_SIGN' END,
             CASE WHEN d.unpaid_charge_amount > 0
-                THEN 'UNPAID_CHARGES_AFTER_PRIORITY_ALLOCATION' END,
+                THEN 'UNPAID_CHARGES_IN_STORED_BALANCES' END,
             CASE WHEN d.balance_source_credit_total <> d.total_refund_amount
-                THEN 'TARGET_TERM_ALLOCATION_DIFFERS_FROM_FULL_ACCOUNT_REFUND' END,
-            CASE WHEN d.ambiguous_source_pool_count > 0
-                THEN 'SAME_PRIORITY_SOURCE_SPLIT_UNRESOLVED' END,
+                THEN 'TARGET_TERM_STORED_BALANCES_DIFFER_FROM_FULL_ACCOUNT_REFUND' END,
             CASE WHEN d.refund_hold_ind = 'Y' THEN 'REFUND_HOLD_RH' END,
             CASE WHEN UPPER(TRIM(COALESCE(d.deceased_ind, ''))) = 'Y'
                 THEN 'DECEASED_PERSON' END,
@@ -769,12 +781,12 @@ final_review AS (
                 THEN CONCAT('MULTIPLE_PLUS_AUTH_ROWS_', d.plus_auth_row_count) END,
             CASE WHEN d.original_payment_row_count > 0
                 THEN 'REVIEW_ACH_CC_IN_TRANSACT' END,
-            CASE WHEN d.proposed_student_delivery = 'CONFLICT_ED_AND_TSARFND'
-                THEN 'ED_AND_REFUND_ACCOUNT_BOTH_SELECTED' END,
-            CASE WHEN d.proposed_student_delivery = 'UNKNOWN_REFUND_IND_VALUE'
-                THEN 'UNKNOWN_REFUND_ACCOUNT_VALUE' END,
-            CASE WHEN d.proposed_student_delivery = 'DELIVERY_NOT_SELECTED'
-                THEN 'STUDENT_DELIVERY_NOT_SELECTED' END
+            CASE WHEN d.achk_clearing_wait_amount > 0
+                THEN 'ACHK_CLEARING_PERIOD_NOT_MET' END,
+            CASE WHEN d.achk_net_review_amount > 0
+                THEN 'ACHK_ELIGIBLE_NET_LESS_THAN_REMAINING_BALANCE' END,
+            CASE WHEN d.achk_date_review_amount > 0
+                THEN 'ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END
         ) AS review_reasons
     FROM delivery d
 )
@@ -785,7 +797,9 @@ SELECT
     f.first_name,
     f.full_account_balance,
     f.total_refund_amount,
+    f.proposed_student_delivery,
     f.proposed_student_refund_amount AS student_refund_amount,
+    f.proposed_parent_delivery,
     f.proposed_parent_refund_amount AS parent_refund_amount,
     f.balance_sources,
     f.plus_to_student_status,
@@ -805,10 +819,7 @@ SELECT
     f.fdpl_row_count,
     f.fdpl_credit_amount AS target_term_fdpl_amount,
     f.fdpl_aidy_code,
-    CASE WHEN p.fdpl_last_at_same_priority
-        THEN 'ASSUMPTION_FDPL_LAST_WITHIN_SAME_PRIORITY'
-        ELSE 'ASSUMPTION_FDPL_FIRST_WITHIN_SAME_PRIORITY'
-    END AS fdpl_priority_tie_rule,
+    'NOT_APPLICABLE_BALANCE_BASED_SOURCE' AS fdpl_priority_tie_rule,
     f.unused_fdpl_amount,
     f.unused_non_fdpl_amount,
     f.balance_source_credit_total AS total_unused_payment_amount,
@@ -817,8 +828,6 @@ SELECT
     f.original_payment_row_count,
     f.original_payment_total,
     f.original_payment_detail,
-    f.proposed_student_delivery,
-    f.proposed_parent_delivery,
     f.deceased_ind,
     f.deceased_date,
     f.confidential_ind,
@@ -844,13 +853,10 @@ SELECT
             THEN 'MANUAL_REVIEW'
         WHEN f.fdpl_row_count = 1
          AND f.plus_auth_row_count > 1 THEN 'MANUAL_REVIEW'
+        WHEN f.achk_net_review_amount > 0
+          OR f.achk_date_review_amount > 0 THEN 'MANUAL_REVIEW'
+        WHEN f.achk_clearing_wait_amount > 0 THEN 'WAIT_ACH_CLEARING'
         WHEN f.original_payment_row_count > 0 THEN 'TRANSACT_REVIEW'
-        WHEN f.proposed_student_delivery IN (
-            'CONFLICT_ED_AND_TSARFND',
-            'UNKNOWN_REFUND_IND_VALUE'
-        ) THEN 'MANUAL_REVIEW'
-        WHEN f.proposed_student_delivery = 'DELIVERY_NOT_SELECTED'
-            THEN 'ACTION_REQUIRED'
         ELSE 'READY_FOR_STAFF_REVIEW'
     END AS review_status,
     f.review_reasons,

@@ -6,13 +6,13 @@ Do not save or commit the populated identifier or production query results.
 The output omits names, CWID, and PIDM so the relevant amounts/configuration can
 be reviewed without those identifiers. It remains student financial data.
 
-This query does NOT calculate a refund or infer payment application. It shows
-full-account source groups alongside raw stored balances; Refunds.sql allocates
-only the target-term groups, while other terms here provide context. AMOUNT and
-BALANCE retain Banner's raw signs; use TYPE_IND to distinguish C from P.
+This query does NOT calculate a refund. It shows full-account source groups
+alongside raw stored balances; Refunds.sql uses negative target-term payment
+balances as current refund sources, while other terms here provide context.
+AMOUNT and BALANCE retain Banner's raw signs; use TYPE_IND to distinguish C from P.
 PRIORITY is the current TBBDETC setting, not a historical application snapshot.
 Keep all terms: filtering to the current term could conceal why the full-account
-allocation differs from a current-term calculation. Zero-net groups remain
+balance differs from target-term stored balances. Zero-net groups remain
 visible for reversal/cancellation review.
 
 Uses the tables/columns checked by validate_refund_schema.sql.
