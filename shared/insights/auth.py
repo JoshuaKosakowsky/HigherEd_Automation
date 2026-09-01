@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import requests
+from requests.exceptions import JSONDecodeError, RequestException
 
 
 class InsightsAuthenticationError(RuntimeError):
@@ -31,31 +32,35 @@ def exchange_sso_jwt(
             json={"jwt": jwt_token},
             timeout=timeout,
         )
-    except requests.RequestException as error:
+    except RequestException as error:
         raise InsightsAuthenticationError(
             "Could not connect to the Insights authentication endpoint."
         ) from error
 
     if not response.ok:
         raise InsightsAuthenticationError(
-            "Insights rejected the temporary SSO authentication.\n"
-            f"HTTP status: {response.status_code}\n"
-            f"Response: {response.text}"
+            "Insights rejected the temporary SSO authentication "
+            f"(HTTP {response.status_code})."
         )
 
     try:
         result = response.json()
-    except requests.JSONDecodeError as error:
+    except JSONDecodeError as error:
         raise InsightsAuthenticationError(
             "Insights returned a non-JSON authentication response."
         ) from error
 
+    if not isinstance(result, dict):
+        raise InsightsAuthenticationError(
+            "Insights returned an unexpected authentication response."
+        )
+
     session_token = result.get("session_token")
 
-    if not session_token:
+    if not isinstance(session_token, str) or not session_token.strip():
         raise InsightsAuthenticationError(
             "Insights responded successfully but did not return "
             "a session_token."
         )
 
-    return session_token
+    return session_token.strip()

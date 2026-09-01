@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import os
-import sys
+import argparse
 from getpass import getpass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-
-# Make repository-level imports work when this file is run directly.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-
 from shared.insights.auth import exchange_sso_jwt
 from shared.insights.client import InsightsClient
+from shared.insights.config import InsightsSettings
+from shared.insights.session_auth import (
+    build_authenticated_client,
+    clear_cached_session,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 SQL_PATH = (
@@ -34,113 +33,140 @@ OUTPUT_PATH = (
 )
 
 
-def get_required_environment_variable(name: str) -> str:
-    value = os.getenv(name, "").strip()
-
-    if not value:
-        raise RuntimeError(
-            f"Required environment variable is missing: {name}"
-        )
-
-    return value
-
-
-def build_client() -> tuple[InsightsClient, str]:
-    """
-    Build the client using a permanent API key when available.
-
-    Until an API key is provisioned, prompt for a fresh SSO JWT
-    and exchange it for a temporary session token.
-    """
-
-    environment = os.getenv(
-        "INSIGHTS_ENV",
-        "test",
-    ).strip().upper()
-
-    variable_prefix = f"INSIGHTS_{environment}"
-
-    base_url = get_required_environment_variable(
-        f"{variable_prefix}_BASE_URL"
-    )
-
-    database_id_text = get_required_environment_variable(
-        f"{variable_prefix}_DATABASE_ID"
-    )
-
-    try:
-        database_id = int(database_id_text)
-    except ValueError as error:
-        raise RuntimeError(
-            f"{variable_prefix}_DATABASE_ID must be an integer."
-        ) from error
-
-    api_key = os.getenv(
-        f"{variable_prefix}_API_KEY",
-        "",
-    ).strip()
-
-    if api_key:
-        return (
-            InsightsClient(
-                base_url=base_url,
-                database_id=database_id,
-                api_key=api_key,
-            ),
-            "API key",
-        )
-
-    print(
-        "No Insights API key is configured.\n"
-        "A temporary SSO session will be used for this run."
-    )
-
+def acquire_manual_session(settings: InsightsSettings) -> str:
     jwt_token = getpass(
         "Paste a freshly issued Ellucian Insights SSO JWT: "
     ).strip()
 
-    session_token = exchange_sso_jwt(
-        base_url=base_url,
-        jwt_token=jwt_token,
+    try:
+        return exchange_sso_jwt(settings.base_url, jwt_token)
+    finally:
+        jwt_token = ""
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Validate the configured Ellucian Insights connection."
+    )
+    parser.add_argument(
+        "--discover-only",
+        action="store_true",
+        help="Show safe connection metadata without running the SQL file.",
+    )
+    parser.add_argument(
+        "--browser",
+        choices=["edge", "chrome"],
+        default="edge",
+        help="Browser used for an interactive SSO login (default: edge).",
+    )
+    parser.add_argument(
+        "--fresh-login",
+        action="store_true",
+        help="Revoke any cached session and perform a fresh SSO login.",
+    )
+    parser.add_argument(
+        "--manual-jwt",
+        action="store_true",
+        help="Prompt invisibly for a JWT instead of opening the SSO browser.",
+    )
+    parser.add_argument(
+        "--logout",
+        action="store_true",
+        help="Revoke and delete the cached session without running a query.",
+    )
+    return parser.parse_args()
+
+
+def print_discovery(client: InsightsClient, settings: InsightsSettings) -> None:
+    user = client.get_current_user()
+    server = client.get_server_info()
+    databases = client.list_databases()
+    configured_database = next(
+        (
+            database
+            for database in databases
+            if database.id == settings.database_id
+        ),
+        None,
     )
 
-    return (
-        InsightsClient(
-            base_url=base_url,
-            database_id=database_id,
-            session_token=session_token,
-        ),
-        "temporary SSO session",
+    print(f"Environment: {settings.environment}")
+    print(f"Metabase version: {server.version_tag or 'unknown'}")
+    print(f"Authenticated principal ID: {user.id or 'unknown'}")
+    print(f"Principal is administrator: {user.is_superuser}")
+    print(f"Accessible databases: {len(databases)}")
+
+    if configured_database is None:
+        raise RuntimeError(
+            "The configured database ID is not visible to the authenticated "
+            "principal."
+        )
+
+    print(
+        "Configured database: "
+        f"{configured_database.name} "
+        f"(ID {configured_database.id}, "
+        f"engine {configured_database.engine or 'unknown'})"
     )
 
 
 def main() -> None:
+    arguments = parse_args()
     load_dotenv(REPO_ROOT / ".env")
+    settings = InsightsSettings.from_environment()
 
-    client, authentication_method = build_client()
+    if arguments.logout:
+        removed = clear_cached_session(settings)
+        print(
+            "Cached Insights session revoked and removed."
+            if removed
+            else "No cached Insights session was found."
+        )
+        return
 
-    print()
-    print(f"Authentication: {authentication_method}")
-    print(f"SQL file: {SQL_PATH}")
-    print("Running query...")
+    if not settings.api_key and not arguments.manual_jwt:
+        print(
+            "A valid daily SSO session will be reused when available. "
+            "Otherwise, a browser will open for login and 2FA."
+        )
 
-    dataframe = client.run_sql_file(SQL_PATH)
-
-    OUTPUT_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+    acquire_session = (
+        (lambda: acquire_manual_session(settings))
+        if arguments.manual_jwt
+        else None
+    )
+    client, authentication_method = build_authenticated_client(
+        settings,
+        browser=arguments.browser,
+        force_login=arguments.fresh_login,
+        acquire_session=acquire_session,
     )
 
-    dataframe.to_excel(
-        OUTPUT_PATH,
-        index=False,
-    )
+    with client:
+        print()
+        print(f"Authentication: {authentication_method}")
+        print_discovery(client, settings)
 
-    print()
-    print(dataframe.to_string(index=False))
-    print()
-    print(f"Rows returned: {len(dataframe):,}")
-    print(f"Excel output: {OUTPUT_PATH}")
+        if arguments.discover_only:
+            return
+
+        print(f"SQL file: {SQL_PATH}")
+        print("Running query...")
+        dataframe = client.run_sql_file(SQL_PATH)
+
+        OUTPUT_PATH.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        dataframe.to_excel(
+            OUTPUT_PATH,
+            index=False,
+        )
+
+        print()
+        print(f"Rows returned: {len(dataframe):,}")
+        print(f"Excel output: {OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
