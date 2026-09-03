@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -13,13 +12,7 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-REFUNDS_QUERY = (
-    REPOSITORY_ROOT
-    / "query"
-    / "AR"
-    / "refunds"
-    / "Refunds.sql"
-)
+REFUNDS_QUERY = REPOSITORY_ROOT / "query" / "AR" / "refunds" / "Refunds.sql"
 
 
 class RefundsQueryContractTests(unittest.TestCase):
@@ -28,148 +21,133 @@ class RefundsQueryContractTests(unittest.TestCase):
         cls.query = REFUNDS_QUERY.read_text(encoding="utf-8")
         cls.normalized_query = re.sub(r"\s+", " ", cls.query).upper()
 
-    def test_population_does_not_depend_on_a_popsel(self) -> None:
+    def section(self, start: str, end: str) -> str:
+        return self.query[self.query.index(start) : self.query.index(end)].upper()
+
+    def test_population_includes_full_account_and_fiscal_year_credits(self) -> None:
         self.assertNotIn("GLBEXTR", self.normalized_query)
         self.assertNotIn("POPSEL", self.normalized_query)
         self.assertIn("FROM TAISMGR.TBRACCD T", self.normalized_query)
+        self.assertIn("ACCOUNT_FISCAL_ROLLUP AS", self.normalized_query)
+        self.assertIn("LOWEST_FISCAL_YEAR_BALANCE", self.normalized_query)
+        self.assertIn("R.FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
+        self.assertIn("R.TARGET_TERM_ACTIVITY_COUNT > 0", self.normalized_query)
+        self.assertIn("R.NEGATIVE_STORED_PAYMENT_COUNT > 0", self.normalized_query)
 
-    def test_population_uses_full_account_credit_balances(self) -> None:
-        self.assertRegex(
-            self.normalized_query,
-            (
-                r"FROM ACCOUNT_BALANCE_ROLLUP R WHERE "
-                r"R\.UNCLASSIFIED_DETAIL_TYPE_COUNT = 0 AND "
-                r"R\.FULL_ACCOUNT_BALANCE < 0"
-            ),
+    def test_large_tables_are_scoped_before_secondary_lookups(self) -> None:
+        self.assertEqual(self.normalized_query.count("TAISMGR.TBRACCD T"), 3)
+        scope = self.section("validation_scope_pidms AS", "account_fiscal_rollup AS")
+        self.assertIn("FROM SATURN.SPRIDEN S", scope)
+        self.assertIn("UNION ALL", scope)
+        self.assertIn("WHERE P.CWID_FILTER IS NULL", scope)
+        self.assertIn("AND P.LAST_NAME_FILTER IS NULL", scope)
+        self.assertIn("T.TBRACCD_TERM_CODE = P.TARGET_TERM", scope)
+        self.assertIn("REPORT_SCOPE_PIDMS AS", scope)
+        self.assertIn("INNER JOIN TAISMGR.TBRACCD T ON T.TBRACCD_PIDM = V.PIDM", scope)
+        screening = self.section("account_fiscal_rollup AS", "account_balance_rollup AS")
+        self.assertIn("FROM SCREENING_TRANSACTIONS T", screening)
+        identity = self.section(
+            "current_identity AS MATERIALIZED", "person_controls AS MATERIALIZED"
         )
-        account_population = self.query[
-            self.query.index("account_balance_rollup AS") :
-            self.query.index("current_identity AS")
-        ].upper()
-        self.assertNotIn("TBRACCD_TERM_CODE", account_population)
+        people = self.section(
+            "person_controls AS MATERIALIZED", "account_controls AS MATERIALIZED"
+        )
+        accounts = self.section(
+            "account_controls AS MATERIALIZED", "active_ed AS MATERIALIZED"
+        )
+        holds = self.section(
+            "active_ed AS MATERIALIZED", "candidate_transactions AS"
+        )
+        for section in (identity, people, accounts, holds):
+            self.assertIn("INNER JOIN ACCOUNT_BALANCES", section)
 
-    def test_card_review_uses_selected_target_term_balance_sources(self) -> None:
-        original_payment_section = self.query[
-            self.query.index("original_payment_summary AS") :
-            self.query.index("joined AS")
-        ].upper()
-        self.assertIn("FROM SELECTED_BALANCE_SOURCES", original_payment_section)
-        self.assertNotIn("TERM_CODE IN", original_payment_section)
+    def test_title_iv_and_category_are_loaded_for_payments(self) -> None:
+        transactions = self.section(
+            "candidate_transactions AS", "balance_input_checks AS MATERIALIZED"
+        )
+        self.assertIn("TBBDETC_DCAT_CODE", transactions)
+        self.assertIn("TBBDETC_TIV_IND", transactions)
+        classification = self.section("payment_sources AS", "charge_rows AS")
+        self.assertLess(classification.index("WHEN R.IS_TITLE_IV = 1"), classification.index("LIKE 'FA%'"))
 
-    def test_ach_delivery_uses_effective_date_and_nets_window_activity(self) -> None:
-        delivery_sources = self.query[
-            self.query.index("original_payment_source_amounts AS") :
-            self.query.index("joined AS")
-        ].upper()
-        self.assertIn("S.EFFECTIVE_DATE", delivery_sources)
-        self.assertIn("> 16", delivery_sources)
-        self.assertIn("< 90", delivery_sources)
-        self.assertIn("SUM(X.RAW_AMOUNT)", delivery_sources)
-        self.assertIn("ACHK_WINDOW_NET", delivery_sources)
+    def test_fiscal_year_mapping_supports_modern_and_historical_summers(self) -> None:
+        terms = self.section("current_term AS", "legacy_third_party_cwids AS")
+        for suffix in ("'10'", "'50'", "'55'", "'60'", "'80'"):
+            self.assertIn(suffix, terms)
+        self.assertIn("PREVIOUS_TERM_OVERRIDE", terms)
+        transactions = self.section(
+            "candidate_transactions AS", "balance_input_checks AS MATERIALIZED"
+        )
+        self.assertIn("(10|50|55|60)", transactions)
+        self.assertIn("FISCAL_YEAR_START", transactions)
 
-    def test_allocation_inputs_are_scoped_to_the_target_term(self) -> None:
-        transactions = self.query[
-            self.query.index("candidate_transactions AS") :
-            self.query.index("balance_input_checks AS")
-        ].upper()
-        self.assertIn("CROSS JOIN PARAMS P", transactions)
-        self.assertIn("WHERE T.TBRACCD_TERM_CODE = P.TARGET_TERM", transactions)
+    def test_cross_fiscal_year_title_iv_has_separate_give_and_receive_caps(self) -> None:
+        allocation = self.section("priority_allocation AS", "allocation_final AS")
+        self.assertIn("TITLE_IV_GIVEN_BY_FY", allocation)
+        self.assertIn("TITLE_IV_RECEIVED_BY_FY", allocation)
+        self.assertIn("P.TITLE_IV_CROSS_FY_CAP - LIMITS.GIVEN_SO_FAR", allocation)
+        self.assertIn("P.TITLE_IV_CROSS_FY_CAP - LIMITS.RECEIVED_SO_FAR", allocation)
+        self.assertIn("CAST(200.00 AS NUMERIC) AS TITLE_IV_CROSS_FY_CAP", self.normalized_query)
 
-    def test_parent_plus_remains_scoped_to_target_term(self) -> None:
-        parent_plus_section = self.query[
-            self.query.index("fdpl_summary AS") :
-            self.query.index("plus_authorization AS")
-        ].upper()
-        self.assertIn("X.TERM_CODE = P.TARGET_TERM", parent_plus_section)
-        self.assertIn("X.DETAIL_CODE", parent_plus_section)
-        self.assertIn("'FDPL'", parent_plus_section)
+    def test_priority_order_and_artificial_bands_are_explicit(self) -> None:
+        sources = self.section("payment_sources AS", "charge_rows AS")
+        for code in ("TPDT", "TPPY", "COFP", "ACHK", "CRAM", "CRDS", "CRMC", "CRVC"):
+            self.assertIn(f"'{code}'", sources)
+        for band in ("'800A'", "'000A'", "'000Z'"):
+            self.assertIn(band, sources)
+        ordering = self.section("numbered_payment_sources AS", "stage_charge_inputs AS")
+        self.assertIn("PAYMENT_PRIORITY_SORT DESC", ordering)
+        self.assertIn("S.TRAN_NUMBER", ordering)
 
-    def test_parent_plus_split_no_longer_requires_policy_approval(self) -> None:
-        self.assertNotIn("POLICY_APPROVAL_REQUIRED", self.normalized_query)
-        self.assertNotIn("PROVISIONAL_FDPL_CREATED_CREDIT", self.normalized_query)
-        self.assertIn("AS CALCULATED_FDPL_CREATED_CREDIT", self.normalized_query)
+    def test_current_charge_matching_uses_unsuffixed_three_digit_priority(self) -> None:
+        pairs = self.section("allocation_pairs AS", "allocation_pair_counts AS")
+        self.assertIn("REPLACE(S.PRIORITY_CODE, '0', '_')", pairs)
+        self.assertNotIn("EFFECTIVE_PRIORITY_CODE", pairs)
+
+    def test_closed_noncredit_fiscal_years_bypass_local_recursion(self) -> None:
+        history = self.section(
+            "precurrent_fiscal_balances AS", "stage_payment_inputs AS"
+        )
+        self.assertIn("PRECURRENT_CREDIT_FISCAL_YEARS AS", history)
+        self.assertIn("WHERE F.FISCAL_BALANCE < 0", history)
         self.assertIn(
-            "C.TOTAL_REFUND_AMOUNT - C.CALCULATED_FDPL_CREATED_CREDIT",
-            self.normalized_query,
+            "PARTITION BY S.PIDM, S.FISCAL_YEAR_START", history
         )
+        self.assertIn("FROM PRECURRENT_CREDIT_FISCAL_YEARS F", history)
+        self.assertNotIn("FROM ACCOUNT_BALANCES B\n\n    UNION ALL", history)
 
-    def test_stored_balances_replace_priority_replay(self) -> None:
-        self.assertIn("D.TBBDETC_PRIORITY", self.normalized_query)
-        self.assertNotIn("LATER_PAYMENT_SUMMARY", self.normalized_query)
-        self.assertNotIn("CREDITS_AFTER_TARGET_TERM_FDPL", self.normalized_query)
-        self.assertNotIn("PRIORITY_ALLOCATION AS", self.normalized_query)
-        self.assertNotIn("PAYMENT_POOLS AS", self.normalized_query)
-        sources = self.query[
-            self.query.index("selected_balance_sources AS") :
-            self.query.index("balance_source_summary AS")
-        ].upper()
-        self.assertIn("X.RAW_TRANSACTION_BALANCE < 0", sources)
-        self.assertIn("J.UNUSED_FDPL_AMOUNT", self.normalized_query)
+    def test_parent_plus_authorization_is_matched_by_each_unused_aid_year(self) -> None:
+        plus = self.section(
+            "unused_fdpl_aid_years AS", "original_payment_summary AS MATERIALIZED"
+        )
+        self.assertIn("R.RLRPAPP_AIDY_CODE IS NOT DISTINCT FROM F.AIDY_CODE", plus)
+        self.assertIn("PARENT_FDPL_AMOUNT", plus)
+        self.assertNotIn("MULTIPLE_TARGET_TERM_FDPL_ROWS", self.normalized_query)
 
-    def test_priority_tie_assumption_is_retired(self) -> None:
-        self.assertNotIn("FDPL_LAST_AT_SAME_PRIORITY", self.normalized_query)
-        self.assertIn("AS FDPL_PRIORITY_TIE_RULE", self.normalized_query)
-        self.assertIn("NOT_APPLICABLE_BALANCE_BASED_SOURCE", self.normalized_query)
+    def test_ach_uses_effective_date_sixteen_day_date_and_180_day_note(self) -> None:
+        delivery = self.section(
+            "student_delivery_sources AS MATERIALIZED", "joined AS"
+        )
+        self.assertIn("S.EFFECTIVE_DATE", delivery)
+        self.assertIn("+ 16", delivery)
+        self.assertIn("<= 180", delivery)
+        self.assertIn("> 180", delivery)
+        self.assertIn("ACHK CLEARING WAIT UNTIL", self.normalized_query)
+        self.assertIn("MAY BE TOO OLD", self.normalized_query)
 
-    def test_schema_inventory_requires_priority(self) -> None:
+    def test_schema_inventory_requires_new_metadata(self) -> None:
         schema_query = REFUNDS_QUERY.with_name("validate_refund_schema.sql").read_text(
             encoding="utf-8"
         )
         self.assertIn("('TAISMGR', 'TBBDETC', 'PRIORITY')", schema_query)
-        self.assertIn("('TAISMGR', 'TBRACCD', 'BALANCE')", schema_query)
+        self.assertIn("('TAISMGR', 'TBBDETC', 'DCAT_CODE')", schema_query)
+        self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
 
-    def test_target_term_is_derived_from_mines_date_boundaries(self) -> None:
-        term_section = self.query[
-            self.query.index("term_context AS") :
-            self.query.index("account_balance_rollup AS")
-        ].upper()
-        normalized_term_section = re.sub(r"\s+", " ", term_section)
-        self.assertIn("CURRENT_DATE AS RUN_DATE", term_section)
-        self.assertIn("TARGET_TERM_OVERRIDE", term_section)
-        self.assertIn("COALESCE", term_section)
-        self.assertRegex(normalized_term_section, r"MAKE_DATE\(.+?, 5, 15\s*\)")
-        self.assertRegex(normalized_term_section, r"MAKE_DATE\(.+?, 7, 15\s*\)")
-        self.assertIn("THEN '10'", term_section)
-        self.assertIn("THEN '55'", term_section)
-        self.assertIn("ELSE '80'", term_section)
-
-    def test_parent_plus_labels_are_not_tied_to_one_term(self) -> None:
-        self.assertNotIn("202680", self.query)
-        self.assertIn("P.TARGET_TERM AS PARENT_PLUS_TARGET_TERM", self.normalized_query)
-        self.assertIn("AS TARGET_TERM_FDPL_AMOUNT", self.normalized_query)
-        self.assertIn("MULTIPLE_TARGET_TERM_FDPL_ROWS_", self.normalized_query)
-        self.assertIn(
-            "TARGET_TERM_FDPL_NOT_A_NEGATIVE_CREDIT",
-            self.normalized_query,
-        )
-
-    def test_third_party_accounts_always_require_manual_review(self) -> None:
+    def test_third_party_controls_remain(self) -> None:
         self.assertIn("LEGACY_THIRD_PARTY_CWIDS AS", self.normalized_query)
         self.assertIn("LIKE 'TPS%'", self.normalized_query)
-        self.assertIn("LEGACY_TPS.CWID IS NOT NULL", self.normalized_query)
-        self.assertIn(
-            "AS THIRD_PARTY_REVIEW_REQUIRED_IND",
-            self.normalized_query,
-        )
-        self.assertIn("AS THIRD_PARTY_MATCH_SOURCE", self.normalized_query)
-        self.assertIn(
-            "THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED",
-            self.normalized_query,
-        )
-        self.assertRegex(
-            self.normalized_query,
-            (
-                r"WHEN S\.THIRD_PARTY_REVIEW_REQUIRED_IND = 'Y' "
-                r"THEN 'THIRD_PARTY_REVIEW'"
-            ),
-        )
-        self.assertRegex(
-            self.normalized_query,
-            (
-                r"WHEN F\.THIRD_PARTY_REVIEW_REQUIRED_IND = 'Y' "
-                r"THEN 'MANUAL_REVIEW'"
-            ),
-        )
+        self.assertIn("THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED", self.normalized_query)
+        self.assertIn("THEN 'THIRD_PARTY_REVIEW'", self.normalized_query)
 
 
 @dataclass(frozen=True)
@@ -177,17 +155,20 @@ class RefundTransaction:
     detail_code: str
     type_ind: str
     priority: str | None
-    amount: int | str
+    amount: int | str | None
     balance: int | str | None = 0
     term: str = "209980"
-    aid_year: str = "9900"
+    aid_year: str | None = "9900"
     pidm: int = 1
     effective_date: str | None = "2099-08-01"
     activity_date: str = "2099-08-01"
+    category: str = "CSH"
+    title_iv: str = "N"
+    tran_number: int | None = None
 
 
-class RefundsPostgresBalanceTests(unittest.TestCase):
-    """Execute the report against synthetic PostgreSQL temporary tables."""
+class RefundsPostgresPolicyTests(unittest.TestCase):
+    """Execute the complete report against synthetic PostgreSQL tables."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -207,7 +188,8 @@ class RefundsPostgresBalanceTests(unittest.TestCase):
             RefundTransaction("OTHR", "C", "700", 500),
             RefundTransaction("PAYA", "P", "899", 2000),
             RefundTransaction("PAYB", "P", "890", 1500),
-            RefundTransaction("FDPL", "P", "800", 4000, balance=-500),
+            RefundTransaction("FDPL", "P", "800", 4000, balance=-500,
+                              category="FA", title_iv="Y"),
             RefundTransaction("PAYC", "P", "000", 2000, balance=-1500),
         ]
 
@@ -215,69 +197,102 @@ class RefundsPostgresBalanceTests(unittest.TestCase):
         self,
         transactions: list[RefundTransaction],
         *,
-        authorization: str | None = "N",
+        authorizations: dict[str, str | list[str]] | None = None,
         refund_hold: bool = False,
         active_ed: bool = True,
+        target_term: str = "209980",
+        previous_term_override: str | None = None,
+        run_date: str = "2099-08-31",
         query: str | None = None,
     ) -> list[dict]:
-        query = re.sub(
+        report_query = re.sub(
             r"\b(?:taismgr|saturn|faismgr)\.", "pg_temp.",
             self.query if query is None else query,
         )
-        query = query.replace(
+        report_query = report_query.replace(
             "CAST(NULL AS varchar(6)) AS target_term_override",
-            "CAST('209980' AS varchar(6)) AS target_term_override",
+            f"CAST('{target_term}' AS varchar(6)) AS target_term_override",
         )
-        query = query.replace(
-            "CURRENT_DATE AS run_date", "DATE '2099-08-31' AS run_date"
+        if previous_term_override is not None:
+            report_query = report_query.replace(
+                "CAST(NULL AS varchar(6)) AS previous_term_override",
+                f"CAST('{previous_term_override}' AS varchar(6)) AS previous_term_override",
+            )
+        report_query = report_query.replace(
+            "CURRENT_DATE AS run_date", f"DATE '{run_date}' AS run_date"
         )
+
         schemas = {
             "tbraccd": "pidm int, term_code text, aidy_code text, tran_number int, "
                 "detail_code text, amount numeric, balance numeric, "
                 "effective_date date, activity_date date",
-            "tbbdetc": "detail_code text, desc text, type_ind text, priority text",
+            "tbbdetc": "detail_code text, desc text, type_ind text, priority text, "
+                "dcat_code text, tiv_ind text",
             "spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
             "spbpers": "pidm int, dead_ind text, dead_date date, confid_ind text, activity_date date",
             "tbbacct": "pidm int, deli_code text, refund_ind text, activity_date date",
             "sprhold": "pidm int, hldd_code text, to_date date, activity_date date",
             "rlrpapp": "pidm int, aidy_code text, plus_to_student text, activity_date date",
         }
-        sql = ["BEGIN; SET LOCAL statement_timeout = '15s';"]
+        sql = ["BEGIN; SET LOCAL statement_timeout = '20s';"]
         for table, columns in schemas.items():
             prefixed = ", ".join(f"{table}_{column}" for column in columns.split(", "))
             sql.append(f"CREATE TEMP TABLE {table} ({prefixed});")
 
-        def insert(table: str, values: tuple) -> None:
+        def insert(table: str, values: tuple[object, ...]) -> None:
             literals = [
                 "NULL" if value is None else "'" + str(value).replace("'", "''") + "'"
                 for value in values
             ]
             sql.append(f"INSERT INTO {table} VALUES ({', '.join(literals)});")
 
-        details: dict[str, tuple] = {}
-        for number, transaction in enumerate(transactions, start=1):
-            definition = (transaction.type_ind, transaction.priority)
+        details: dict[str, tuple[str, str | None, str, str]] = {}
+        used_numbers: dict[int, set[int]] = {}
+        next_numbers: dict[int, int] = {}
+        for transaction in transactions:
+            definition = (
+                transaction.type_ind,
+                transaction.priority,
+                transaction.category,
+                transaction.title_iv,
+            )
             if transaction.detail_code in details:
                 self.assertEqual(details[transaction.detail_code], definition)
             else:
                 details[transaction.detail_code] = definition
                 insert("tbbdetc", (transaction.detail_code, "Synthetic source", *definition))
+
+            occupied = used_numbers.setdefault(transaction.pidm, set())
+            if transaction.tran_number is None:
+                number = next_numbers.get(transaction.pidm, 1)
+                while number in occupied:
+                    number += 1
+            else:
+                number = transaction.tran_number
+            self.assertNotIn(number, occupied)
+            occupied.add(number)
+            next_numbers[transaction.pidm] = max(next_numbers.get(transaction.pidm, 1), number + 1)
             insert("tbraccd", (
                 transaction.pidm, transaction.term, transaction.aid_year, number,
                 transaction.detail_code, transaction.amount, transaction.balance,
                 transaction.effective_date, transaction.activity_date,
             ))
+
+        authorization_rows = {"9900": "N"} if authorizations is None else authorizations
         for pidm in sorted({transaction.pidm for transaction in transactions}):
             insert("spriden", (pidm, f"TEST-{pidm}", "Synthetic", "Example", None))
-            insert("spbpers", (pidm, "N", None, "N", "2099-08-01"))
-            insert("tbbacct", (pidm, "RH" if refund_hold else None, "N", "2099-08-01"))
+            insert("spbpers", (pidm, "N", None, "N", run_date))
+            insert("tbbacct", (pidm, "RH" if refund_hold else None, "N", run_date))
             if active_ed:
-                insert("sprhold", (pidm, "ED", "9999-12-31", "2099-08-01"))
-            if authorization is not None:
-                insert("rlrpapp", (pidm, "9900", authorization, "2099-08-01"))
+                insert("sprhold", (pidm, "ED", "9999-12-31", run_date))
+            for aid_year, values in authorization_rows.items():
+                for value in values if isinstance(values, list) else [values]:
+                    insert("rlrpapp", (pidm, aid_year, value, run_date))
+
         sql.append(
             "SELECT COALESCE(JSON_AGG(report), '[]'::json) FROM ("
-            + query.rstrip().removesuffix(";") + ") report; ROLLBACK;"
+            + report_query.rstrip().removesuffix(";")
+            + ") report; ROLLBACK;"
         )
         result = subprocess.run(
             [self.psql, "-X", "-qAt", "--set=ON_ERROR_STOP=1", "--dbname", self.dsn],
@@ -286,281 +301,431 @@ class RefundsPostgresBalanceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout, parse_float=Decimal)
 
-    def assert_split(
-        self, row: dict, parent: int | str, student: int | str, *, review_required: bool = False
-    ) -> None:
-        parent_amount, student_amount = Decimal(str(parent)), Decimal(str(student))
+    def one(self, transactions: list[RefundTransaction], **kwargs: object) -> dict:
+        rows = self.run_report(transactions, **kwargs)
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def assert_split(self, row: dict, parent: int | str, student: int | str) -> None:
+        parent_amount = Decimal(str(parent))
+        student_amount = Decimal(str(student))
         self.assertEqual(row["parent_refund_amount"], parent_amount)
         self.assertEqual(row["student_refund_amount"], student_amount)
         self.assertEqual(row["total_refund_amount"], parent_amount + student_amount)
         self.assertEqual(row["total_unused_payment_amount"], row["total_refund_amount"])
-        self.assertEqual(row["unpaid_charge_amount"], 0)
-        self.assertEqual(row["allocation_review_required_ind"], "Y" if review_required else "N")
         self.assertEqual(row["refund_split_status"], "CALCULATED_SUBJECT_TO_REVIEW")
 
-    def assert_unresolved(self, row: dict, reason: str) -> None:
-        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
-        self.assertIn(reason, row["review_reasons"])
-        self.assertIsNone(row["parent_refund_amount"])
-        self.assertIsNone(row["student_refund_amount"])
-        self.assertEqual(row["refund_split_status"], "UNDETERMINED_SEE_REVIEW_REASONS")
+    def test_worked_example_uses_priority_allocation(self) -> None:
+        row = self.one(self.worked_example())
+        self.assert_split(row, 500, 1500)
+        self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+        self.assertNotIn("PAYA", row["balance_sources"])
+        self.assertNotIn("PAYB", row["balance_sources"])
+        self.assertIn("FDPL", row["balance_sources"])
+        self.assertIn("PAYC", row["balance_sources"])
+        self.assertEqual(
+            row["fdpl_priority_tie_rule"],
+            "EFFECTIVE_PRIORITY_THEN_EARLIEST_TRAN_NUMBER",
+        )
 
-    def test_worked_example_and_transaction_order_independence(self) -> None:
-        transactions = self.worked_example()
-        for ordered in (transactions, list(reversed(transactions)), transactions[5:] + transactions[:5]):
-            with self.subTest(order=[t.detail_code for t in ordered]):
-                row = self.run_report(ordered)[0]
-                self.assert_split(row, 500, 1500)
-                self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
-                self.assertNotIn("PAYA", row["balance_sources"])
-                self.assertNotIn("PAYB", row["balance_sources"])
-                self.assertEqual(row["fdpl_priority_tie_rule"], "NOT_APPLICABLE_BALANCE_BASED_SOURCE")
-
-    def test_output_columns_follow_requested_order(self) -> None:
-        expected_columns = """
+    def test_output_columns_follow_requested_order_with_policy_audit(self) -> None:
+        expected = """
             cwid last_name first_name full_account_balance total_refund_amount
             proposed_student_delivery student_refund_amount proposed_parent_delivery
-            parent_refund_amount balance_sources
-            plus_to_student_status parent_plus_target_term refund_split_status
-            third_party_review_required_ind third_party_match_source refund_hold_ind
-            raw_delinquency_code active_ed_ind raw_refund_account_ind
-            refund_account_selected_ind fdpl_row_count target_term_fdpl_amount
-            fdpl_aidy_code fdpl_priority_tie_rule unused_fdpl_amount unused_non_fdpl_amount
-            total_unused_payment_amount unpaid_charge_amount allocation_review_required_ind
+            parent_refund_amount balance_sources plus_to_student_status
+            parent_plus_target_term refund_split_status third_party_review_required_ind
+            third_party_match_source refund_hold_ind raw_delinquency_code active_ed_ind
+            raw_refund_account_ind refund_account_selected_ind fdpl_row_count
+            target_term_fdpl_amount fdpl_aidy_code fdpl_priority_tie_rule
+            unused_fdpl_amount unused_non_fdpl_amount total_unused_payment_amount
+            unpaid_charge_amount allocation_review_required_ind
+            previous_term_balance_before_current_payments
+            prior_terms_balance_before_current_payments
+            title_iv_applied_to_older_fiscal_years unrestricted_applied_to_older_terms
             original_payment_row_count original_payment_total original_payment_detail
             deceased_ind deceased_date confidential_ind plus_auth_row_count
-            plus_auth_raw_values negative_source_count
-            ambiguous_source_pool_count review_status review_reasons last_ar_activity_date
+            plus_auth_raw_values negative_source_count ambiguous_source_pool_count
+            review_status review_reasons last_ar_activity_date
             account_control_activity_date ed_activity_date plus_auth_activity_date
         """.split()
-        self.assertEqual(list(self.run_report(self.worked_example())[0]), expected_columns)
+        self.assertEqual(list(self.one(self.worked_example())), expected)
 
-    def test_standard_and_parent_delivery_codes(self) -> None:
-        row = self.run_report(self.worked_example())[0]
-        self.assertEqual(row["proposed_student_delivery"], "ARFD (System)")
+    def test_cross_fy_title_iv_is_capped_and_refund_uses_unused_funds(self) -> None:
+        row = self.one([
+            RefundTransaction("OLD", "C", "899", 1000, balance=800, term="209955"),
+            RefundTransaction("TIVA", "P", "000", 1200, balance=-1000,
+                              category="CSH", title_iv="Y"),
+        ])
+        self.assert_split(row, 0, 1000)
+        self.assertEqual(row["full_account_balance"], -200)
+        self.assertEqual(row["unpaid_charge_amount"], 800)
+        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 200)
+        self.assertEqual(row["previous_term_balance_before_current_payments"], 1000)
+        self.assertEqual(row["prior_terms_balance_before_current_payments"], 0)
+        self.assertEqual(row["allocation_review_required_ind"], "Y")
+        self.assertIn("POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT", row["review_reasons"])
+
+    def test_title_iv_refund_is_not_hidden_by_a_full_account_debit(self) -> None:
+        row = self.one([
+            RefundTransaction("OLD", "C", "899", 1500, balance=1300, term="209955"),
+            RefundTransaction("TIVA", "P", "000", 1200, balance=-1000,
+                              category="FA", title_iv="Y"),
+        ])
+        self.assertEqual(row["full_account_balance"], 300)
+        self.assert_split(row, 0, 1000)
+        self.assertEqual(row["unpaid_charge_amount"], 1300)
+        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 200)
+
+    def test_dormant_historical_fiscal_credit_does_not_enter_recursion(self) -> None:
+        rows = self.run_report([
+            RefundTransaction("PAY0", "P", "000", 100, balance=-100, pidm=1),
+            RefundTransaction("OLDP", "P", "000", 100, term="209780", pidm=2),
+            RefundTransaction("OLDC", "C", "700", 200, term="209880", pidm=2),
+        ])
+        self.assertEqual([row["cwid"] for row in rows], ["TEST-1"])
+
+    def test_cwid_validation_filter_limits_the_report_early(self) -> None:
+        filtered_query = self.query.replace(
+            "CAST(NULL AS varchar(30)) AS cwid_filter",
+            "CAST('TEST-2' AS varchar(30)) AS cwid_filter",
+        )
+        rows = self.run_report([
+            RefundTransaction("PAY0", "P", "000", 100, balance=-100, pidm=1),
+            RefundTransaction("PAY0", "P", "000", 200, balance=-200, pidm=2),
+        ], query=filtered_query)
+        self.assertEqual([row["cwid"] for row in rows], ["TEST-2"])
+
+    def test_targeted_filter_can_inspect_historical_only_credit(self) -> None:
+        filtered_query = self.query.replace(
+            "CAST(NULL AS varchar(30)) AS cwid_filter",
+            "CAST('TEST-2' AS varchar(30)) AS cwid_filter",
+        )
+        rows = self.run_report([
+            RefundTransaction("PAY0", "P", "000", 100, balance=-100, pidm=1),
+            RefundTransaction(
+                "PAY0", "P", "000", 200, balance=-200,
+                term="209880", aid_year="9899", pidm=2,
+            ),
+        ], query=filtered_query)
+        self.assertEqual([row["cwid"] for row in rows], ["TEST-2"])
+        self.assertEqual(rows[0]["total_refund_amount"], Decimal("200.00"))
+
+    def test_same_fy_title_iv_has_no_cap(self) -> None:
+        row = self.one([
+            RefundTransaction("OLD", "C", "899", 1000, term="209980"),
+            RefundTransaction("TIVA", "P", "000", 1200, balance=-200,
+                              term="210010", category="FA", title_iv="Y"),
+        ], target_term="210010", run_date="2100-01-31")
+        self.assert_split(row, 0, 200)
+        self.assertEqual(row["unpaid_charge_amount"], 0)
+        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 0)
+        self.assertEqual(row["previous_term_balance_before_current_payments"], 1000)
+
+    def test_non_title_iv_financial_aid_and_cash_are_unrestricted_cross_fy(self) -> None:
+        for category in ("FA", "CSH"):
+            with self.subTest(category=category):
+                row = self.one([
+                    RefundTransaction("OLD", "C", "899", 1000, term="209955"),
+                    RefundTransaction("FREE", "P", "000", 1200, balance=-200,
+                                      category=category, title_iv="N"),
+                ])
+                self.assert_split(row, 0, 200)
+                self.assertEqual(row["unpaid_charge_amount"], 0)
+                self.assertEqual(row["unrestricted_applied_to_older_terms"], 1000)
+
+    def test_prior_surplus_can_pay_current_charges_with_title_iv_cap_retained(self) -> None:
+        title_iv = self.one([
+            RefundTransaction("TIVA", "P", "000", 500, balance=-300,
+                              term="209955", aid_year="9899", category="FA", title_iv="Y"),
+            RefundTransaction("CURR", "C", "700", 1000, balance=800),
+        ])
+        self.assert_split(title_iv, 0, 300)
+        self.assertEqual(title_iv["full_account_balance"], 500)
+        self.assertEqual(title_iv["unpaid_charge_amount"], 800)
+
+        unrestricted = self.one([
+            RefundTransaction("FREE", "P", "000", 500, balance=-200,
+                              term="209955", aid_year="9899", category="FA", title_iv="N"),
+            RefundTransaction("CURR", "C", "700", 300),
+        ])
+        self.assert_split(unrestricted, 0, 200)
+        self.assertEqual(unrestricted["unpaid_charge_amount"], 0)
+
+    def test_precurrent_fiscal_year_respects_payment_eligibility(self) -> None:
+        filtered_query = self.query.replace(
+            "CAST(NULL AS varchar(30)) AS cwid_filter",
+            "CAST('TEST-1' AS varchar(30)) AS cwid_filter",
+        )
+        row = self.one([
+            RefundTransaction("OLD7", "C", "700", 100, term="209955"),
+            RefundTransaction("P899", "P", "899", 100, balance=-100,
+                              term="209955"),
+            RefundTransaction("P000", "P", "000", 100, term="209955"),
+        ], query=filtered_query)
+        self.assert_split(row, 0, 100)
+        self.assertIn("P899", row["balance_sources"])
+        self.assertNotIn("P000", row["balance_sources"])
+
+    def test_title_iv_source_give_cap_is_shared_across_older_years(self) -> None:
+        row = self.one([
+            RefundTransaction("OLD1", "C", "899", 150, term="209780"),
+            RefundTransaction("OLD2", "C", "899", 150, term="209880"),
+            RefundTransaction("TIVA", "P", "000", 500, balance=-300,
+                              category="FA", title_iv="Y"),
+        ])
+        self.assert_split(row, 0, 300)
+        self.assertEqual(row["unpaid_charge_amount"], 100)
+        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 200)
+
+    def test_destination_receive_cap_is_shared_across_source_years(self) -> None:
+        row = self.one([
+            RefundTransaction("OLD", "C", "899", 500, term="209780"),
+            RefundTransaction("TIVA", "P", "000", 300, balance=-100,
+                              term="209880", aid_year="9899", category="FA", title_iv="Y"),
+            RefundTransaction("TIVB", "P", "000", 300, balance=-300,
+                              category="FA", title_iv="Y"),
+        ])
+        self.assert_split(row, 0, 400)
+        self.assertEqual(row["unpaid_charge_amount"], 300)
+
+    def test_800a_sources_apply_before_regular_800(self) -> None:
+        row = self.one([
+            RefundTransaction("CHG8", "C", "899", 100, tran_number=10),
+            RefundTransaction("FDPL", "P", "800", 100, balance=-100,
+                              category="FA", title_iv="Y", tran_number=2),
+            RefundTransaction("TPDT", "P", "800", 100, tran_number=3),
+        ])
+        self.assert_split(row, 100, 0)
+        self.assertIn("FDPL", row["balance_sources"])
+        self.assertNotIn("TPDT", row["balance_sources"])
+
+    def test_regular_800_ties_use_earliest_transaction_number(self) -> None:
+        early_fdpl = self.one([
+            RefundTransaction("CHG8", "C", "899", 100, tran_number=10),
+            RefundTransaction("FDPL", "P", "800", 100, category="FA", title_iv="Y",
+                              tran_number=1),
+            RefundTransaction("OT8", "P", "800", 100, balance=-100, tran_number=2),
+        ])
+        self.assert_split(early_fdpl, 0, 100)
+
+        late_fdpl = self.one([
+            RefundTransaction("CHG8", "C", "899", 100, tran_number=10),
+            RefundTransaction("FDPL", "P", "800", 100, balance=-100,
+                              category="FA", title_iv="Y", tran_number=2),
+            RefundTransaction("OT8", "P", "800", 100, tran_number=1),
+        ])
+        self.assert_split(late_fdpl, 100, 0)
+
+    def test_000a_applies_first_and_000z_last(self) -> None:
+        cofp = self.one([
+            RefundTransaction("CHG", "C", "700", 100),
+            RefundTransaction("PAY0", "P", "000", 100, balance=-100),
+            RefundTransaction("COFP", "P", "000", 100),
+        ])
+        self.assert_split(cofp, 0, 100)
+        self.assertIn("PAY0", cofp["balance_sources"])
+        self.assertNotIn("COFP", cofp["balance_sources"])
+
+        ach = self.one([
+            RefundTransaction("CHG", "C", "700", 100),
+            RefundTransaction("ACHK", "P", "000", 100, balance=-100,
+                              effective_date="2099-08-01"),
+            RefundTransaction("PAY0", "P", "000", 100),
+        ])
+        self.assert_split(ach, 0, 100)
+        self.assertIn("000Z", ach["balance_sources"])
+        self.assertEqual(ach["proposed_student_delivery"], "AFRD (Transact)")
+
+    def test_payment_priority_wildcard_and_charge_descending_order(self) -> None:
+        row = self.one([
+            RefundTransaction("C897", "C", "897", 100, tran_number=1),
+            RefundTransaction("C899", "C", "899", 100, tran_number=2),
+            RefundTransaction("P899", "P", "899", 100, tran_number=3),
+            RefundTransaction("P890", "P", "890", 100, tran_number=4),
+            RefundTransaction("FDPL", "P", "800", 100, balance=-100,
+                              category="FA", title_iv="Y", tran_number=5),
+        ])
+        self.assert_split(row, 100, 0)
+        self.assertEqual(row["unpaid_charge_amount"], 0)
+
+    def test_charge_aggregation_preserves_exact_cents(self) -> None:
+        row = self.one([
+            RefundTransaction("CHG1", "C", "899", "0.10"),
+            RefundTransaction("CHG2", "C", "899", "0.20"),
+            RefundTransaction("FDPL", "P", "800", "0.35", balance="-0.05",
+                              category="FA", title_iv="Y"),
+        ])
+        self.assert_split(row, "0.05", 0)
+
+    def test_reversals_net_within_detail_term_and_aid_year(self) -> None:
+        row = self.one([
+            RefundTransaction("ACHK", "P", "000", 1000, balance=-600,
+                              effective_date="2099-08-01", tran_number=1),
+            RefundTransaction("ACHK", "P", "000", -400,
+                              effective_date="2099-08-20", tran_number=2),
+        ])
+        self.assert_split(row, 0, 600)
+        self.assertEqual(row["negative_source_count"], 1)
+        self.assertEqual(row["original_payment_total"], 600)
+        self.assertEqual(row["proposed_student_delivery"], "AFRD (Transact)")
+
+    def test_charge_credit_offsets_a_different_detail_at_same_priority(self) -> None:
+        row = self.one([
+            RefundTransaction("HLTH", "C", "879", 1589),
+            RefundTransaction("HIWR", "C", "879", -1589),
+            RefundTransaction("PAY0", "P", "000", 100, balance=-100),
+        ])
+        self.assert_split(row, 0, 100)
+        self.assertEqual(row["unpaid_charge_amount"], 0)
+        self.assertNotIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"])
+
+    def test_cross_detail_charge_credits_do_not_create_false_historical_debt(self) -> None:
+        row = self.one([
+            RefundTransaction("HLTH", "C", "879", "1111", term="209780"),
+            RefundTransaction("HIWR", "C", "879", "-1111", term="209780"),
+            RefundTransaction("HLTH", "C", "879", "2222", term="209880"),
+            RefundTransaction("HIWR", "C", "879", "-2222", term="209880"),
+            RefundTransaction("OLD", "C", "899", "4750.25", term="209955"),
+            RefundTransaction("HLTH", "C", "879", "3333", term="209955"),
+            RefundTransaction("HIWR", "C", "879", "-3333", term="209955"),
+            RefundTransaction("TUIN", "C", "899", "9000", tran_number=20),
+            RefundTransaction("FEES", "C", "897", "1500", tran_number=21),
+            RefundTransaction("HOUS", "C", "889", "2500", tran_number=22),
+            RefundTransaction("HLTH", "C", "879", "1600", tran_number=23),
+            RefundTransaction("HIWR", "C", "879", "-1600", tran_number=24),
+            RefundTransaction("FDPL", "P", "800", "12000", tran_number=25,
+                              category="PPL", title_iv="Y"),
+            RefundTransaction("FDSL", "P", "800", "1500", tran_number=26,
+                              category="FAL", title_iv="Y"),
+            RefundTransaction("FDUL", "P", "800", "500", tran_number=27,
+                              category="FAL", title_iv="Y"),
+            RefundTransaction("PELL", "P", "800", "1500", tran_number=28,
+                              category="FAG", title_iv="Y"),
+            RefundTransaction("SCHP", "P", "000", "6000", tran_number=29,
+                              category="FAS", title_iv="N"),
+        ], target_term="209980", run_date="2099-08-31")
+        self.assert_split(row, 0, "3749.75")
+        self.assertEqual(row["unpaid_charge_amount"], 0)
+        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], Decimal("200.00"))
+        self.assertEqual(row["unrestricted_applied_to_older_terms"], Decimal("4550.25"))
+        self.assertNotIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"])
+
+    def test_multiple_fdpl_aid_years_use_each_authorization(self) -> None:
+        row = self.one([
+            RefundTransaction("FDPL", "P", "800", 300, balance=-300,
+                              term="209880", aid_year="9899", category="FA", title_iv="Y"),
+            RefundTransaction("FDPL", "P", "800", 300, balance=-300,
+                              aid_year="9900", category="FA", title_iv="Y"),
+        ], authorizations={"9899": "Y", "9900": "N"})
+        self.assert_split(row, 300, 300)
+        self.assertEqual(row["plus_to_student_status"], "MIXED")
         self.assertEqual(row["proposed_parent_delivery"], "RFDP")
 
-        no_ed = self.run_report(self.worked_example(), active_ed=False)[0]
-        self.assertEqual(no_ed["proposed_student_delivery"], "RFND (CHECK)")
+    def test_missing_or_conflicting_plus_authorization_blocks_split(self) -> None:
+        transactions = [
+            RefundTransaction("FDPL", "P", "800", 100, balance=-100,
+                              category="FA", title_iv="Y")
+        ]
+        missing = self.one(transactions, authorizations={})
+        self.assertIsNone(missing["parent_refund_amount"])
+        self.assertIn("PLUS_AUTH_RECORD_MISSING", missing["review_reasons"])
+        conflict = self.one(transactions, authorizations={"9900": ["Y", "N"]})
+        self.assertIsNone(conflict["parent_refund_amount"])
+        self.assertIn("PLUS_AUTH_VALUES_CONFLICT", conflict["review_reasons"])
+        invalid = self.one(transactions, authorizations={"9900": ""})
+        self.assertIsNone(invalid["parent_refund_amount"])
+        self.assertIn("PLUS_AUTH_VALUES_CONFLICT", invalid["review_reasons"])
 
-        hold = self.run_report(self.worked_example(), refund_hold=True)[0]
-        self.assertEqual(hold["proposed_student_delivery"], "Refund Hold - Student")
-
-    def test_achk_clearing_boundaries_and_crvc_delivery(self) -> None:
-        eligible = self.run_report([
+    def test_ach_boundaries_show_exact_date_and_180_day_warning(self) -> None:
+        waiting = self.one([
             RefundTransaction("ACHK", "P", "000", 50, balance=-50,
-                              effective_date="2099-08-14")
-        ])[0]
-        self.assertEqual(eligible["proposed_student_delivery"], "AFRD (Transact)")
-        self.assertEqual(eligible["review_status"], "TRANSACT_REVIEW")
+                              effective_date="2099-08-16")
+        ])
+        self.assertEqual(
+            waiting["proposed_student_delivery"], "ACHK Clearing Wait until 09/01/2099"
+        )
+        self.assertEqual(waiting["review_status"], "WAIT_ACH_CLEARING")
 
-        day_16 = self.run_report([
+        day_16 = self.one([
             RefundTransaction("ACHK", "P", "000", 50, balance=-50,
                               effective_date="2099-08-15")
-        ])[0]
-        self.assertEqual(day_16["proposed_student_delivery"], "ACHK Clearing Wait")
-        self.assertEqual(day_16["review_status"], "WAIT_ACH_CLEARING")
+        ])
+        self.assertEqual(day_16["proposed_student_delivery"], "AFRD (Transact)")
 
-        day_90 = self.run_report([
+        day_180 = self.one([
             RefundTransaction("ACHK", "P", "000", 50, balance=-50,
-                              effective_date="2099-06-02")
-        ])[0]
-        self.assertEqual(day_90["proposed_student_delivery"], "ARFD (System)")
+                              effective_date="2099-03-04")
+        ])
+        self.assertEqual(day_180["proposed_student_delivery"], "AFRD (Transact)")
 
-        crvc = self.run_report([
-            RefundTransaction("CRVC", "P", "000", 50, balance=-50,
-                              effective_date="2099-08-31")
-        ])[0]
+        day_181 = self.one([
+            RefundTransaction("ACHK", "P", "000", 50, balance=-50,
+                              effective_date="2099-03-03")
+        ])
+        self.assertEqual(
+            day_181["proposed_student_delivery"], "AFRD (Transact) - May Be Too Old"
+        )
+
+    def test_crvc_and_standard_student_delivery_codes(self) -> None:
+        crvc = self.one([
+            RefundTransaction("CRVC", "P", "000", 50, balance=-50)
+        ])
         self.assertEqual(crvc["proposed_student_delivery"], "CRVC (Transact)")
 
-    def test_achk_window_net_limits_transact_amount_after_return(self) -> None:
-        row = self.run_report([
-            RefundTransaction("ACHK", "P", "000", 1000, balance=-800),
-            RefundTransaction("ACHK", "P", "000", -400),
-            RefundTransaction("PAYC", "P", "000", 400, balance=-200),
-        ])[0]
-        self.assertEqual(row["student_refund_amount"], 1000)
-        self.assertEqual(
-            row["proposed_student_delivery"],
-            "AFRD (Transact) 600.00; ACHK Return/Net Review 200.00; "
-            "ARFD (System) 200.00",
-        )
-        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
-        self.assertIn(
-            "ACHK_ELIGIBLE_NET_LESS_THAN_REMAINING_BALANCE", row["review_reasons"]
-        )
+        system = self.one([
+            RefundTransaction("PAY0", "P", "000", 50, balance=-50)
+        ])
+        self.assertEqual(system["proposed_student_delivery"], "ARFD (System)")
+        check = self.one([
+            RefundTransaction("PAY0", "P", "000", 50, balance=-50)
+        ], active_ed=False)
+        self.assertEqual(check["proposed_student_delivery"], "RFND (CHECK)")
+        hold = self.one([
+            RefundTransaction("PAY0", "P", "000", 50, balance=-50)
+        ], refund_hold=True)
+        self.assertEqual(hold["proposed_student_delivery"], "Refund Hold - Student")
 
-    def test_completed_team_example_parent_plus_and_ach_are_separate_sources(self) -> None:
-        transactions = [
-            RefundTransaction("TUIN", "C", "899", 1660),
-            RefundTransaction("SCHL", "P", "890", 50),
-            RefundTransaction("LOAN", "P", "800", 272),
-            RefundTransaction("FDPL", "P", "800", 958, balance=-194),
-            RefundTransaction("ACHK", "P", "000", 50, balance=-50),
-            RefundTransaction("GRNT", "P", "000", 574),
-        ]
-        row = self.run_report(transactions)[0]
-        self.assert_split(row, 194, 50)
-        self.assertEqual(row["original_payment_total"], 50)
-        self.assertIn("FDPL", row["balance_sources"])
-        self.assertIn("ACHK", row["balance_sources"])
+    def test_historical_term_60_can_be_selected_as_previous_term(self) -> None:
+        row = self.one([
+            RefundTransaction("OLD", "C", "899", 100, term="210060"),
+            RefundTransaction("PAY0", "P", "000", 200, balance=-100,
+                              term="210080"),
+        ], target_term="210080", previous_term_override="210060", run_date="2100-08-31")
+        self.assertEqual(row["previous_term_balance_before_current_payments"], 100)
+        self.assertEqual(row["prior_terms_balance_before_current_payments"], 0)
 
-    def test_completed_team_example_parent_plus_and_other_student_source(self) -> None:
-        transactions = [
-            RefundTransaction("TUIN", "C", "899", 1393),
-            RefundTransaction("SCHL", "P", "890", 300),
-            RefundTransaction("LOAN", "P", "800", 322),
-            RefundTransaction("FDPL", "P", "800", 1644, balance=-1057),
-            RefundTransaction("ACHK", "P", "000", 100),
-            RefundTransaction("COFP", "P", "000", 184, balance=-100),
-        ]
-        row = self.run_report(transactions)[0]
-        self.assert_split(row, 1057, 100)
-        self.assertEqual(row["original_payment_row_count"], 0)
-        self.assertIn("COFP", row["balance_sources"])
-        self.assertNotIn("ACHK", row["balance_sources"])
-
-    def test_priority_does_not_override_applied_balance(self) -> None:
+    def test_stored_balance_is_diagnostic_and_does_not_replace_reconstruction(self) -> None:
         transactions = self.worked_example()
-        transactions[5] = replace(transactions[5], priority="000")
-        transactions[6] = replace(transactions[6], priority="899")
-        self.assert_split(self.run_report(transactions)[0], 500, 1500)
-
-    def test_invalid_remaining_source_priority_flags_review_but_keeps_split(self) -> None:
-        transactions = self.worked_example()
-        transactions[5] = replace(transactions[5], priority=None)
-        row = self.run_report(transactions)[0]
-        self.assert_split(row, 500, 1500, review_required=True)
-        self.assertIn("MISSING_OR_INVALID_DETAIL_PRIORITY", row["review_reasons"])
-
-    def test_missing_transaction_balance_blocks_split(self) -> None:
-        transactions = self.worked_example()
-        transactions[6] = replace(transactions[6], balance=None)
-        self.assert_unresolved(self.run_report(transactions)[0], "MISSING_TRANSACTION_BALANCE")
-
-    def test_unexpected_balance_sign_blocks_split(self) -> None:
-        transactions = self.worked_example()
-        transactions[3] = replace(transactions[3], balance=1)
-        self.assert_unresolved(
-            self.run_report(transactions)[0], "UNEXPECTED_TRANSACTION_BALANCE_SIGN"
-        )
-
-    def test_unpaid_charge_balance_blocks_split(self) -> None:
-        transactions = self.worked_example()
-        transactions[0] = replace(transactions[0], balance=100)
-        row = self.run_report(transactions)[0]
-        self.assertEqual(row["unpaid_charge_amount"], 100)
-        self.assert_unresolved(row, "UNPAID_CHARGES_IN_STORED_BALANCES")
-
-    def test_target_term_balances_must_reconcile_to_full_account_refund(self) -> None:
-        transactions = self.worked_example() + [
-            RefundTransaction("OLDCH", "C", "899", 100, term="209910")
-        ]
-        self.assert_unresolved(
-            self.run_report(transactions)[0],
-            "TARGET_TERM_STORED_BALANCES_DIFFER_FROM_FULL_ACCOUNT_REFUND",
-        )
-
-    def test_settled_other_terms_do_not_change_current_split(self) -> None:
-        transactions = self.worked_example() + [
-            RefundTransaction("OLDCH", "C", "899", 100, term="209910"),
-            RefundTransaction("OLDPY", "P", "000", 100, term="209910"),
-        ]
-        self.assert_split(self.run_report(transactions)[0], 500, 1500)
-
-    def test_amount_reversals_do_not_override_reconciled_balances(self) -> None:
-        transactions = self.worked_example() + [
-            RefundTransaction("ADJ", "C", "879", -100),
-            RefundTransaction("PAYA", "P", "899", -100),
-        ]
-        row = self.run_report(transactions)[0]
+        transactions[-1] = replace(transactions[-1], balance=0)
+        row = self.one(transactions)
         self.assert_split(row, 500, 1500)
-        self.assertGreater(row["negative_source_count"], 0)
+        self.assertEqual(row["allocation_review_required_ind"], "Y")
+        self.assertIn("STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION", row["review_reasons"])
 
-    def test_card_review_uses_exact_remaining_transaction_balance(self) -> None:
-        transactions = self.worked_example()
-        transactions[6] = replace(transactions[6], detail_code="CRED", balance=-1500)
-        row = self.run_report(transactions)[0]
-        self.assert_split(row, 500, 1500)
-        self.assertEqual(row["original_payment_total"], 1500)
-        self.assertEqual(row["review_status"], "TRANSACT_REVIEW")
+    def test_missing_transaction_amount_blocks_the_split(self) -> None:
+        row = self.one(self.worked_example() + [
+            RefundTransaction("NULL", "C", "700", None)
+        ])
+        self.assertIsNone(row["student_refund_amount"])
+        self.assertIsNone(row["parent_refund_amount"])
+        self.assertIn("MISSING_TRANSACTION_AMOUNT", row["review_reasons"])
 
-    def test_plus_to_student_authorization_and_hold_controls_remain(self) -> None:
-        transactions = self.worked_example()
-        self.assert_split(self.run_report(transactions, authorization="Y")[0], 0, 2000)
-        self.assertEqual(self.run_report(transactions, refund_hold=True)[0]["review_status"], "HOLD")
-        missing = self.run_report(transactions, authorization=None)[0]
-        self.assertEqual(missing["review_status"], "MANUAL_REVIEW")
-        self.assertIn("PLUS_AUTH_RECORD_MISSING", missing["review_reasons"])
-
-    def test_multiple_fdpl_rows_remain_manual_review(self) -> None:
-        transactions = self.worked_example() + [RefundTransaction("FDPL", "P", "800", 100)]
-        self.assert_unresolved(self.run_report(transactions)[0], "MULTIPLE_TARGET_TERM_FDPL_ROWS_2")
-
-    def test_exact_cents_are_preserved(self) -> None:
-        transactions = [
-            RefundTransaction("CHRG", "C", "899", "0.30"),
-            RefundTransaction("FDPL", "P", "800", "0.35", balance="-0.05"),
-        ]
-        self.assert_split(self.run_report(transactions)[0], "0.05", 0)
-
-    def test_no_charges_returns_stored_fdpl_balance(self) -> None:
-        row = self.run_report([
-            RefundTransaction("FDPL", "P", "800", 500, balance=-500)
-        ])[0]
-        self.assert_split(row, 500, 0)
-
-    def test_accounts_are_isolated_and_noncredit_accounts_are_excluded(self) -> None:
-        transactions = self.worked_example() + [
-            RefundTransaction("PAYC", "P", "000", 30, balance=-30, pidm=2),
-            RefundTransaction("TUIN", "C", "899", 100, pidm=3),
-        ]
-        rows = {row["cwid"]: row for row in self.run_report(transactions)}
-        self.assertEqual(set(rows), {"TEST-1", "TEST-2"})
-        self.assert_split(rows["TEST-1"], 500, 1500)
-        self.assert_split(rows["TEST-2"], 0, 30)
-
-    def test_varied_accounts_follow_stored_source_balances(self) -> None:
-        rng = random.Random(84721)
-        transactions: list[RefundTransaction] = []
-        expected: dict[str, tuple[int, int]] = {}
-        for pidm in range(1, 101):
-            parent = rng.randint(0, 500)
-            student = rng.randint(0, 500)
-            transactions.extend([
-                RefundTransaction("CHRG", "C", "899", 1000, pidm=pidm),
-                RefundTransaction("FDPL", "P", "800", 400 + parent,
-                                  balance=-parent, pidm=pidm),
-                RefundTransaction("PAYA", "P", "000", 600 + student,
-                                  balance=-student, pidm=pidm),
-            ])
-            expected[f"TEST-{pidm}"] = (parent, student)
-        rng.shuffle(transactions)
-        rows = self.run_report(transactions)
-        self.assertEqual(len(rows), len(expected))
-        for row in rows:
-            with self.subTest(cwid=row["cwid"]):
-                self.assert_split(row, *expected[row["cwid"]])
-
-    def test_diagnostic_preserves_raw_amount_and_balance_groups(self) -> None:
+    def test_diagnostic_exposes_raw_metadata_without_person_identifiers(self) -> None:
         query = REFUNDS_QUERY.with_name("Refund_allocation_diagnostic.sql").read_text(
             encoding="utf-8"
         )
-        transactions = self.worked_example() + [
-            RefundTransaction("PAYB", "P", "890", -500),
-            RefundTransaction("TUIN", "C", "899", 200, term="209910"),
-            RefundTransaction("PAYC", "P", "000", 100, balance=-100, pidm=2),
-        ]
+        transactions = self.worked_example()
         self.assertEqual(self.run_report(transactions, query=query), [])
         query = query.replace(
             "CAST(NULL AS varchar(30)) AS cwid", "CAST('TEST-1' AS varchar(30)) AS cwid"
         )
         rows = self.run_report(transactions, query=query)
-        groups = {(row["term_code"], row["detail_code"]): row for row in rows}
-        self.assertEqual(groups[("209910", "TUIN")]["net_amount_raw"], 200)
-        self.assertEqual(groups[("209980", "PAYB")]["net_amount_raw"], 1000)
-        self.assertEqual(groups[("209980", "PAYC")]["net_balance_raw"], -1500)
-        self.assertTrue({"cwid", "pidm", "first_name", "last_name"}.isdisjoint(rows[0]))
+        fdpl = next(row for row in rows if row["detail_code"] == "FDPL")
+        self.assertEqual(fdpl["category_code"], "FA")
+        self.assertEqual(fdpl["title_iv_ind"], "Y")
+        self.assertEqual(fdpl["first_tran_number"], fdpl["last_tran_number"])
+        self.assertIn("effective", fdpl["transaction_detail"])
+        self.assertTrue({"cwid", "pidm", "first_name", "last_name"}.isdisjoint(fdpl))
 
 
 if __name__ == "__main__":

@@ -41,6 +41,14 @@ class SetupPowerShellContractTests(unittest.TestCase):
             self.profile_setup,
         )
 
+    def test_refund_workflow_shortcut_is_installed(self) -> None:
+        shortcuts = (
+            PROJECT_ROOT / "powershell" / "shortcuts" / "profile_shortcuts.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("function start-refunds", shortcuts)
+        self.assertIn("launcher\\run_refunds.ps1", shortcuts)
+        self.assertIn('Write-Host "start-refunds"', self.profile_setup)
+
     def test_current_shortcuts_do_not_create_another_backup(self) -> None:
         current_message = self.profile_setup.index(
             'Write-Host "Automation shortcuts are already current."'

@@ -18,6 +18,10 @@ function start-population-testing {
     & (Join-Path $AUTOMATION_ROOT "launcher\run_population_testing.ps1")
 }
 
+function start-refunds {
+    & (Join-Path $AUTOMATION_ROOT "launcher\run_refunds.ps1") @args
+}
+
 function start-trends {
     & (Join-Path $AUTOMATION_ROOT "launcher\run_trends.ps1")
 }

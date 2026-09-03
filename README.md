@@ -78,6 +78,7 @@ The following commands will now be available:
 | `start-setup` | Runs setup again. |
 | `test-automation` | Runs all automated repository tests. |
 | `start-population-testing` | Runs Population Testing with default settings. |
+| `start-refunds` | Runs the read-only refund review workflow. |
 | `start-trends` | Runs Historical Trends with default settings. |
 | `start-textbook-brokers` | Runs Textbook Brokers. |
 | `archive-textbook-brokers` | Archives the current Textbook Brokers term after Banner upload. |
