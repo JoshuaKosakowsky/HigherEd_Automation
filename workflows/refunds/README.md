@@ -15,6 +15,9 @@ The local Python process then performs:
 - payment and charge reversal netting;
 - Mines term and Fall-through-Summer fiscal-year mapping;
 - separate charge pools for every term and priority, processed oldest term first;
+- a settled-history boundary at the latest completed term where the cumulative
+  raw account balance returned to zero, preventing closed payments and refunds
+  from being reopened under current priorities;
 - Title IV classification and separate $200 giving/receiving fiscal-year caps;
 - unrestricted cross-term allocation;
 - Banner positional priority matching;

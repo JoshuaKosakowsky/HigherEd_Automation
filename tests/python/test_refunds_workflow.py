@@ -62,6 +62,7 @@ class RefundAllocationTests(unittest.TestCase):
         target_term: str = "209980",
         previous_term_override: str | None = None,
         run_date: date = date(2099, 8, 31),
+        expected_rows: int = 1,
     ) -> dict[str, object]:
         transaction_rows = []
         occupied: set[int] = set()
@@ -105,7 +106,9 @@ class RefundAllocationTests(unittest.TestCase):
             pd.DataFrame(context_rows, columns=CONTEXT_COLUMNS),
             RefundParameters(target_term, run_date, previous_term_override),
         )
-        self.assertEqual(len(result), 1)
+        self.assertEqual(len(result), expected_rows)
+        if expected_rows == 0:
+            return {}
         return result.iloc[0].to_dict()
 
     @staticmethod
@@ -309,15 +312,27 @@ class RefundAllocationTests(unittest.TestCase):
             str(row["review_reasons"]),
         )
 
-    def test_balanced_old_term_is_not_discarded_before_current_allocation(self) -> None:
+    def test_settled_old_term_is_not_reopened_by_current_priorities(self) -> None:
         row = self.report([
             Transaction("OLD7", "C", "700", 100, term="209880", tran_number=1),
             Transaction("P899", "P", "899", 100, term="209880", tran_number=2),
             Transaction("P000", "P", "000", 100, tran_number=3),
         ])
         self.assert_split(row, "0.00", "100.00")
-        self.assertIn("P899", str(row["balance_sources"]))
-        self.assertNotIn("P000", str(row["balance_sources"]))
+        self.assertIn("P000", str(row["balance_sources"]))
+        self.assertNotIn("P899", str(row["balance_sources"]))
+
+    def test_closed_cross_fy_history_and_posted_current_refund_are_omitted(self) -> None:
+        self.report([
+            Transaction(
+                "FDPL", "P", "800", 600, 0, term="209810",
+                aid_year="9798", category="FA", title_iv="Y",
+            ),
+            Transaction("LATE", "C", "700", 1320, 0, term="209855"),
+            Transaction("PAY0", "P", "000", 720, 0, term="209880"),
+            Transaction("FDSL", "P", "800", 100, 0, category="FA", title_iv="Y"),
+            Transaction("ARFD", "C", "800", 100, 0),
+        ], expected_rows=0)
 
     def test_bad_inputs_block_split_without_displaying_zero(self) -> None:
         missing_amount = self.report(

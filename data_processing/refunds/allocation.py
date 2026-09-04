@@ -369,6 +369,39 @@ def _charge_sort_key(charge: dict[str, Any]) -> tuple[object, ...]:
     return (charge["term_sort"], -(int(charge["priority_code"]) if charge["priority_code"] else -1), charge["tran_number"], charge["detail_code"])
 
 
+def _open_allocation_window(
+    transactions: list[dict[str, Any]],
+    target_term_sort: int,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Exclude the most recent cumulatively settled historical prefix.
+
+    A zero cumulative raw balance at a completed term boundary means every
+    earlier charge and payment has already been resolved at the account level.
+    Replaying that closed history under today's priorities can resurrect loans
+    that were consumed or refunded years ago. Activity after the last zero
+    boundary remains fully term-specific and is allocated oldest term first.
+    """
+    balances_by_term: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    for row in transactions:
+        term_sort = row["term_sort"]
+        if term_sort is not None and term_sort <= target_term_sort:
+            balances_by_term[term_sort] += row["accounting_amount"] or ZERO
+
+    cumulative = ZERO
+    settled_through: int | None = None
+    for term_sort in sorted(balances_by_term):
+        cumulative = _money(cumulative + balances_by_term[term_sort])
+        if term_sort < target_term_sort and cumulative == ZERO:
+            settled_through = term_sort
+
+    if settled_through is None:
+        return transactions, None
+    return (
+        [row for row in transactions if row["term_sort"] > settled_through],
+        settled_through,
+    )
+
+
 def _apply_pairs(
     charges: list[dict[str, Any]],
     sources: list[dict[str, Any]],
@@ -585,10 +618,14 @@ def _allocate_account(
         row for row in transactions
         if row["term_sort"] is not None and row["term_sort"] <= target_sort
     ]
-    payment_sources, negative_payment_groups = _payment_sources(eligible_transactions)
+    allocation_transactions, _settled_through = _open_allocation_window(
+        eligible_transactions,
+        target_sort,
+    )
+    payment_sources, negative_payment_groups = _payment_sources(allocation_transactions)
 
     charges, negative_charge_groups = _charge_sources(
-        eligible_transactions,
+        allocation_transactions,
         target_sort,
     )
 
@@ -623,7 +660,7 @@ def _allocate_account(
     account_credit = _money(max(-full_balance, ZERO))
     policy_credit_mismatch = policy_unused_total != account_credit
 
-    eligible_balance = _money(sum((row["accounting_amount"] or ZERO for row in eligible_transactions), ZERO))
+    eligible_balance = _money(sum((row["accounting_amount"] or ZERO for row in allocation_transactions), ZERO))
     reconstructed_balance = _money(unpaid_charges - policy_unused_total)
     ledger_residual = _money(eligible_balance - reconstructed_balance)
 
