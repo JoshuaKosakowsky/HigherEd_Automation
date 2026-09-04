@@ -312,17 +312,18 @@ def _payment_sources(transactions: list[dict[str, Any]]) -> tuple[list[dict[str,
 def _charge_sources(
     transactions: list[dict[str, Any]],
     target_term_sort: int,
-    historical_credit_years: set[int],
 ) -> tuple[list[dict[str, Any]], int]:
+    """Build term-and-priority charge pools through the target term.
+
+    Charge credits/reversals net only within their original term and priority.
+    Keeping every term separate is required because cross-term payment rules are
+    applied later, from the oldest outstanding term forward.
+    """
     rows = [
         row for row in transactions
         if row["type_ind"] == "C"
         and row["term_sort"] is not None
         and row["term_sort"] <= target_term_sort
-        and (
-            row["term_sort"] == target_term_sort
-            or row["fiscal_year_start"] in historical_credit_years
-        )
     ]
     grouped: dict[tuple[object, ...], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -372,9 +373,9 @@ def _apply_pairs(
     charges: list[dict[str, Any]],
     sources: list[dict[str, Any]],
     *,
-    unrestricted_history: bool,
     title_iv_cap: Decimal | None = None,
 ) -> tuple[dict[int, Decimal], list[Decimal], list[dict[str, Any]]]:
+    """Apply ordered payments to ordered term/priority charge pools."""
     payment_remaining = {source["source_id"]: source["allocation_amount"] for source in sources}
     charge_remaining = [charge["charge_amount"] for charge in charges]
     transfers: list[dict[str, Any]] = []
@@ -383,10 +384,14 @@ def _apply_pairs(
 
     for charge_index, charge in enumerate(charges):
         for source in sources:
-            if not unrestricted_history and not _priority_matches(charge["priority_code"], source["priority_code"]):
+            if charge_remaining[charge_index] <= 0:
+                break
+            if not _priority_matches(charge["priority_code"], source["priority_code"]):
                 continue
             available_charge = charge_remaining[charge_index]
             available_payment = payment_remaining[source["source_id"]]
+            if available_payment <= 0:
+                continue
             cap_available = available_payment
             cross_fy_title_iv = (
                 title_iv_cap is not None
@@ -402,6 +407,8 @@ def _apply_pairs(
                     ZERO,
                 )
             applied = _money(min(available_charge, available_payment, cap_available))
+            if applied <= 0:
+                continue
             charge_remaining[charge_index] -= applied
             payment_remaining[source["source_id"]] -= applied
             if cross_fy_title_iv:
@@ -580,107 +587,28 @@ def _allocate_account(
     ]
     payment_sources, negative_payment_groups = _payment_sources(eligible_transactions)
 
-    historical_balances: dict[int, Decimal] = defaultdict(lambda: ZERO)
-    for row in eligible_transactions:
-        if row["term_sort"] < target_sort:
-            historical_balances[row["fiscal_year_start"]] += row["accounting_amount"] or ZERO
-    historical_balances = {year: _money(amount) for year, amount in historical_balances.items()}
-    credit_years = {year for year, amount in historical_balances.items() if amount < 0}
+    charges, negative_charge_groups = _charge_sources(
+        eligible_transactions,
+        target_sort,
+    )
 
-    charges, negative_charge_groups = _charge_sources(eligible_transactions, target_sort, credit_years)
-    local_payment_remaining = {source["source_id"]: source["source_amount"] for source in payment_sources}
-    historical_deficits: dict[int, Decimal] = {
-        year: amount for year, amount in historical_balances.items() if amount > 0
-    }
-    for year in sorted(credit_years):
-        local_sources = sorted(
-            [
-                {**source, "allocation_amount": source["source_amount"]}
-                for source in payment_sources
-                if source["fiscal_year_start"] == year
-            ],
-            key=_payment_sort_key,
-        )
-        local_charges = sorted(
-            [charge for charge in charges if charge["fiscal_year_start"] == year],
-            key=_charge_sort_key,
-        )
-        remaining, charge_remaining, _ = _apply_pairs(
-            local_charges,
-            local_sources,
-            unrestricted_history=False,
-        )
-        local_payment_remaining.update(remaining)
-        deficit = _money(sum(charge_remaining, ZERO))
-        if deficit > 0:
-            historical_deficits[year] = deficit
-
-    staged_sources: list[dict[str, Any]] = []
-    for source in payment_sources:
-        if source["term_sort"] < target_sort:
-            amount = local_payment_remaining[source["source_id"]] if source["fiscal_year_start"] in credit_years else ZERO
-        else:
-            amount = source["source_amount"]
-        amount = _money(amount)
-        if amount > 0:
-            staged_sources.append({**source, "allocation_amount": amount})
+    # Preserve every payment source and every term/priority charge pool. Charges
+    # are handled oldest-term first; payment eligibility and ordering are then
+    # evaluated for the actual charge instead of against a synthetic FY balance.
+    staged_sources: list[dict[str, Any]] = [
+        {**source, "allocation_amount": _money(source["source_amount"])}
+        for source in payment_sources
+        if source["source_amount"] > 0
+    ]
     staged_sources.sort(key=_payment_sort_key)
+    staged_charges = sorted(charges, key=_charge_sort_key)
 
-    staged_charges: list[dict[str, Any]] = []
-    for year, amount in historical_deficits.items():
-        if amount > 0:
-            staged_charges.append({
-                "fiscal_year_start": year,
-                "term_code": None,
-                "term_sort": None,
-                "tran_number": 0,
-                "detail_code": "PRIOR_FY_BALANCE",
-                "detail_desc": f"Fiscal year {year}-{year + 1} balance",
-                "priority_code": None,
-                "charge_amount": amount,
-                "charge_kind": "HISTORICAL_FY_DEFICIT",
-            })
-    for charge in charges:
-        if charge["term_sort"] == target_sort:
-            staged_charges.append({**charge, "charge_kind": "CURRENT_TERM_CHARGE"})
-    staged_charges.sort(key=lambda charge: (
-        0 if charge["charge_kind"] == "HISTORICAL_FY_DEFICIT" else 1,
-        charge["fiscal_year_start"],
-        -(int(charge["priority_code"]) if charge["priority_code"] else -1),
-        charge["tran_number"],
-        charge["detail_code"],
-    ))
-
-    payment_remaining = {source["source_id"]: source["allocation_amount"] for source in staged_sources}
-    charge_remaining = [charge["charge_amount"] for charge in staged_charges]
-    transfers: list[dict[str, Any]] = []
-    given_by_fy: dict[int, Decimal] = defaultdict(lambda: ZERO)
-    received_by_fy: dict[int, Decimal] = defaultdict(lambda: ZERO)
     cap = _money(parameters.title_iv_cross_fy_cap)
-    for charge_index, charge in enumerate(staged_charges):
-        for source in staged_sources:
-            if charge["charge_kind"] != "HISTORICAL_FY_DEFICIT" and not _priority_matches(
-                charge["priority_code"], source["priority_code"]
-            ):
-                continue
-            available = payment_remaining[source["source_id"]]
-            allowed = available
-            cross_title_iv = (
-                source["is_title_iv"]
-                and source["fiscal_year_start"] != charge["fiscal_year_start"]
-            )
-            if cross_title_iv:
-                allowed = max(min(
-                    cap - given_by_fy[source["fiscal_year_start"]],
-                    cap - received_by_fy[charge["fiscal_year_start"]],
-                ), ZERO)
-            applied = _money(min(charge_remaining[charge_index], available, allowed))
-            charge_remaining[charge_index] -= applied
-            payment_remaining[source["source_id"]] -= applied
-            if cross_title_iv:
-                given_by_fy[source["fiscal_year_start"]] += applied
-                received_by_fy[charge["fiscal_year_start"]] += applied
-            transfers.append({"amount": applied, "charge": charge, "source": source})
+    payment_remaining, charge_remaining, transfers = _apply_pairs(
+        staged_charges,
+        staged_sources,
+        title_iv_cap=cap,
+    )
 
     selected_sources = []
     for sequence, source in enumerate(staged_sources, start=1):
@@ -689,9 +617,15 @@ def _allocate_account(
         if remaining > 0:
             selected_sources.append({**source, "source_credit_amount": remaining})
     unpaid_charges = _money(sum(charge_remaining, ZERO))
-    total_refund = _money(sum((source["source_credit_amount"] for source in selected_sources), ZERO))
+    policy_unused_total = _money(sum((source["source_credit_amount"] for source in selected_sources), ZERO))
     unused_fdpl = _money(sum((source["source_credit_amount"] for source in selected_sources if source["detail_code"] == "FDPL"), ZERO))
-    unused_non_fdpl = total_refund - unused_fdpl
+    unused_non_fdpl = policy_unused_total - unused_fdpl
+    account_credit = _money(max(-full_balance, ZERO))
+    policy_credit_mismatch = policy_unused_total != account_credit
+
+    eligible_balance = _money(sum((row["accounting_amount"] or ZERO for row in eligible_transactions), ZERO))
+    reconstructed_balance = _money(unpaid_charges - policy_unused_total)
+    ledger_residual = _money(eligible_balance - reconstructed_balance)
 
     selected_by_id = {source["source_id"]: source["source_credit_amount"] for source in selected_sources}
     stored_difference_count = sum(
@@ -708,7 +642,7 @@ def _allocate_account(
     unrestricted_to_older = _money(sum((
         transfer["amount"] for transfer in transfers
         if not transfer["source"]["is_title_iv"]
-        and transfer["charge"]["charge_kind"] == "HISTORICAL_FY_DEFICIT"
+        and transfer["source"]["term_sort"] > transfer["charge"]["term_sort"]
     ), ZERO))
 
     previous_balance = _money(sum((
@@ -793,13 +727,15 @@ def _allocate_account(
         negative_net_source_count,
         missing_auth_count,
         conflicting_auth_count,
+        policy_credit_mismatch,
+        ledger_residual != ZERO,
     ))
     if split_blocked:
         parent_amount = None
         student_amount = None
     else:
-        parent_amount = _money(min(total_refund, parent_fdpl_amount))
-        student_amount = _money(total_refund - parent_amount)
+        parent_amount = _money(min(account_credit, parent_fdpl_amount))
+        student_amount = _money(account_credit - parent_amount)
 
     cwid_upper = (account["cwid"] or "").upper()
     third_party = cwid_upper.startswith("TPS") or cwid_upper in legacy_third_party_cwids
@@ -813,7 +749,15 @@ def _allocate_account(
         third_party=third_party,
         active_ed=active_ed,
     )
-    if (parent_amount or ZERO) > 0 and plus_status in {"N", "MIXED"}:
+    if policy_credit_mismatch:
+        known_student_policy_amount = _money(max(policy_unused_total - parent_fdpl_amount, ZERO))
+        student_delivery = (
+            "REAPPLICATION REQUIRED" if known_student_policy_amount > 0 else "NONE"
+        )
+        parent_delivery = (
+            "REAPPLICATION REQUIRED" if parent_fdpl_amount > 0 else "NONE"
+        )
+    elif (parent_amount or ZERO) > 0 and plus_status in {"N", "MIXED"}:
         parent_delivery = "RFDP"
     elif (parent_amount or ZERO) > 0:
         parent_delivery = "PARENT_PLUS_AUTH_REVIEW"
@@ -825,7 +769,8 @@ def _allocate_account(
         or missing_balance_count > 0
         or stored_difference_count > 0
         or unpaid_charges > 0
-        or total_refund != max(-full_balance, ZERO)
+        or policy_credit_mismatch
+        or ledger_residual != ZERO
     )
     raw_refund = (account["raw_refund_account_ind"] or "").upper()
     refund_selected = "Y" if raw_refund == "Y" else "N" if raw_refund in {"", "N"} else "UNKNOWN"
@@ -854,7 +799,8 @@ def _allocate_account(
         "ARTIFICIAL_PRIORITY_DETAIL_CODE_HAS_UNEXPECTED_BASE_PRIORITY" if special_priority_mismatch_count else None,
         "NEGATIVE_NET_SOURCE_REQUIRES_REVIEW" if negative_net_source_count else None,
         "UNPAID_CHARGES_AFTER_POLICY_ALLOCATION" if unpaid_charges > 0 else None,
-        "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT" if total_refund != max(-full_balance, ZERO) else None,
+        "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT" if policy_credit_mismatch else None,
+        "ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS" if ledger_residual != ZERO else None,
         "REFUND_HOLD_RH" if refund_hold else None,
         "DECEASED_PERSON" if (account["deceased_ind"] or "").upper() == "Y" else None,
         "THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED" if third_party else None,
@@ -869,7 +815,9 @@ def _allocate_account(
         "ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE" if delivery_values["ach_date_review"] > 0 else None,
     ])
 
-    if refund_hold:
+    if policy_credit_mismatch:
+        review_status = "REAPPLICATION_REQUIRED"
+    elif refund_hold:
         review_status = "HOLD"
     elif allocation_review:
         review_status = "MANUAL_REVIEW"
@@ -891,7 +839,7 @@ def _allocate_account(
         "last_name": account["last_name"],
         "first_name": account["first_name"],
         "full_account_balance": full_balance,
-        "total_refund_amount": total_refund,
+        "total_refund_amount": account_credit,
         "proposed_student_delivery": student_delivery,
         "student_refund_amount": student_amount,
         "proposed_parent_delivery": parent_delivery,
@@ -899,7 +847,7 @@ def _allocate_account(
         "balance_sources": balance_sources,
         "plus_to_student_status": plus_status,
         "parent_plus_target_term": parameters.target_term,
-        "refund_split_status": "UNDETERMINED_SEE_REVIEW_REASONS" if student_amount is None else "CALCULATED_SUBJECT_TO_REVIEW",
+        "refund_split_status": "REAPPLICATION_REQUIRED" if policy_credit_mismatch else "UNDETERMINED_SEE_REVIEW_REASONS" if student_amount is None else "CALCULATED_SUBJECT_TO_REVIEW",
         "third_party_review_required_ind": "Y" if third_party else "N",
         "third_party_match_source": "TPS_CWID_PREFIX" if cwid_upper.startswith("TPS") else "LEGACY_CWID_LIST" if third_party else None,
         "refund_hold_ind": "Y" if refund_hold else "N",
@@ -913,7 +861,7 @@ def _allocate_account(
         "fdpl_priority_tie_rule": "EFFECTIVE_PRIORITY_THEN_EARLIEST_TRAN_NUMBER",
         "unused_fdpl_amount": unused_fdpl,
         "unused_non_fdpl_amount": unused_non_fdpl,
-        "total_unused_payment_amount": total_refund,
+        "total_unused_payment_amount": policy_unused_total,
         "unpaid_charge_amount": unpaid_charges,
         "allocation_review_required_ind": "Y" if allocation_review else "N",
         "previous_term_balance_before_current_payments": previous_balance,
@@ -937,7 +885,7 @@ def _allocate_account(
         "ed_activity_date": account["ed_activity_date"],
         "plus_auth_activity_date": plus_auth_activity,
     }
-    if total_refund <= 0 and full_balance >= 0:
+    if policy_unused_total <= 0 and account_credit <= 0:
         return None
     return result
 

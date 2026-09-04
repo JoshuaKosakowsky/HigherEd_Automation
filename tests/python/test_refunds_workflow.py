@@ -139,16 +139,22 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("OLD2", "C", "899", 150, term="209880"),
             Transaction("TIVA", "P", "000", 500, -300, category="FA", title_iv="Y"),
         ])
-        self.assert_split(row, "0.00", "300.00")
+        self.assertEqual(row["total_refund_amount"], Decimal("200.00"))
+        self.assertEqual(row["total_unused_payment_amount"], Decimal("300.00"))
+        self.assertIsNone(row["parent_refund_amount"])
+        self.assertIsNone(row["student_refund_amount"])
         self.assertEqual(row["unpaid_charge_amount"], Decimal("100.00"))
         self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], Decimal("200.00"))
+        self.assertEqual(row["review_status"], "REAPPLICATION_REQUIRED")
 
         destination = self.report([
             Transaction("OLD", "C", "899", 500, term="209780"),
             Transaction("TIVA", "P", "000", 300, -100, term="209880", aid_year="9899", category="FA", title_iv="Y"),
             Transaction("TIVB", "P", "000", 300, -300, category="FA", title_iv="Y"),
         ])
-        self.assert_split(destination, "0.00", "400.00")
+        self.assertEqual(destination["total_refund_amount"], Decimal("100.00"))
+        self.assertEqual(destination["total_unused_payment_amount"], Decimal("400.00"))
+        self.assertIsNone(destination["student_refund_amount"])
         self.assertEqual(destination["unpaid_charge_amount"], Decimal("300.00"))
 
     def test_same_fy_title_iv_and_unrestricted_cross_fy_are_not_capped(self) -> None:
@@ -267,15 +273,51 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertIn("P899", str(row["balance_sources"]))
         self.assertNotIn("P000", str(row["balance_sources"]))
 
-    def test_policy_refund_can_exist_while_full_account_is_debit(self) -> None:
+    def test_policy_unused_funds_do_not_become_an_actionable_refund(self) -> None:
         row = self.report([
             Transaction("OLD", "C", "899", 1500, 1300, term="209955"),
             Transaction("TIVA", "P", "000", 1200, -1000, category="FA", title_iv="Y"),
         ])
         self.assertEqual(row["full_account_balance"], Decimal("300.00"))
-        self.assert_split(row, "0.00", "1000.00")
+        self.assertEqual(row["total_refund_amount"], Decimal("0.00"))
+        self.assertEqual(row["total_unused_payment_amount"], Decimal("1000.00"))
+        self.assertIsNone(row["parent_refund_amount"])
+        self.assertIsNone(row["student_refund_amount"])
         self.assertEqual(row["unpaid_charge_amount"], Decimal("1300.00"))
         self.assertEqual(row["allocation_review_required_ind"], "Y")
+        self.assertEqual(row["review_status"], "REAPPLICATION_REQUIRED")
+
+    def test_zero_balance_unused_parent_plus_is_blocked_for_reapplication(self) -> None:
+        row = self.report([
+            Transaction("OLD7", "C", "700", "4375.00", term="209880"),
+            Transaction(
+                "FDPL", "P", "800", "4375.00", "-4375.00",
+                category="FA", title_iv="Y",
+            ),
+        ])
+        self.assertEqual(row["full_account_balance"], Decimal("0.00"))
+        self.assertEqual(row["total_refund_amount"], Decimal("0.00"))
+        self.assertEqual(row["unused_fdpl_amount"], Decimal("4375.00"))
+        self.assertEqual(row["unpaid_charge_amount"], Decimal("4375.00"))
+        self.assertIsNone(row["parent_refund_amount"])
+        self.assertIsNone(row["student_refund_amount"])
+        self.assertEqual(row["proposed_parent_delivery"], "REAPPLICATION REQUIRED")
+        self.assertEqual(row["refund_split_status"], "REAPPLICATION_REQUIRED")
+        self.assertEqual(row["review_status"], "REAPPLICATION_REQUIRED")
+        self.assertIn(
+            "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT",
+            str(row["review_reasons"]),
+        )
+
+    def test_balanced_old_term_is_not_discarded_before_current_allocation(self) -> None:
+        row = self.report([
+            Transaction("OLD7", "C", "700", 100, term="209880", tran_number=1),
+            Transaction("P899", "P", "899", 100, term="209880", tran_number=2),
+            Transaction("P000", "P", "000", 100, tran_number=3),
+        ])
+        self.assert_split(row, "0.00", "100.00")
+        self.assertIn("P899", str(row["balance_sources"]))
+        self.assertNotIn("P000", str(row["balance_sources"]))
 
     def test_bad_inputs_block_split_without_displaying_zero(self) -> None:
         missing_amount = self.report(

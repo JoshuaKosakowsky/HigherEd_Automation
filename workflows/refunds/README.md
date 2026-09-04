@@ -14,6 +14,7 @@ The local Python process then performs:
 
 - payment and charge reversal netting;
 - Mines term and Fall-through-Summer fiscal-year mapping;
+- separate charge pools for every term and priority, processed oldest term first;
 - Title IV classification and separate $200 giving/receiving fiscal-year caps;
 - unrestricted cross-term allocation;
 - Banner positional priority matching;
@@ -24,6 +25,14 @@ The local Python process then performs:
 - Excel output in the same column order as `Refunds.sql`.
 
 Financial calculations use `Decimal` cents rather than binary floating point.
+
+`total_refund_amount` is the actual full-account credit available for a refund.
+`total_unused_payment_amount`, `unused_fdpl_amount`, and `unpaid_charge_amount`
+show the reconstructed policy allocation. If reconstructed unused payments do
+not equal the account credit, the workflow leaves the parent/student amounts
+blank, suppresses actionable delivery codes, and reports
+`REAPPLICATION_REQUIRED`. This keeps the allocation discrepancy visible without
+recommending a refund that the current account balance cannot support.
 
 ## Run
 
