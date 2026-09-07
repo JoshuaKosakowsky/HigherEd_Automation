@@ -404,9 +404,11 @@ class GuiPowerShellContractTests(unittest.TestCase):
         self.assertIn("$env:TK_LIBRARY = $tkLibrary", self.tk_runtime)
 
     def test_tk_runtime_discovers_and_validates_base_python_libraries(self) -> None:
-        self.assertIn("sys.base_prefix", self.tk_runtime)
-        self.assertIn("_tkinter.TCL_VERSION", self.tk_runtime)
-        self.assertIn("_tkinter.TK_VERSION", self.tk_runtime)
+        self.assertIn("print(sys.base_prefix)", self.tk_runtime)
+        self.assertIn("print(_tkinter.TCL_VERSION)", self.tk_runtime)
+        self.assertIn("print(_tkinter.TK_VERSION)", self.tk_runtime)
+        self.assertNotIn('"base_prefix"', self.tk_runtime)
+        self.assertNotIn("ConvertFrom-Json", self.tk_runtime)
         self.assertIn('-RequiredFile "init.tcl"', self.tk_runtime)
         self.assertIn('-RequiredFile "tk.tcl"', self.tk_runtime)
         self.assertNotIn("Python313", self.tk_runtime)

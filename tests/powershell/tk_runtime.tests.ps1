@@ -45,10 +45,11 @@ try {
     New-Item -ItemType File -Path (Join-Path $tclLibrary "init.tcl") | Out-Null
     New-Item -ItemType File -Path (Join-Path $tkLibrary "tk.tcl") | Out-Null
 
-    $jsonBasePath = $pythonBase.Replace("\", "/")
     $fakePythonContent = @"
 @echo off
-echo {"base_prefix":"$jsonBasePath","tcl_version":"8.6","tk_version":"8.6"}
+echo $pythonBase
+echo 8.6
+echo 8.6
 exit /b 0
 "@
     Set-Content `

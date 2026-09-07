@@ -62,47 +62,34 @@ function Set-GuiTkRuntimeEnvironment {
 
     $runtimeCode = @"
 import _tkinter
-import json
 import sys
-print(json.dumps({
-    "base_prefix": sys.base_prefix,
-    "tcl_version": str(_tkinter.TCL_VERSION),
-    "tk_version": str(_tkinter.TK_VERSION),
-}))
+print(sys.base_prefix)
+print(_tkinter.TCL_VERSION)
+print(_tkinter.TK_VERSION)
 "@
 
-    $runtimeOutput = & $PythonExecutable -c $runtimeCode
+    $runtimeOutput = @(& $PythonExecutable -c $runtimeCode)
 
-    if ($LASTEXITCODE -ne 0 -or -not $runtimeOutput) {
+    if ($LASTEXITCODE -ne 0) {
         throw (
             "Python could not report its Tcl/Tk runtime information: " +
             $PythonExecutable
         )
     }
 
-    try {
-        $runtime = $runtimeOutput |
-            Select-Object -Last 1 |
-            ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        throw (
-            "Python returned invalid Tcl/Tk runtime information. " +
-            $_.Exception.Message
-        )
-    }
+    $runtimeLines = @(
+        $runtimeOutput |
+            ForEach-Object { ([string]$_).Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
 
-    $pythonBase = ([string]$runtime.base_prefix).Trim()
-    $tclVersion = ([string]$runtime.tcl_version).Trim()
-    $tkVersion = ([string]$runtime.tk_version).Trim()
-
-    if (
-        [string]::IsNullOrWhiteSpace($pythonBase) -or
-        [string]::IsNullOrWhiteSpace($tclVersion) -or
-        [string]::IsNullOrWhiteSpace($tkVersion)
-    ) {
+    if ($runtimeLines.Count -lt 3) {
         throw "Python returned incomplete Tcl/Tk runtime information."
     }
+
+    $pythonBase = $runtimeLines[-3]
+    $tclVersion = $runtimeLines[-2]
+    $tkVersion = $runtimeLines[-1]
 
     $tclRoot = Join-Path $pythonBase "tcl"
 
