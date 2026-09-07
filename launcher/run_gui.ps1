@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $pythonExecutable = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $windowedPython = Join-Path $projectRoot ".venv\Scripts\pythonw.exe"
+$tkRuntimeScript = Join-Path $projectRoot "powershell\gui\tk_runtime.ps1"
 
 
 function Show-GuiLaunchError {
@@ -41,6 +42,21 @@ The automation environment has not been set up.
 Open PowerShell in this repository and run:
     .\setup.ps1
 "@
+    }
+
+    if (-not (Test-Path -LiteralPath $tkRuntimeScript -PathType Leaf)) {
+        throw "The Tk runtime bootstrap was not found: $tkRuntimeScript"
+    }
+
+    . $tkRuntimeScript
+
+    $tkRuntime = Set-GuiTkRuntimeEnvironment `
+        -PythonExecutable $pythonExecutable
+
+    if ($Console) {
+        Write-Host "Python base: $($tkRuntime.PythonBase)"
+        Write-Host "Tcl library: $($tkRuntime.TclLibrary)"
+        Write-Host "Tk library: $($tkRuntime.TkLibrary)"
     }
 
     Push-Location $projectRoot

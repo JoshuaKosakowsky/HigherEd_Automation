@@ -371,6 +371,9 @@ class GuiPowerShellContractTests(unittest.TestCase):
         cls.shortcut = (
             project_root / "powershell" / "gui" / "install_desktop_shortcut.ps1"
         ).read_text(encoding="utf-8")
+        cls.tk_runtime = (
+            project_root / "powershell" / "gui" / "tk_runtime.ps1"
+        ).read_text(encoding="utf-8")
 
     def test_launcher_uses_repository_windowed_python(self) -> None:
         self.assertIn('.venv\\Scripts\\pythonw.exe', self.launcher)
@@ -387,8 +390,26 @@ class GuiPowerShellContractTests(unittest.TestCase):
         setup = (project_root / "setup.ps1").read_text(encoding="utf-8")
         requirements = (project_root / "requirements.txt").read_text(encoding="utf-8")
 
-        self.assertIn("import tkinterdnd2", setup)
+        self.assertIn("root = TkinterDnD.Tk()", setup)
+        self.assertIn("root.destroy()", setup)
         self.assertIn("tkinterdnd2==0.6.1", requirements)
+
+    def test_launcher_sets_process_scoped_tcl_tk_paths_before_launch(self) -> None:
+        runtime_call = self.launcher.index("Set-GuiTkRuntimeEnvironment")
+        gui_launch = self.launcher.index("-m app.gui.main")
+
+        self.assertLess(runtime_call, gui_launch)
+        self.assertIn(". $tkRuntimeScript", self.launcher)
+        self.assertIn("$env:TCL_LIBRARY = $tclLibrary", self.tk_runtime)
+        self.assertIn("$env:TK_LIBRARY = $tkLibrary", self.tk_runtime)
+
+    def test_tk_runtime_discovers_and_validates_base_python_libraries(self) -> None:
+        self.assertIn("sys.base_prefix", self.tk_runtime)
+        self.assertIn("_tkinter.TCL_VERSION", self.tk_runtime)
+        self.assertIn("_tkinter.TK_VERSION", self.tk_runtime)
+        self.assertIn('-RequiredFile "init.tcl"', self.tk_runtime)
+        self.assertIn('-RequiredFile "tk.tcl"', self.tk_runtime)
+        self.assertNotIn("Python313", self.tk_runtime)
 
 
 if __name__ == "__main__":

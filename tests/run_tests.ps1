@@ -20,6 +20,9 @@ $fiscalPeriodTests = Join-Path `
 $reportFilingTests = Join-Path `
     $PSScriptRoot `
     "powershell\report_filing.tests.ps1"
+$tkRuntimeTests = Join-Path `
+    $PSScriptRoot `
+    "powershell\tk_runtime.tests.ps1"
 
 if (-not (Test-Path -LiteralPath $pythonExecutable -PathType Leaf)) {
     throw @"
@@ -46,6 +49,10 @@ if (-not (Test-Path -LiteralPath $reportFilingTests -PathType Leaf)) {
     throw "Report-filing test script not found: $reportFilingTests"
 }
 
+if (-not (Test-Path -LiteralPath $tkRuntimeTests -PathType Leaf)) {
+    throw "Tk runtime test script not found: $tkRuntimeTests"
+}
+
 Write-Host ""
 Write-Host "HigherEd Automation Tests" -ForegroundColor Cyan
 Write-Host "=========================" -ForegroundColor Cyan
@@ -54,7 +61,7 @@ Push-Location $repositoryRoot
 
 try {
     Write-Host ""
-    Write-Host "[1/4] Running Python tests" -ForegroundColor Cyan
+    Write-Host "[1/5] Running Python tests" -ForegroundColor Cyan
 
     & $pythonExecutable `
         -m unittest discover `
@@ -66,19 +73,24 @@ try {
     }
 
     Write-Host ""
-    Write-Host "[2/4] Running Banner term tests" -ForegroundColor Cyan
+    Write-Host "[2/5] Running Banner term tests" -ForegroundColor Cyan
 
     & $bannerTermTests
 
     Write-Host ""
-    Write-Host "[3/4] Running fiscal-period tests" -ForegroundColor Cyan
+    Write-Host "[3/5] Running fiscal-period tests" -ForegroundColor Cyan
 
     & $fiscalPeriodTests
 
     Write-Host ""
-    Write-Host "[4/4] Running report-filing tests" -ForegroundColor Cyan
+    Write-Host "[4/5] Running report-filing tests" -ForegroundColor Cyan
 
     & $reportFilingTests
+
+    Write-Host ""
+    Write-Host "[5/5] Running Tk runtime tests" -ForegroundColor Cyan
+
+    & $tkRuntimeTests
 }
 catch {
     Write-Host ""

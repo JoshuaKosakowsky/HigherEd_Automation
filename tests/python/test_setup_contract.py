@@ -23,6 +23,14 @@ class SetupPowerShellContractTests(unittest.TestCase):
             self.setup,
         )
         self.assertIn("import tkinter", self.setup)
+        self.assertIn("root = TkinterDnD.Tk()", self.setup)
+
+    def test_setup_configures_tk_runtime_before_gui_verification(self) -> None:
+        runtime_setup = self.setup.index("Set-GuiTkRuntimeEnvironment")
+        tkinter_window = self.setup.index("root = TkinterDnD.Tk()")
+
+        self.assertLess(runtime_setup, tkinter_window)
+        self.assertIn('"powershell\\gui\\tk_runtime.ps1"', self.setup)
 
     def test_setup_installs_shortcuts_before_reporting_completion(self) -> None:
         shortcut_step = self.setup.index(

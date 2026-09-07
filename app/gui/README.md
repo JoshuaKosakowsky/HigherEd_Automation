@@ -22,6 +22,8 @@ layout; accent colors remain limited.
 - workflow-specific service adapters translate form values into existing
   pipeline configuration. They do not reimplement processing rules.
 - `launcher/run_gui.ps1` starts the app with the repository virtual environment.
+- `powershell/gui/tk_runtime.ps1` discovers and validates the base Python Tcl/Tk
+  libraries and supplies process-scoped paths to setup and the GUI launcher.
 - `shared/user_settings.py` reads the same per-user JSON written by `setup.ps1`.
   The home page greets the employee by first name and uses `User` when settings
   are unavailable or invalid.
@@ -92,7 +94,10 @@ python3 -m pip install tkinterdnd2==0.6.1
 ```
 
 The `--review-as` identity override is rejected on Windows staff installations.
-Windows setup installs and verifies the drag/drop package automatically.
+Windows setup installs the drag/drop package and creates and destroys a real
+TkinterDnD window during verification. A missing or incorrectly resolved
+`init.tcl` therefore fails setup with a Tcl/Tk repair message instead of failing
+later from the desktop shortcut.
 
 Run the automated suite with:
 
