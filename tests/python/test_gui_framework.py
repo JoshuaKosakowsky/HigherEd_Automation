@@ -24,6 +24,7 @@ from app.gui.services.access import (
 )
 from app.gui.services.drag_drop import parse_dropped_files, register_file_drop
 from app.gui.services.population_testing import run_population_testing
+from app.gui.services.refunds import run_refund_review
 from app.gui.services.textbook_brokers import run_textbook_brokers
 from app.gui import theme
 from app.gui.workflow_registry import get_workflow, get_workflows
@@ -44,6 +45,7 @@ class WorkflowRegistryTests(unittest.TestCase):
             get_workflow("population_testing").name,
             "Student Testing Population",
         )
+        self.assertEqual(get_workflow("refund_review").name, "Refund Review")
         self.assertEqual(get_workflow("textbook_brokers").name, "Textbook Brokers")
 
     def test_test_is_default_when_a_workflow_supports_both_modes(self) -> None:
@@ -274,6 +276,69 @@ class PopulationTestingAdapterTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "different from the source"):
                 run_population_testing(context)
+
+
+class RefundReviewAdapterTests(unittest.TestCase):
+    def test_adapter_builds_existing_manual_download_pipeline_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transaction_file = root / "refund_transactions.xlsx"
+            context_file = root / "refund_context.xlsx"
+            output_file = root / "refund_review.xlsx"
+            transaction_file.touch()
+            context_file.touch()
+            context = WorkflowContext(
+                workflow_id="refund_review",
+                parameters={
+                    "target_term": "202680",
+                    "transaction_file": transaction_file,
+                    "context_file": context_file,
+                    "output_file": output_file,
+                },
+            )
+
+            with patch(
+                "app.gui.services.refunds.run_refund_download_pipeline",
+                return_value=(output_file, [object(), object()]),
+            ) as pipeline:
+                result = run_refund_review(context)
+
+            arguments = pipeline.call_args.kwargs
+            self.assertEqual(arguments["parameters"].target_term, "202680")
+            self.assertEqual(arguments["parameters"].run_date, date.today())
+            self.assertEqual(arguments["transaction_file"], transaction_file)
+            self.assertEqual(arguments["context_file"], context_file)
+            self.assertEqual(arguments["output_file"], output_file)
+            self.assertEqual(result.output_path, output_file)
+            self.assertIn("2 account(s)", result.message)
+            self.assertIn("does not approve or issue refunds", result.message)
+
+    def test_adapter_refuses_to_overwrite_an_existing_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transaction_file = root / "refund_transactions.xlsx"
+            context_file = root / "refund_context.xlsx"
+            output_file = root / "refund_review.xlsx"
+            transaction_file.touch()
+            context_file.touch()
+            output_file.touch()
+            context = WorkflowContext(
+                workflow_id="refund_review",
+                parameters={
+                    "target_term": "202680",
+                    "transaction_file": transaction_file,
+                    "context_file": context_file,
+                    "output_file": output_file,
+                },
+            )
+
+            with patch(
+                "app.gui.services.refunds.run_refund_download_pipeline"
+            ) as pipeline:
+                with self.assertRaisesRegex(ValueError, "already exists"):
+                    run_refund_review(context)
+
+            pipeline.assert_not_called()
 
 
 class TextbookBrokersAdapterTests(unittest.TestCase):

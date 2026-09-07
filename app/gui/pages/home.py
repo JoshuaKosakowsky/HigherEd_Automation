@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Iterable
 
 from app.gui.models import WorkflowDefinition
+from app.gui.theme import PAGE
 
 
 class HomePage(ttk.Frame):
@@ -19,16 +21,40 @@ class HomePage(ttk.Frame):
         user_first_name: str,
         profile_description: str | None = None,
     ) -> None:
-        super().__init__(parent, style="App.TFrame", padding=(36, 28))
-        self.columnconfigure(0, weight=1)
+        super().__init__(parent, style="App.TFrame")
+
+        self.canvas = tk.Canvas(
+            self,
+            background=PAGE,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.body = ttk.Frame(
+            self.canvas,
+            style="App.TFrame",
+            padding=(36, 28),
+        )
+        self.body.columnconfigure(0, weight=1)
+        self.body_window = self.canvas.create_window(
+            (0, 0),
+            window=self.body,
+            anchor="nw",
+        )
+        self.body.bind("<Configure>", self._update_scroll_region)
+        self.canvas.bind("<Configure>", self._resize_body)
 
         ttk.Label(
-            self,
+            self.body,
             text=f"Welcome {user_first_name}",
             style="PageTitle.TLabel",
         ).grid(row=0, column=0, sticky="w")
         ttk.Label(
-            self,
+            self.body,
             text=(
                 "Choose an automation to review its inputs before anything runs."
             ),
@@ -37,7 +63,7 @@ class HomePage(ttk.Frame):
 
         if profile_description:
             ttk.Label(
-                self,
+                self.body,
                 text=profile_description,
                 style="Muted.TLabel",
             ).grid(row=2, column=0, sticky="w", pady=(0, 18))
@@ -48,7 +74,7 @@ class HomePage(ttk.Frame):
 
         if not by_category:
             ttk.Label(
-                self,
+                self.body,
                 text=(
                     "No automations are assigned to this user profile. "
                     "Contact the automation administrator if access is needed."
@@ -61,7 +87,7 @@ class HomePage(ttk.Frame):
 
         row = 3
         for category, definitions in by_category.items():
-            ttk.Label(self, text=category, style="Section.TLabel").grid(
+            ttk.Label(self.body, text=category, style="Section.TLabel").grid(
                 row=row,
                 column=0,
                 sticky="w",
@@ -69,7 +95,7 @@ class HomePage(ttk.Frame):
             )
             row += 1
 
-            card_area = ttk.Frame(self, style="App.TFrame")
+            card_area = ttk.Frame(self.body, style="App.TFrame")
             card_area.grid(row=row, column=0, sticky="ew", pady=(0, 22))
             card_area.columnconfigure(0, weight=1)
             card_area.columnconfigure(1, weight=1)
@@ -83,6 +109,12 @@ class HomePage(ttk.Frame):
                     column=index % 2,
                 )
             row += 1
+
+    def _update_scroll_region(self, _event=None) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _resize_body(self, event) -> None:
+        self.canvas.itemconfigure(self.body_window, width=event.width)
 
     @staticmethod
     def _add_card(

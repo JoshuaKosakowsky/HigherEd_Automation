@@ -33,6 +33,11 @@ The integrated workflows are:
 - **Student Testing Population**, using its existing typed Python configuration
   and pipeline. It does not have a run-level TEST or PROD switch: the workflow
   creates balanced TEST/PROD assignments inside the result workbook.
+- **Refund Review**, using the existing manual-download Python pipeline. An
+  administrator selects the matching transaction and account-context exports
+  from Insights. The app calculates and formats the review locally; it does not
+  approve or issue refunds. API extraction, resuming batches, and single-account
+  API validation remain available through the existing PowerShell launcher.
 - **Textbook Brokers**, using the existing local transformation to combine one
   or more selected `finaid_*.csv` / `ia_*.csv` sources into a new TSPLOAD file.
   The GUI action does not connect to SFTP, move source files, confirm a Banner
@@ -114,9 +119,11 @@ The next useful migration steps are:
 
 1. split Textbook Brokers SFTP discovery/preview from its consequential archive
    execution before exposing those stages in the GUI;
-2. integrate the read-only Refund Review workflow for the AR/Analyst role;
-3. integrate Historical Trends after confirming its role and input/output selection;
-4. add a small structured recent-activity file now that more than one workflow is
+2. decide whether Refund Review API extraction and batch-resume controls belong
+   in the GUI after the manual workflow has been operationally validated;
+3. explicitly approve workflows for the AR/Analyst and Cashier views;
+4. integrate Historical Trends after confirming its role and input/output selection;
+5. add a small structured recent-activity file now that more than one workflow is
    available.
 
 Adding a workflow should usually require a `WorkflowDefinition` and a thin

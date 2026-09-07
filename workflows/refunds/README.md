@@ -66,6 +66,11 @@ The files may remain in Downloads instead. Pass their complete paths to
 folder. The recommended input folder simply makes the two files easy to identify
 and is already protected by `.gitignore`.
 
+Administrators may run this same manual-download pipeline from **Refund Review**
+in the Mines Bursar Automation desktop app. The GUI accepts a path, Browse
+selection, or file drop for each download and refuses to overwrite an existing
+review workbook. The analyst and cashier views are not assigned this workflow.
+
 For a single-account validation, set the same `cwid_filter` inside both manual
 SQL files before running them. Leave `cwid_filter` NULL for the population.
 Do not save or commit a populated CWID in either SQL file.

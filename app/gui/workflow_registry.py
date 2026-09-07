@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from data_processing.population_testing.config import (
@@ -13,6 +14,7 @@ from data_processing.population_testing.config import (
 
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition
 from app.gui.services.population_testing import run_population_testing
+from app.gui.services.refunds import run_refund_review
 from app.gui.services.textbook_brokers import run_textbook_brokers
 from shared.banner.term import get_banner_term
 
@@ -70,6 +72,85 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 kind=ParameterKind.NAME_LIST,
                 default=DEFAULT_STAFF_NAMES,
                 help_text="Enter one unique name per line.",
+            ),
+        ),
+    ),
+    WorkflowDefinition(
+        workflow_id="refund_review",
+        name="Refund Review",
+        description=(
+            "Calculates a read-only refund review workbook from the transaction "
+            "and account-context files downloaded from Insights. It does not "
+            "approve or issue refunds."
+        ),
+        category="Accounts Receivable",
+        runner=run_refund_review,
+        parameters=(
+            ParameterDefinition(
+                key="target_term",
+                label="Banner target term",
+                kind=ParameterKind.TEXT,
+                default=CURRENT_TERM.code,
+                help_text=f"Current term: {CURRENT_TERM.name} ({CURRENT_TERM.code}).",
+            ),
+            ParameterDefinition(
+                key="transaction_file",
+                label="Refund transaction download",
+                kind=ParameterKind.INPUT_FILE,
+                default=(
+                    PROJECT_ROOT
+                    / "data"
+                    / "refunds"
+                    / "input"
+                    / "refund_transactions.xlsx"
+                ),
+                help_text=(
+                    "Select the complete XLSX or CSV result downloaded from "
+                    "refund_transactions_manual.sql."
+                ),
+                file_types=(
+                    ("Excel and CSV files", "*.xlsx *.csv"),
+                    ("All files", "*.*"),
+                ),
+            ),
+            ParameterDefinition(
+                key="context_file",
+                label="Refund account-context download",
+                kind=ParameterKind.INPUT_FILE,
+                default=(
+                    PROJECT_ROOT
+                    / "data"
+                    / "refunds"
+                    / "input"
+                    / "refund_context.xlsx"
+                ),
+                help_text=(
+                    "Select the matching complete XLSX or CSV result downloaded "
+                    "from refund_context_manual.sql."
+                ),
+                file_types=(
+                    ("Excel and CSV files", "*.xlsx *.csv"),
+                    ("All files", "*.*"),
+                ),
+            ),
+            ParameterDefinition(
+                key="output_file",
+                label="Save refund review as",
+                kind=ParameterKind.OUTPUT_FILE,
+                default=(
+                    PROJECT_ROOT
+                    / "data"
+                    / "refunds"
+                    / (
+                        f"refund_review_{CURRENT_TERM.code}_"
+                        f"{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+                    )
+                ),
+                help_text=(
+                    "For safety, an existing review workbook will not be overwritten."
+                ),
+                file_types=(("Excel workbook", "*.xlsx"),),
+                default_extension=".xlsx",
             ),
         ),
     ),

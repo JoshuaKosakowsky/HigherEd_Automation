@@ -77,11 +77,11 @@ Python or keep a PowerShell window open.
 
 Available workflows are based on the signed-in Windows login and the private
 GUI access policy provisioned by the automation administrator. The name saved
-during setup is used only for the welcome message. The first GUI integrations
-are **Student Testing Population** and the local **Textbook Brokers**
-CSV-to-TSPLOAD transformation. File inputs accept a typed or pasted path, the
-Browse button, or a file dropped from Explorer. Existing command-line workflows
-remain available.
+during setup is used only for the welcome message. The initial GUI integrations
+are **Student Testing Population**, the manual-download **Refund Review**, and
+the local **Textbook Brokers** CSV-to-TSPLOAD transformation. File inputs accept
+a typed or pasted path, the Browse button, or a file dropped from Explorer.
+Existing command-line workflows remain available.
 
 ### Optional PowerShell shortcuts
 
