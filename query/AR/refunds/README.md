@@ -238,9 +238,6 @@ dates, raw amount and balance totals, reversal counts, priority, category, and
 Title IV flag. The transaction detail is needed to verify same-priority source
 ordering and ACH timing. It does not calculate refund ownership.
 
-`Refund_info.sql` remains a small diagnostic for `TBBACCT` rows with delinquency
-code `RH`; it is not the refund population.
-
 ## Validation workflow
 
 1. Run `validate_refund_schema.sql` and resolve every `MISSING` result.

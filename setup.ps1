@@ -12,9 +12,13 @@ $UserSettingsScript = Join-Path $ProjectRoot "shared\user_settings.ps1"
 $ProfileSetupScript = Join-Path `
     $ProjectRoot `
     "powershell\credentials\setup_profile.ps1"
+$GuiLauncher = Join-Path $ProjectRoot "launcher\run_gui.ps1"
+$GuiShortcutSetupScript = Join-Path `
+    $ProjectRoot `
+    "powershell\gui\install_desktop_shortcut.ps1"
 $MinimumPythonVersion = [version]"3.11"
 $StepNumber = 0
-$StepCount = 7
+$StepCount = 8
 
 
 function Write-SetupStep {
@@ -248,6 +252,14 @@ Download or synchronize the complete HigherEd_Automation folder and try again.
         throw "The repository is incomplete because this file was not found: $UserSettingsScript"
     }
 
+    if (-not (Test-Path -LiteralPath $GuiLauncher -PathType Leaf)) {
+        throw "The repository is incomplete because this file was not found: $GuiLauncher"
+    }
+
+    if (-not (Test-Path -LiteralPath $GuiShortcutSetupScript -PathType Leaf)) {
+        throw "The repository is incomplete because this file was not found: $GuiShortcutSetupScript"
+    }
+
     . $UserSettingsScript
 
     Set-Location $ProjectRoot
@@ -324,6 +336,8 @@ import numpy
 import openpyxl
 import pandas
 import requests
+import tkinter
+import tkinterdnd2
 from playwright.sync_api import sync_playwright
 "@
 
@@ -349,6 +363,9 @@ from playwright.sync_api import sync_playwright
     Write-SetupStep "Installing PowerShell shortcuts"
     & $ProfileSetupScript
 
+    Write-SetupStep "Installing the desktop application shortcut"
+    & $GuiShortcutSetupScript -ProjectRoot $ProjectRoot
+
     Write-Host ""
     Write-Host "SETUP COMPLETE" -ForegroundColor Green
     Write-Host "==============" -ForegroundColor Green
@@ -356,8 +373,8 @@ from playwright.sync_api import sync_playwright
     Write-Host ""
     Write-Host "You do not need to activate Python manually."
     Write-Host ""
-    Write-Host "Close this PowerShell window and open a new one."
-    Write-Host "The automation shortcuts will load automatically."
+    Write-Host "Use the 'Mines Bursar Automation' desktop shortcut to open the app."
+    Write-Host "PowerShell workflow shortcuts remain available in a new window."
 }
 catch {
     Write-Host ""

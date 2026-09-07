@@ -40,9 +40,10 @@ Copy this command, paste it into PowerShell, and press Enter:
 Setup creates a private Python environment inside this repository, installs
 the required packages, verifies them, installs Playwright browser support, and
 asks for your name and initials. It also installs the PowerShell shortcuts used
-to run the automation tools. Your user details are stored only under your
-Windows account and can be changed by running setup again. Setup may take
-several minutes the first time.
+to run the automation tools and creates a **Mines Bursar Automation** desktop
+shortcut. Your user details are stored only under your Windows account and can
+be changed by running setup again. Setup may take several minutes the first
+time.
 
 Setup is successful when the terminal displays:
 
@@ -63,12 +64,26 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 Enter `Y` if PowerShell asks for confirmation, then run `setup.ps1` again.
 
-### 4. Open a new PowerShell window
+### 4. Open Mines Bursar Automation
+
+Double-click **Mines Bursar Automation** on the Windows desktop. The app starts
+with the repository's private Python environment; staff do not need to activate
+Python or keep a PowerShell window open.
+
+Available workflows are based on the signed-in Windows login and the private
+GUI access policy provisioned by the automation administrator. The name saved
+during setup is used only for the welcome message. The first GUI integrations
+are **Student Testing Population** and the local **Textbook Brokers**
+CSV-to-TSPLOAD transformation. File inputs accept a typed or pasted path, the
+Browse button, or a file dropped from Explorer. Existing command-line workflows
+remain available.
+
+### Optional PowerShell shortcuts
 
 The shortcuts are the normal way to run the automation tools on computers that
-do not have a development application such as VS Code. Setup installs them
-automatically. Close PowerShell after setup completes, then open a new
-PowerShell window. The shortcuts will load without any additional commands.
+need a workflow that has not yet moved into the desktop app. Setup installs them
+automatically. Close PowerShell after setup completes, then open a new PowerShell
+window. The shortcuts will load without any additional commands.
 
 The following commands will now be available:
 
@@ -83,6 +98,9 @@ The following commands will now be available:
 | `start-textbook-brokers` | Runs Textbook Brokers. |
 | `archive-textbook-brokers` | Archives the current Textbook Brokers term after Banner upload. |
 | `setup-report-watcher` | Installs or updates the Cashier Downloads watcher for the signed-in employee. |
+
+GUI architecture, developer launch instructions, and the rollout boundary are
+documented in [app/gui/README.md](app/gui/README.md).
 
 ## Cashier report filing watcher
 
@@ -152,3 +170,6 @@ matches exactly and that OneDrive has finished synchronizing it.
 
 Review the newest file under `logs`. Preserve that log when requesting support;
 it identifies the stage that failed without requiring another production run.
+
+The desktop application writes its technical log under `logs/gui`. Use **Open
+Log Folder** on a workflow page to locate it without opening PowerShell.

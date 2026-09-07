@@ -22,6 +22,7 @@ class SetupPowerShellContractTests(unittest.TestCase):
             'Write-Host "Required Python packages are available."',
             self.setup,
         )
+        self.assertIn("import tkinter", self.setup)
 
     def test_setup_installs_shortcuts_before_reporting_completion(self) -> None:
         shortcut_step = self.setup.index(
@@ -32,7 +33,18 @@ class SetupPowerShellContractTests(unittest.TestCase):
 
         self.assertLess(shortcut_step, shortcut_install)
         self.assertLess(shortcut_install, setup_complete)
-        self.assertIn('$StepCount = 7', self.setup)
+        self.assertIn('$StepCount = 8', self.setup)
+
+    def test_setup_installs_gui_shortcut_after_launcher_validation(self) -> None:
+        self.assertIn('"launcher\\run_gui.ps1"', self.setup)
+        self.assertIn(
+            'Write-SetupStep "Installing the desktop application shortcut"',
+            self.setup,
+        )
+        self.assertIn(
+            '& $GuiShortcutSetupScript -ProjectRoot $ProjectRoot',
+            self.setup,
+        )
 
     def test_shortcuts_load_on_the_next_powershell_session(self) -> None:
         self.assertNotIn('Write-Host ". `$PROFILE"', self.profile_setup)

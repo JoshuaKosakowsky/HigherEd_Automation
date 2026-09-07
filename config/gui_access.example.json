@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "users": {
+    "EXAMPLE-ADMIN-LOGIN": {
+      "displayName": "Example Admin",
+      "jobTitle": "Bursar Office Administrator",
+      "view": "administrator"
+    }
+  },
+  "views": {
+    "administrator": {
+      "workflows": [
+        "*"
+      ]
+    },
+    "analyst": {
+      "workflows": []
+    },
+    "cashier": {
+      "workflows": []
+    }
+  }
+}

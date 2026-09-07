@@ -42,10 +42,13 @@ logs/**
 # JSON data
 # Detail-code data is generated locally and may contain operational metadata.
 detail_codes.json
+config/gui_access.json
 
-# Allow specific JSON files that belong to the application
+# Allow public examples that belong to the application. The live GUI access
+# file contains staff identifiers and remains local/private.
 # Add exceptions here as needed:
 # !config/example.json
+!config/gui_access.example.json
 # !package.json
 # !package-lock.json
 
