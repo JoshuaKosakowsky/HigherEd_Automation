@@ -1,21 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
-from data_processing.refunds.export import export_refund_report
+from data_processing.refunds.export import REFUND_SHEETS, WORKBOOK_COLUMNS, export_refund_report
 from data_processing.refunds.extract import (
     ExtractSettings,
     _validate_complete_result,
     extract_refund_data,
+    read_refund_extracts,
     render_extract_sql,
+    render_manual_extract_sql,
 )
 from data_processing.refunds.ingest import read_refund_download
 from data_processing.refunds.terms import derive_target_term, fiscal_year_start, previous_term
@@ -142,22 +145,19 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("OLD2", "C", "899", 150, term="209880"),
             Transaction("TIVA", "P", "000", 500, -300, category="FA", title_iv="Y"),
         ])
-        self.assertEqual(row["total_refund_amount"], Decimal("200.00"))
+        self.assert_split(row, "0.00", "300.00")
         self.assertEqual(row["total_unused_payment_amount"], Decimal("300.00"))
-        self.assertIsNone(row["parent_refund_amount"])
-        self.assertIsNone(row["student_refund_amount"])
         self.assertEqual(row["unpaid_charge_amount"], Decimal("100.00"))
         self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], Decimal("200.00"))
-        self.assertEqual(row["review_status"], "REAPPLICATION_REQUIRED")
+        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
 
         destination = self.report([
             Transaction("OLD", "C", "899", 500, term="209780"),
             Transaction("TIVA", "P", "000", 300, -100, term="209880", aid_year="9899", category="FA", title_iv="Y"),
             Transaction("TIVB", "P", "000", 300, -300, category="FA", title_iv="Y"),
         ])
-        self.assertEqual(destination["total_refund_amount"], Decimal("100.00"))
+        self.assert_split(destination, "0.00", "400.00")
         self.assertEqual(destination["total_unused_payment_amount"], Decimal("400.00"))
-        self.assertIsNone(destination["student_refund_amount"])
         self.assertEqual(destination["unpaid_charge_amount"], Decimal("300.00"))
 
     def test_same_fy_title_iv_and_unrestricted_cross_fy_are_not_capped(self) -> None:
@@ -190,13 +190,14 @@ class RefundAllocationTests(unittest.TestCase):
         ])
         self.assert_split(early_fdpl, "0.00", "100.00")
 
-        last_000 = self.report([
+        regular_000 = self.report([
             Transaction("CHG", "C", "700", 100),
             Transaction("ACHK", "P", "000", 100, -100),
             Transaction("PAY0", "P", "000", 100),
         ])
-        self.assertIn("000Z", str(last_000["balance_sources"]))
-        self.assertEqual(last_000["proposed_student_delivery"], "AFRD (Transact)")
+        self.assertIn("PAY0", str(regular_000["balance_sources"]))
+        self.assertNotIn("ACHK", str(regular_000["balance_sources"]))
+        self.assertEqual(regular_000["proposed_student_delivery"], "ARFD (System)")
 
         first_000 = self.report([
             Transaction("CHG", "C", "700", 100),
@@ -276,21 +277,13 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertIn("P899", str(row["balance_sources"]))
         self.assertNotIn("P000", str(row["balance_sources"]))
 
-    def test_policy_unused_funds_do_not_become_an_actionable_refund(self) -> None:
-        row = self.report([
+    def test_positive_account_balance_is_excluded_despite_restricted_funds(self) -> None:
+        self.report([
             Transaction("OLD", "C", "899", 1500, 1300, term="209955"),
             Transaction("TIVA", "P", "000", 1200, -1000, category="FA", title_iv="Y"),
-        ])
-        self.assertEqual(row["full_account_balance"], Decimal("300.00"))
-        self.assertEqual(row["total_refund_amount"], Decimal("0.00"))
-        self.assertEqual(row["total_unused_payment_amount"], Decimal("1000.00"))
-        self.assertIsNone(row["parent_refund_amount"])
-        self.assertIsNone(row["student_refund_amount"])
-        self.assertEqual(row["unpaid_charge_amount"], Decimal("1300.00"))
-        self.assertEqual(row["allocation_review_required_ind"], "Y")
-        self.assertEqual(row["review_status"], "REAPPLICATION_REQUIRED")
+        ], expected_rows=0)
 
-    def test_zero_balance_unused_parent_plus_is_blocked_for_reapplication(self) -> None:
+    def test_zero_balance_restricted_parent_plus_keeps_split_and_review(self) -> None:
         row = self.report([
             Transaction("OLD7", "C", "700", "4375.00", term="209880"),
             Transaction(
@@ -299,14 +292,12 @@ class RefundAllocationTests(unittest.TestCase):
             ),
         ])
         self.assertEqual(row["full_account_balance"], Decimal("0.00"))
-        self.assertEqual(row["total_refund_amount"], Decimal("0.00"))
+        self.assert_split(row, "4375.00", "0.00")
         self.assertEqual(row["unused_fdpl_amount"], Decimal("4375.00"))
         self.assertEqual(row["unpaid_charge_amount"], Decimal("4375.00"))
-        self.assertIsNone(row["parent_refund_amount"])
-        self.assertIsNone(row["student_refund_amount"])
-        self.assertEqual(row["proposed_parent_delivery"], "REAPPLICATION REQUIRED")
-        self.assertEqual(row["refund_split_status"], "REAPPLICATION_REQUIRED")
-        self.assertEqual(row["review_status"], "REAPPLICATION_REQUIRED")
+        self.assertEqual(row["proposed_parent_delivery"], "RFDP")
+        self.assertEqual(row["refund_split_status"], "CALCULATED_SUBJECT_TO_REVIEW")
+        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
         self.assertIn(
             "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT",
             str(row["review_reasons"]),
@@ -321,6 +312,170 @@ class RefundAllocationTests(unittest.TestCase):
         self.assert_split(row, "0.00", "100.00")
         self.assertIn("P000", str(row["balance_sources"]))
         self.assertNotIn("P899", str(row["balance_sources"]))
+
+    def test_exact_priority_refund_on_zero_account_in_current_or_open_old_term(self) -> None:
+        for term in ("209980", "209880"):
+            with self.subTest(term=term):
+                row = self.report([
+                    Transaction("TUIN", "C", "899", 10000, 500, term=term),
+                    Transaction("FEE", "C", "897", 1000, 0, term=term),
+                    Transaction("P899", "P", "899", 9500, 0, term=term),
+                    Transaction("P897", "P", "897", 1500, -500, term=term),
+                ])
+                self.assert_split(row, "0.00", "500.00")
+                self.assertEqual(row["full_account_balance"], Decimal("0.00"))
+                self.assertEqual(row["unpaid_charge_amount"], Decimal("500.00"))
+                self.assertEqual(row["proposed_student_delivery"], "ARFD (System)")
+                self.assertIn("RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE", row["review_reasons"])
+
+    def test_exact_match_remainders_and_cross_term_title_iv_limits(self) -> None:
+        for priority in ("899", "869"):
+            row = self.report([
+                Transaction("EXCT", "C", priority, 800),
+                Transaction("PAYX", "P", priority, 1000, -200),
+            ])
+            self.assert_split(row, "0.00", "200.00")
+        for title_iv, term, target, expected, unpaid in (
+            ("Y", "209980", "210010", "200.00", "0.00"),
+            ("Y", "209955", "209980", "800.00", "600.00"),
+            ("N", "209955", "209980", "200.00", "0.00"),
+        ):
+            with self.subTest(title_iv=title_iv, term=term):
+                row = self.report([
+                    Transaction("EXCT", "C", "869", 800, term=term),
+                    Transaction("PAYX", "P", "869", 1000, -200, term=target,
+                                title_iv=title_iv, category="FA"),
+                ], target_term=target)
+                self.assert_split(row, "0.00", expected)
+                self.assertEqual(row["unpaid_charge_amount"], Decimal(unpaid))
+
+    def test_card_and_ach_remainders_route_only_their_own_funds(self) -> None:
+        for code in ("ACHK", "CRAM", "CRDS", "CRMC", "CRVC"):
+            with self.subTest(code=code):
+                row = self.report([
+                    Transaction("CHG7", "C", "700", 400, tran_number=1),
+                    Transaction("COFP", "P", "000", 100, tran_number=5),
+                    Transaction(code, "P", "000", 600, -300, tran_number=2),
+                    Transaction("SCHP", "P", "000", 1000, -1000, tran_number=3, category="FAS"),
+                    Transaction("TIVA", "P", "800", 500, -500, tran_number=4, title_iv="Y", category="FA"),
+                ])
+                self.assert_split(row, "0.00", "1800.00")
+                route = "AFRD" if code == "ACHK" else code
+                self.assertEqual(row["proposed_student_delivery"], f"{route} (Transact) 300.00; ARFD (System) 1500.00")
+                self.assertEqual(row["original_payment_total"], Decimal("300.00"))
+                self.assertNotIn("000Z", row["balance_sources"])
+
+    def test_cards_immediate_ach_day_16_and_card_reversals(self) -> None:
+        for code in ("CRAM", "CRDS", "CRMC", "CRVC"):
+            row = self.report([
+                Transaction(code, "P", "000", 100, effective_date="2099-08-31"),
+                Transaction(code, "P", "000", -40, effective_date="2099-08-31"),
+            ])
+            self.assert_split(row, "0.00", "60.00")
+            self.assertEqual(row["proposed_student_delivery"], f"{code} (Transact)")
+        ready = self.report([Transaction("ACHK", "P", "000", 50, -50, effective_date="2099-08-15")])
+        self.assertEqual(ready["proposed_student_delivery"], "AFRD (Transact)")
+
+    def test_third_party_requires_current_term_unused_payment(self) -> None:
+        for code in ("C529", "Z0LE", "TPPY"):
+            priority = "800" if code == "TPPY" else "000"
+            for term, charge, reversal, flag in (
+                ("209980", 80, 0, True),
+                ("209980", 100, 0, False),
+                ("209980", 0, -100, False),
+                ("209880", 0, 0, False),
+            ):
+                with self.subTest(code=code, term=term, charge=charge, reversal=reversal):
+                    row = self.report([
+                        Transaction("CHG8", "C", "899", charge, term=term),
+                        Transaction(code, "P", priority, 100, term=term),
+                        Transaction(code, "P", priority, reversal, term=term),
+                        Transaction("FREE", "P", "000", 50, -50),
+                    ])
+                    self.assertEqual(row["third_party_review_required_ind"], "Y" if flag else "N")
+                    self.assertEqual("Possible Third Party refund" in (row["review_reasons"] or ""), flag)
+                    if flag:
+                        self.assertEqual(row["third_party_match_source"], code)
+                        self.assertEqual(row["proposed_student_delivery"], "THIRD_PARTY_REVIEW")
+                        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+                        self.assertIsNotNone(row["student_refund_amount"])
+
+    def test_homp_review_uses_surviving_charge_age_even_in_settled_history(self) -> None:
+        run_date = date(2099, 8, 31)
+        for term, age, reversal, flag in (
+            ("209980", 90, 0, True),
+            ("209955", 0, 0, True),
+            ("209955", 32, 0, True),
+            ("209955", 33, 0, False),
+            ("209955", -1, 0, False),
+            ("209955", None, 0, False),
+            ("209980", None, 0, True),
+            ("209980", 0, -100, False),
+            ("209955", 32, -50, True),
+        ):
+            with self.subTest(term=term, age=age, reversal=reversal):
+                effective = (run_date - timedelta(days=age)).isoformat() if age is not None else None
+                row = self.report([
+                    Transaction("HOMP", "C", "889", 100, 0, term=term, effective_date=effective),
+                    Transaction("HOMP", "C", "889", reversal, 0, term=term),
+                    Transaction("PAID", "P", "000", 100 + reversal, 0, term=term),
+                    Transaction("FREE", "P", "000", 50, -50),
+                ])
+                self.assert_split(row, "0.00", "50.00")
+                self.assertEqual("Mines Park Charge - Review" in (row["review_reasons"] or ""), flag)
+                self.assertEqual(row["proposed_student_delivery"], "ARFD (System)")
+                if flag:
+                    self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+
+    def test_reversed_recent_homp_does_not_rejuvenate_old_surviving_charge(self) -> None:
+        row = self.report([
+            Transaction("HOMP", "C", "889", 100, term="209955", effective_date="2099-06-01"),
+            Transaction("HOMP", "C", "889", 100, term="209955", effective_date="2099-08-20"),
+            Transaction("HOMP", "C", "889", -100, term="209955", effective_date="2099-08-21"),
+            Transaction("PAID", "P", "000", 100, term="209955"),
+            Transaction("FREE", "P", "000", 50, -50),
+        ])
+        self.assert_split(row, "0.00", "50.00")
+        self.assertNotIn("Mines Park Charge - Review", row["review_reasons"] or "")
+
+    def test_authorized_plus_and_card_remainders_keep_distinct_student_routes(self) -> None:
+        row = self.report([
+            Transaction("FDPL", "P", "800", 100, -100, category="FA", title_iv="Y"),
+            Transaction("CRMC", "P", "000", 50, -50),
+        ], authorizations={"9900": "Y"})
+        self.assert_split(row, "0.00", "150.00")
+        self.assertEqual(row["proposed_student_delivery"], "CRMC (Transact) 50.00; ARFD (System) 100.00")
+
+    def test_third_party_review_preserves_parent_amount_but_suppresses_delivery(self) -> None:
+        row = self.report([
+            Transaction("FDPL", "P", "800", 100, -100, category="FA", title_iv="Y"),
+            Transaction("TPPY", "P", "800", 50, -50),
+        ])
+        self.assert_split(row, "100.00", "50.00")
+        self.assertEqual(row["proposed_parent_delivery"], "THIRD_PARTY_REVIEW")
+        self.assertEqual(row["proposed_student_delivery"], "THIRD_PARTY_REVIEW")
+
+    def test_export_routes_actual_mixed_allocator_deliveries(self) -> None:
+        row = self.report([
+            Transaction("FDPL", "P", "800", 70, -70, category="FA", title_iv="Y"),
+            Transaction("ACHK", "P", "000", 20, -20),
+            Transaction("ACHK", "P", "000", 30, -30, effective_date="2099-08-30"),
+            Transaction("ACHK", "P", "000", 40, -40, effective_date="2098-08-01"),
+            Transaction("ACHK", "P", "000", 50, -50, effective_date=None),
+            *(Transaction(code, "P", "000", 10, -10) for code in ("CRAM", "CRDS", "CRMC", "CRVC")),
+            Transaction("SCHP", "P", "000", 100, -100, category="FA"),
+        ])
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "refunds.xlsx"
+            export_refund_report(pd.DataFrame([row]), output)
+            sheets = pd.read_excel(output, sheet_name=None)
+            expected = {"Transact Refunds": 60, "ACH Clearing": 30, "ACH Reviews": 90,
+                        "System Refunds": 100, "Parent Refunds": 70}
+            self.assertEqual({name: frame.tab_refund_amount.sum() for name, frame in sheets.items()
+                              if not frame.empty}, expected)
+            self.assertIn("09/15/2099", sheets["ACH Clearing"].iloc[0].tab_delivery)
+            for code in ("CRAM", "CRDS", "CRMC", "CRVC"):
+                self.assertIn(f"{code} (Transact) 10.00", sheets["Transact Refunds"].iloc[0].tab_delivery)
 
     def test_closed_cross_fy_history_and_posted_current_refund_are_omitted(self) -> None:
         self.report([
@@ -427,10 +582,19 @@ class RefundExtractTests(unittest.TestCase):
             settings,
             3,
         )
-        self.assertIn("t.tbraccd_term_code = '202680'", rendered)
+        self.assertIn("CAST('202680' AS varchar(6)) AS target_term_override", rendered)
         self.assertTrue(rendered.endswith("SELECT 20, 3"))
         with self.assertRaises(ValueError):
             ExtractSettings("202680", 1, Path("unused"), cwid="bad'value")
+
+    def test_manual_exports_are_generated_from_api_scope_and_templates(self) -> None:
+        root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
+        for name in ("transactions", "context"):
+            template = (root / f"refund_{name}_extract.sql").read_text(encoding="utf-8")
+            self.assertEqual(
+                (root / f"refund_{name}_manual.sql").read_text(encoding="utf-8"),
+                render_manual_extract_sql(template),
+            )
 
     def test_row_count_guard_detects_api_truncation(self) -> None:
         frame = pd.DataFrame({"extract_row_count": [3, 3], "pidm": [1, 2]})
@@ -461,7 +625,7 @@ class RefundExtractTests(unittest.TestCase):
                 template + ", t.tbraccd_amount AS amount", encoding="utf-8"
             )
             context_template.write_text(template, encoding="utf-8")
-            settings = ExtractSettings("202680", 2, root / "cache")
+            settings = ExtractSettings("202680", 2, root / "cache", run_date=date(2026, 9, 7))
             client = FakeClient()
             first = extract_refund_data(
                 client,
@@ -475,19 +639,99 @@ class RefundExtractTests(unittest.TestCase):
             resumed_client = FakeClient()
             resumed = extract_refund_data(
                 resumed_client,
-                ExtractSettings("202680", 2, root / "cache", resume=True),
+                replace(settings, resume=True),
                 transaction_template_path=transaction_template,
                 context_template_path=context_template,
             )
             self.assertEqual(resumed_client.calls, 0)
             self.assertEqual(tuple(len(frame) for frame in resumed), (2, 2))
+            self.assertEqual(tuple(len(frame) for frame in read_refund_extracts(settings)), (2, 2))
+            next_day = replace(settings, resume=True, run_date=date(2026, 9, 8))
+            with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                read_refund_extracts(next_day)
+            with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                extract_refund_data(
+                    resumed_client, next_day,
+                    transaction_template_path=transaction_template,
+                    context_template_path=context_template,
+                )
+            self.assertEqual(resumed_client.calls, 0)
 
     def test_export_keeps_report_column_order(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory) / "refunds.xlsx"
             export_refund_report(pd.DataFrame(columns=REPORT_COLUMNS), output)
-            headers = pd.read_excel(output).columns.tolist()
-            self.assertEqual(headers, REPORT_COLUMNS)
+            workbook = load_workbook(output)
+            self.assertEqual(workbook.sheetnames, list(REFUND_SHEETS))
+            for sheet in workbook:
+                headers = [cell.value for cell in sheet[1]]
+                self.assertEqual(headers, WORKBOOK_COLUMNS)
+                self.assertEqual([h for h in headers if not h.startswith("tab_")], REPORT_COLUMNS)
+                self.assertFalse(sheet.tables)
+                self.assertEqual(sheet.freeze_panes, "A2")
+            workbook.close()
+
+    def test_export_partitions_methods_and_preserves_review_accounts(self) -> None:
+        def account(cwid, student=0, parent=0, delivery="NONE", **changes):
+            row = dict.fromkeys(REPORT_COLUMNS)
+            row.update(cwid=cwid, first_name="Synthetic", last_name="Example",
+                       student_refund_amount=Decimal(str(student)), parent_refund_amount=Decimal(str(parent)),
+                       total_refund_amount=Decimal(str(student)) + Decimal(str(parent)),
+                       proposed_student_delivery=delivery,
+                       proposed_parent_delivery="RFDP" if parent else "NONE",
+                       third_party_review_required_ind="N", review_status="READY_FOR_STAFF_REVIEW",
+                       last_ar_activity_date=datetime(2099, 8, 31, 12, 30), fdpl_row_count=1)
+            row.update(changes)
+            return row
+
+        rows = [
+            account("TEST-MIX", 150, 75,
+                    "AFRD (Transact) 20.00; CRVC (Transact) 30.00; RFND (CHECK) 100.00"),
+            account("TEST-SYS", 90, delivery="ARFD (System)", review_status="MANUAL_REVIEW"),
+            account("TEST-WAIT", 100, delivery="ACHK Clearing Wait until 09/16/2099 / 40.00; ARFD (System) 60.00"),
+            account("TEST-HOLD", 45, 5, "Refund Hold - Student", review_status="HOLD"),
+            account("TEST-OLD", 15, delivery="AFRD (Transact) - May Be Too Old"),
+            account("TEST-DATE", 10, delivery="ACHK Date Review"),
+            account("TEST-THIRD", 10, 20, "THIRD_PARTY_REVIEW",
+                    third_party_review_required_ind="Y", proposed_parent_delivery="THIRD_PARTY_REVIEW"),
+            account("TEST-HOMP", 70, delivery="ARFD (System)", review_reasons="Mines Park Charge - Review"),
+            account("TEST-UNKNOWN", 80, delivery="NEW DELIVERY CODE"),
+            account("TEST-BLOCKED", total_refund_amount=Decimal(25), student_refund_amount=None, parent_refund_amount=None),
+            account("TEST-MISMATCH", 50, delivery="AFRD (Transact) 20.00; RFND (CHECK) 20.00"),
+        ]
+        expected = {
+            "Transact Refunds": {"TEST-MIX": 50},
+            "Check Refunds": {"TEST-MIX": 100},
+            "Parent Refunds": {"TEST-MIX": 75, "TEST-HOLD": 5},
+            "System Refunds": {"TEST-SYS": 90, "TEST-WAIT": 60},
+            "Refund Holds": {"TEST-HOLD": 45},
+            "ACH Clearing": {"TEST-WAIT": 40},
+            "ACH Reviews": {"TEST-OLD": 15, "TEST-DATE": 10},
+            "Third Party Reviews": {"TEST-THIRD": 30},
+            "Mines Park Reviews": {"TEST-HOMP": 70},
+            "Manual Reviews": {"TEST-UNKNOWN": 80, "TEST-BLOCKED": 25, "TEST-MISMATCH": 50},
+        }
+        report = pd.DataFrame(rows)
+        original = report.copy(deep=True)
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "refunds.xlsx"
+            export_refund_report(report, output)
+            sheets = pd.read_excel(output, sheet_name=None)
+            for name, amounts in expected.items():
+                self.assertEqual(dict(zip(sheets[name].cwid, sheets[name].tab_refund_amount)), amounts)
+            self.assertEqual(sum(frame.tab_refund_amount.sum() for frame in sheets.values()),
+                             sum(row["total_refund_amount"] for row in rows))
+            self.assertEqual(sheets["Transact Refunds"].iloc[0].total_refund_amount, 225)
+            self.assertEqual(sheets["System Refunds"].iloc[0].review_status, "MANUAL_REVIEW")
+            self.assertTrue(sheets["Manual Reviews"].tab_review_note.notna().all())
+            workbook = load_workbook(output)
+            for sheet in workbook:
+                self.assertFalse(sheet.tables)
+                self.assertIn("$", sheet.cell(2, WORKBOOK_COLUMNS.index("tab_refund_amount") + 1).number_format)
+                self.assertEqual(sheet.cell(2, WORKBOOK_COLUMNS.index("last_ar_activity_date") + 1).number_format,
+                                 "mm/dd/yyyy h:mm AM/PM")
+            workbook.close()
+        pd.testing.assert_frame_equal(report, original)
 
     def test_manual_download_reader_accepts_xlsx_and_checks_term(self) -> None:
         with TemporaryDirectory() as directory:

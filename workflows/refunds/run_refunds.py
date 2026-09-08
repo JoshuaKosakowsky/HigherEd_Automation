@@ -117,6 +117,7 @@ def main() -> int:
         extract_directory=extract_directory,
         cwid=arguments.cwid,
         resume=arguments.resume,
+        run_date=run_date,
     )
 
     print(f"Target term: {target_term}")

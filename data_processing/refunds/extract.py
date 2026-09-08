@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 import json
 from pathlib import Path
 import re
@@ -13,10 +14,14 @@ from .terms import validate_term
 
 
 CWID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,30}$")
+QUERY_DIRECTORY = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
 TEMPLATE_TOKENS = {
     "__REFUND_SCOPE_SQL__",
     "__BATCH_COUNT__",
     "__BATCH_INDEX__",
+    "__RUN_DATE__",
+    "__TARGET_TERM_OVERRIDE__",
+    "__CWID_FILTER__",
 }
 
 
@@ -31,6 +36,7 @@ class ExtractSettings:
     extract_directory: Path
     cwid: str | None = None
     resume: bool = False
+    run_date: date = field(default_factory=date.today)
 
     def __post_init__(self) -> None:
         validate_term(self.target_term)
@@ -41,25 +47,34 @@ class ExtractSettings:
 
 
 def _scope_sql(settings: ExtractSettings) -> str:
-    if settings.cwid:
-        # Validation above makes this literal safe. Parameters are unavailable
-        # for native SQL submitted through the existing Insights endpoint.
-        return (
-            "SELECT DISTINCT i.spriden_pidm AS pidm\n"
-            "    FROM saturn.spriden i\n"
-            "    WHERE i.spriden_change_ind IS NULL\n"
-            f"      AND i.spriden_id = '{settings.cwid.strip()}'\n"
-            "      AND MOD(ABS(i.spriden_pidm), __BATCH_COUNT__) "
-            "= __BATCH_INDEX__"
-        )
+    # Settings validate literals before native SQL is sent to Insights.
     return (
-        "SELECT t.tbraccd_pidm AS pidm\n"
-        "    FROM taismgr.tbraccd t\n"
-        f"    WHERE t.tbraccd_term_code = '{settings.target_term}'\n"
-        "      AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) "
-        "= __BATCH_INDEX__\n"
-        "    GROUP BY t.tbraccd_pidm"
+        (QUERY_DIRECTORY / "refund_scope.sql").read_text(encoding="utf-8")
+        .replace("__RUN_DATE__", f"DATE '{settings.run_date.isoformat()}'")
+        .replace("__TARGET_TERM_OVERRIDE__", f"'{settings.target_term}'")
+        .replace("__CWID_FILTER__", f"'{settings.cwid.strip()}'" if settings.cwid else "NULL")
     )
+
+
+def render_manual_extract_sql(template: str) -> str:
+    """Generate standalone website SQL from the same scope used by API batches."""
+    scope = (
+        (QUERY_DIRECTORY / "refund_scope.sql").read_text(encoding="utf-8")
+        .replace("__RUN_DATE__", "CURRENT_DATE")
+        .replace("__TARGET_TERM_OVERRIDE__", "NULL")
+        .replace("__CWID_FILTER__", "NULL")
+        .replace("__BATCH_COUNT__", "1")
+        .replace("__BATCH_INDEX__", "0")
+    )
+    header = (
+        "/* MANUAL WEBSITE EXPORT: download the complete result as XLSX or CSV.\n"
+        "Use identical run_date, target_term_override and cwid_filter in both exports.\n"
+        "Defaults: today's term, entire candidate population. Never commit a CWID.\n"
+        "Generated from the extract template and refund_scope.sql; regenerate when either changes. */\n"
+    )
+    # The template's API-only introduction is misleading in a runnable export.
+    body = re.sub(r"\A\s*/\*.*?\*/\s*", "", template, count=1, flags=re.DOTALL)
+    return header + body.replace("__REFUND_SCOPE_SQL__", scope)
 
 
 def render_extract_sql(template: str, settings: ExtractSettings, batch_index: int) -> str:
@@ -131,10 +146,11 @@ def _validate_complete_result(
 
 def _manifest_values(settings: ExtractSettings) -> dict[str, object]:
     return {
-        "format_version": 2,
+        "format_version": 3,
         "target_term": settings.target_term,
         "batch_count": settings.batch_count,
         "cwid": settings.cwid,
+        "run_date": settings.run_date.isoformat(),
     }
 
 

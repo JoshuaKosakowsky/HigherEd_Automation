@@ -16,7 +16,8 @@ CENT = Decimal("0.01")
 ZERO = Decimal("0.00")
 PRIORITY_PATTERN = re.compile(r"^[0-9]{1,3}$")
 ORIGINAL_PAYMENT_CODES = {"ACHK", "CRDS", "CRED", "CRVC", "CRAM", "CRMC"}
-LAST_000_CODES = {"ACHK", "CRAM", "CRDS", "CRMC", "CRVC"}
+CARD_PAYMENT_CODES = ("CRAM", "CRDS", "CRMC", "CRVC")
+THIRD_PARTY_PAYMENT_CODES = {"C529", "Z0LE", "TPPY"}
 
 TRANSACTION_COLUMNS = {
     "pidm",
@@ -206,8 +207,6 @@ def _effective_priority(detail_code: str, priority: str | None) -> tuple[str | N
         return "800", 8001
     if detail_code == "COFP" and priority == "000":
         return "000A", 2
-    if detail_code in LAST_000_CODES and priority == "000":
-        return "000Z", 0
     if priority is None:
         return None, None
     return priority, int(priority) * 10 + 1
@@ -375,23 +374,29 @@ def _open_allocation_window(
 ) -> tuple[list[dict[str, Any]], int | None]:
     """Exclude the most recent cumulatively settled historical prefix.
 
-    A zero cumulative raw balance at a completed term boundary means every
-    earlier charge and payment has already been resolved at the account level.
+    A zero cumulative raw balance alone does not prove settlement: restricted
+    payments can leave offsetting unpaid charges. Require every stored balance
+    in the prefix to be known and zero as supporting evidence of settlement.
     Replaying that closed history under today's priorities can resurrect loans
     that were consumed or refunded years ago. Activity after the last zero
     boundary remains fully term-specific and is allocated oldest term first.
     """
     balances_by_term: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    unresolved_terms: set[int] = set()
     for row in transactions:
         term_sort = row["term_sort"]
         if term_sort is not None and term_sort <= target_term_sort:
             balances_by_term[term_sort] += row["accounting_amount"] or ZERO
+            if row["stored_balance"] != ZERO or row["amount_missing"]:
+                unresolved_terms.add(term_sort)
 
     cumulative = ZERO
     settled_through: int | None = None
+    unresolved_prefix = False
     for term_sort in sorted(balances_by_term):
         cumulative = _money(cumulative + balances_by_term[term_sort])
-        if term_sort < target_term_sort and cumulative == ZERO:
+        unresolved_prefix = unresolved_prefix or term_sort in unresolved_terms
+        if term_sort < target_term_sort and cumulative == ZERO and not unresolved_prefix:
             settled_through = term_sort
 
     if settled_through is None:
@@ -487,6 +492,34 @@ def _join_reasons(values: Iterable[str | None]) -> str | None:
     return "; ".join(selected) if selected else None
 
 
+def _mines_park_review(transactions: list[dict[str, Any]], parameters: RefundParameters) -> bool:
+    """Review surviving HOMP charges, including recently billed older terms.
+
+    Net reversals by term/detail, reducing newest charges first just as payment
+    reversals do. Use the surviving charge's date, not a recent reversal's date.
+    Inspect full history because a paid housing charge can still require review.
+    """
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in transactions:
+        if row["type_ind"] == "C" and row["detail_code"] == "HOMP":
+            grouped[row["term_code"]].append(row)
+    for term, rows in grouped.items():
+        remaining = sum((row["raw_amount"] for row in rows), ZERO)
+        for row in sorted(rows, key=lambda item: item["tran_number"]):
+            if remaining <= ZERO:
+                break
+            if row["raw_amount"] <= ZERO:
+                continue
+            remaining -= min(row["raw_amount"], remaining)
+            effective = row["effective_date"]
+            if term == parameters.target_term or (
+                effective is not None
+                and 0 <= (parameters.run_date - effective).days <= 32
+            ):
+                return True
+    return False
+
+
 def _student_delivery(
     student_amount: Decimal | None,
     sources: list[dict[str, Any]],
@@ -501,13 +534,13 @@ def _student_delivery(
         "ach_wait": ZERO,
         "ach_old": ZERO,
         "ach_date_review": ZERO,
-        "crvc": ZERO,
+        **{code: ZERO for code in CARD_PAYMENT_CODES},
     }
     next_eligible: list[date] = []
     for source in sources:
         amount = source["source_credit_amount"]
-        if source["detail_code"] == "CRVC":
-            amounts["crvc"] += amount
+        if source["detail_code"] in CARD_PAYMENT_CODES:
+            amounts[source["detail_code"]] += amount
         if source["detail_code"] != "ACHK":
             continue
         effective = source["effective_date"]
@@ -526,7 +559,7 @@ def _student_delivery(
     standard = _money(max(student - special_total, ZERO))
     components: list[tuple[str, Decimal]] = [
         ("AFRD (Transact)", amounts["ach_eligible"]),
-        ("CRVC (Transact)", amounts["crvc"]),
+        *((f"{code} (Transact)", amounts[code]) for code in CARD_PAYMENT_CODES),
         ("ACHK_WAIT", amounts["ach_wait"]),
         ("AFRD (Transact) - May Be Too Old", amounts["ach_old"]),
         ("ACHK Date Review", amounts["ach_date_review"]),
@@ -578,22 +611,9 @@ def _allocate_account(
         return None
 
     full_balance = _money(sum((row["accounting_amount"] or ZERO for row in transactions), ZERO))
-    target_rows = [row for row in transactions if row["term_code"] == parameters.target_term]
-    fiscal_balances: dict[int, Decimal] = defaultdict(lambda: ZERO)
-    for row in transactions:
-        if row["term_sort"] is not None and row["term_sort"] <= target_sort:
-            fiscal_balances[row["fiscal_year_start"]] += row["accounting_amount"] or ZERO
-    negative_stored_target_payment = any(
-        row["type_ind"] == "P"
-        and row["stored_balance"] is not None
-        and row["stored_balance"] < 0
-        for row in target_rows
-    )
-    if not (
-        full_balance < 0
-        or negative_stored_target_payment
-        or (target_rows and fiscal_balances and min(fiscal_balances.values()) < 0)
-    ):
+    # Zero-net accounts may contain restricted refunds and offsetting debt.
+    # Positive-net accounts are explicitly outside the daily report for now.
+    if full_balance > ZERO:
         return None
 
     invalid_priority_count = sum(row["raw_amount"] != 0 and row["priority_code"] is None for row in transactions)
@@ -608,7 +628,6 @@ def _allocate_account(
         row["raw_amount"] != 0 and (
             (row["detail_code"] in {"TPDT", "TPPY"} and row["priority_code"] != "800")
             or (row["detail_code"] == "COFP" and row["priority_code"] != "000")
-            or (row["detail_code"] in LAST_000_CODES and row["priority_code"] != "000")
         )
         for row in transactions
     )
@@ -764,18 +783,29 @@ def _allocate_account(
         negative_net_source_count,
         missing_auth_count,
         conflicting_auth_count,
-        policy_credit_mismatch,
         ledger_residual != ZERO,
     ))
     if split_blocked:
         parent_amount = None
         student_amount = None
     else:
-        parent_amount = _money(min(account_credit, parent_fdpl_amount))
-        student_amount = _money(account_credit - parent_amount)
+        parent_amount = _money(parent_fdpl_amount)
+        student_amount = _money(policy_unused_total - parent_amount)
 
     cwid_upper = (account["cwid"] or "").upper()
-    third_party = cwid_upper.startswith("TPS") or cwid_upper in legacy_third_party_cwids
+    third_party_matches = []
+    if cwid_upper.startswith("TPS"):
+        third_party_matches.append("TPS_CWID_PREFIX")
+    if cwid_upper in legacy_third_party_cwids:
+        third_party_matches.append("LEGACY_CWID_LIST")
+    third_party_codes = sorted({
+        source["detail_code"] for source in selected_sources
+        if source["term_code"] == parameters.target_term
+        and source["detail_code"] in THIRD_PARTY_PAYMENT_CODES
+    })
+    third_party_matches.extend(third_party_codes)
+    third_party = bool(third_party_matches)
+    mines_park_review = _mines_park_review(transactions, parameters)
     refund_hold = account["refund_hold_count"] > 0
     active_ed = account["active_ed_row_count"] > 0
     student_delivery, delivery_values = _student_delivery(
@@ -786,14 +816,8 @@ def _allocate_account(
         third_party=third_party,
         active_ed=active_ed,
     )
-    if policy_credit_mismatch:
-        known_student_policy_amount = _money(max(policy_unused_total - parent_fdpl_amount, ZERO))
-        student_delivery = (
-            "REAPPLICATION REQUIRED" if known_student_policy_amount > 0 else "NONE"
-        )
-        parent_delivery = (
-            "REAPPLICATION REQUIRED" if parent_fdpl_amount > 0 else "NONE"
-        )
+    if third_party and (parent_amount or ZERO) > ZERO:
+        parent_delivery = "THIRD_PARTY_REVIEW"
     elif (parent_amount or ZERO) > 0 and plus_status in {"N", "MIXED"}:
         parent_delivery = "RFDP"
     elif (parent_amount or ZERO) > 0:
@@ -836,11 +860,14 @@ def _allocate_account(
         "ARTIFICIAL_PRIORITY_DETAIL_CODE_HAS_UNEXPECTED_BASE_PRIORITY" if special_priority_mismatch_count else None,
         "NEGATIVE_NET_SOURCE_REQUIRES_REVIEW" if negative_net_source_count else None,
         "UNPAID_CHARGES_AFTER_POLICY_ALLOCATION" if unpaid_charges > 0 else None,
+        "RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE" if unpaid_charges > ZERO and not split_blocked else None,
         "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT" if policy_credit_mismatch else None,
         "ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS" if ledger_residual != ZERO else None,
         "REFUND_HOLD_RH" if refund_hold else None,
         "DECEASED_PERSON" if (account["deceased_ind"] or "").upper() == "Y" else None,
         "THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED" if third_party else None,
+        "Possible Third Party refund" if third_party_codes else None,
+        "Mines Park Charge - Review" if mines_park_review else None,
         "CURRENT_SPRIDEN_MISSING" if account["cwid"] is None else None,
         f"TBBACCT_ROW_COUNT_{account['account_control_row_count']}" if account["account_control_row_count"] != 1 else None,
         f"MULTIPLE_ACTIVE_ED_ROWS_{account['active_ed_row_count']}" if account["active_ed_row_count"] > 1 else None,
@@ -852,13 +879,11 @@ def _allocate_account(
         "ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE" if delivery_values["ach_date_review"] > 0 else None,
     ])
 
-    if policy_credit_mismatch:
-        review_status = "REAPPLICATION_REQUIRED"
-    elif refund_hold:
+    if refund_hold:
         review_status = "HOLD"
     elif allocation_review:
         review_status = "MANUAL_REVIEW"
-    elif (account["deceased_ind"] or "").upper() == "Y" or third_party or account["cwid"] is None:
+    elif (account["deceased_ind"] or "").upper() == "Y" or third_party or mines_park_review or account["cwid"] is None:
         review_status = "MANUAL_REVIEW"
     elif account["account_control_row_count"] != 1 or account["active_ed_row_count"] > 1:
         review_status = "MANUAL_REVIEW"
@@ -876,7 +901,7 @@ def _allocate_account(
         "last_name": account["last_name"],
         "first_name": account["first_name"],
         "full_account_balance": full_balance,
-        "total_refund_amount": account_credit,
+        "total_refund_amount": policy_unused_total,
         "proposed_student_delivery": student_delivery,
         "student_refund_amount": student_amount,
         "proposed_parent_delivery": parent_delivery,
@@ -884,9 +909,9 @@ def _allocate_account(
         "balance_sources": balance_sources,
         "plus_to_student_status": plus_status,
         "parent_plus_target_term": parameters.target_term,
-        "refund_split_status": "REAPPLICATION_REQUIRED" if policy_credit_mismatch else "UNDETERMINED_SEE_REVIEW_REASONS" if student_amount is None else "CALCULATED_SUBJECT_TO_REVIEW",
+        "refund_split_status": "UNDETERMINED_SEE_REVIEW_REASONS" if student_amount is None else "CALCULATED_SUBJECT_TO_REVIEW",
         "third_party_review_required_ind": "Y" if third_party else "N",
-        "third_party_match_source": "TPS_CWID_PREFIX" if cwid_upper.startswith("TPS") else "LEGACY_CWID_LIST" if third_party else None,
+        "third_party_match_source": ", ".join(third_party_matches) or None,
         "refund_hold_ind": "Y" if refund_hold else "N",
         "raw_delinquency_code": account["raw_delinquency_code"],
         "active_ed_ind": "Y" if active_ed else "N",
@@ -922,7 +947,7 @@ def _allocate_account(
         "ed_activity_date": account["ed_activity_date"],
         "plus_auth_activity_date": plus_auth_activity,
     }
-    if policy_unused_total <= 0 and account_credit <= 0:
+    if policy_unused_total <= ZERO:
         return None
     return result
 

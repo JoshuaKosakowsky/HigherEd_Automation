@@ -7,8 +7,17 @@ import shutil
 import subprocess
 import unittest
 from dataclasses import dataclass, replace
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import pandas as pd
+
+from data_processing.refunds import REPORT_COLUMNS, RefundParameters
+from data_processing.refunds.export import WORKBOOK_COLUMNS
+from data_processing.refunds.extract import ExtractSettings, render_extract_sql
+from data_processing.refunds.pipeline import run_refund_download_pipeline
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -726,6 +735,113 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         self.assertEqual(fdpl["first_tran_number"], fdpl["last_tran_number"])
         self.assertIn("effective", fdpl["transaction_detail"])
         self.assertTrue({"cwid", "pidm", "first_name", "last_name"}.isdisjoint(fdpl))
+
+    def test_manual_and_api_exports_select_same_candidates_with_full_history(self) -> None:
+        transactions = [
+            # Target activity, net zero, but incompatible priorities leave a refund.
+            RefundTransaction("CHG9", "C", "899", 100, pidm=1),
+            RefundTransaction("PAY7", "P", "897", 100, balance=-100, pidm=1),
+            # Negative stored payment at the two-year boundary; history is not cut.
+            RefundTransaction("PAY0", "P", "000", 20, balance=-20, term="209780", pidm=2),
+            RefundTransaction("OLD", "C", "899", 10, term="208980", pidm=2),
+            RefundTransaction("PAY0", "P", "000", 10, term="208980", pidm=2),
+            # Before boundary, no qualifying activity.
+            RefundTransaction("PAY0", "P", "000", 20, balance=-20, term="209755", pidm=3),
+            # HOMP at day 32, without target activity or a negative stored payment.
+            RefundTransaction("HOMP", "C", "889", 10, term="209955", pidm=4, effective_date="2099-07-30"),
+            RefundTransaction("PAY0", "P", "000", 20, term="209955", pidm=4),
+            RefundTransaction("HOMP", "C", "889", 10, term="209955", pidm=5, effective_date="2099-07-29"),
+            RefundTransaction("PAY0", "P", "000", 20, term="209955", pidm=5),
+            RefundTransaction("HOMP", "C", "889", 10, term="209955", pidm=6, effective_date="2099-09-01"),
+            RefundTransaction("PAY0", "P", "000", 20, term="209955", pidm=6),
+            # Positive full-account balance, despite current activity/unused payment.
+            RefundTransaction("CHG9", "C", "899", 100, pidm=7),
+            RefundTransaction("PAY7", "P", "897", 50, balance=-50, pidm=7),
+            # Settled target-term account: SQL candidate, later omitted by Python.
+            RefundTransaction("CHG9", "C", "899", 100, pidm=8),
+            RefundTransaction("PAY0", "P", "000", 100, pidm=8),
+            # Negative charge balance does not qualify as a payment credit.
+            RefundTransaction("WAIV", "C", "899", -20, balance=-20, term="209955", pidm=9),
+            # Overlap across all three candidate branches must not duplicate rows.
+            RefundTransaction("HOMP", "C", "889", 10, pidm=10),
+            RefundTransaction("PAY0", "P", "000", 20, balance=-10, pidm=10),
+            # Older credits do not erase an all-history debt in the scope filter.
+            RefundTransaction("PAY0", "P", "000", 20, balance=-20, pidm=11),
+            RefundTransaction("OLD", "C", "899", 30, term="208980", pidm=11),
+        ]
+        root = REFUNDS_QUERY.parent
+        expected = {1, 2, 4, 8, 10}
+        downloads = {}
+        for name in ("transactions", "context"):
+            with self.subTest(export=name):
+                manual = self.run_report(transactions, query=(root / f"refund_{name}_manual.sql").read_text())
+                downloads[name] = pd.DataFrame(manual)
+                self.assertEqual({row["pidm"] for row in manual}, expected)
+                self.assertTrue(all(row["extract_row_count"] == len(manual) for row in manual))
+                template = (root / f"refund_{name}_extract.sql").read_text()
+                settings = ExtractSettings("209980", 2, Path("unused"), run_date=date(2099, 8, 31))
+                api = []
+                for batch in range(2):
+                    api.extend(self.run_report(transactions, query=render_extract_sql(template, settings, batch)))
+                def comparable(rows):
+                    return sorted(
+                        (json.dumps({k: v for k, v in row.items() if k != "extract_row_count"}, sort_keys=True)
+                         for row in rows)
+                    )
+                self.assertEqual(comparable(manual), comparable(api))
+                if name == "transactions":
+                    self.assertEqual(len(manual), sum(t.pidm in expected for t in transactions))
+                    self.assertIn("208980", {row["term_code"] for row in manual if row["pidm"] == 2})
+                else:
+                    self.assertEqual(len(manual), len(expected))
+
+        # Exercise the actual website-download path through the exported workbook.
+        with TemporaryDirectory() as directory:
+            work = Path(directory)
+            for name, frame in downloads.items():
+                frame.to_csv(work / f"{name}.csv", index=False)
+            output, report = run_refund_download_pipeline(
+                parameters=RefundParameters("209980", date(2099, 8, 31)),
+                transaction_file=work / "transactions.csv",
+                context_file=work / "context.csv",
+                output_file=work / "refunds.xlsx",
+            )
+            expected_refunds = {"TEST-1": 100, "TEST-2": 20, "TEST-4": 10, "TEST-10": 10}
+            self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), expected_refunds)
+            for row in report.to_dict("records"):
+                self.assertEqual(row["student_refund_amount"], expected_refunds[row["cwid"]])
+                self.assertEqual(row["parent_refund_amount"], Decimal("0.00"))
+                if row["cwid"] in {"TEST-4", "TEST-10"}:
+                    self.assertIn("Mines Park Charge - Review", row["review_reasons"])
+            sheets = pd.read_excel(output, sheet_name=None)
+            for sheet in sheets.values():
+                self.assertEqual(sheet.columns.tolist(), WORKBOOK_COLUMNS)
+            workbook = pd.concat([
+                sheet[["cwid", "tab_refund_amount"]]
+                for sheet in sheets.values() if not sheet.empty
+            ], ignore_index=True)
+            self.assertEqual(dict(zip(workbook.cwid, workbook.tab_refund_amount)), expected_refunds)
+            self.assertEqual(set(sheets["Mines Park Reviews"].cwid), {"TEST-4", "TEST-10"})
+
+    def test_export_two_year_term_boundaries_and_validation_filter(self) -> None:
+        root = REFUNDS_QUERY.parent
+        template = (root / "refund_transactions_extract.sql").read_text()
+        for run_date, target, first, excluded in (
+            ("2024-02-29", "202410", "202210", "202180"),
+            ("2026-05-16", "202655", "202455", "202410"),
+            ("2026-07-16", "202680", "202480", "202455"),
+        ):
+            transactions = [
+                RefundTransaction("PAY0", "P", "000", 10, balance=-10, term=first, pidm=1),
+                RefundTransaction("PAY0", "P", "000", 10, balance=-10, term=excluded, pidm=2),
+            ]
+            with self.subTest(run_date=run_date):
+                rows = self.run_report(transactions, query=(root / "refund_transactions_manual.sql").read_text(),
+                                       target_term=target, run_date=run_date)
+                self.assertEqual({row["pidm"] for row in rows}, {1})
+                settings = ExtractSettings(target, 1, Path("unused"), cwid="TEST-2", run_date=date.fromisoformat(run_date))
+                targeted = self.run_report(transactions, query=render_extract_sql(template, settings, 0))
+                self.assertEqual({row["pidm"] for row in targeted}, {2})
 
 
 if __name__ == "__main__":

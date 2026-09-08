@@ -10,6 +10,7 @@ WITH batch_scope AS MATERIALIZED (
 )
 SELECT
     COUNT(*) OVER () AS extract_row_count,
+    s.target_term AS extract_target_term,
     t.tbraccd_pidm AS pidm,
     TRIM(t.tbraccd_term_code) AS term_code,
     t.tbraccd_aidy_code AS aidy_code,

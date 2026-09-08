@@ -57,6 +57,7 @@ active_ed AS MATERIALIZED (
 )
 SELECT
     COUNT(*) OVER () AS extract_row_count,
+    s.target_term AS extract_target_term,
     s.pidm,
     i.cwid,
     i.last_name,

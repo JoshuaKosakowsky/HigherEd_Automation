@@ -18,6 +18,11 @@ delivery calculations locally and creates an Excel workbook under
 `data/refunds`. That directory and its CSV extracts are ignored by Git because
 they contain student-account data.
 
+The workbook separates refund methods and review queues into plain worksheets,
+without Excel tables. For mixed refunds, use `tab_refund_amount` for each tab's
+portion; account totals repeat as context. See the
+[workbook tab guide](../../../workflows/refunds/README.md#workbook-tabs).
+
 Rename the files `refund_transactions.xlsx` and `refund_context.xlsx`, then put
 them in `data\refunds\input`. From the repository root on the work laptop, run:
 
@@ -47,6 +52,31 @@ SQL files. Leave it NULL for a population run. The downloaded files record their
 target term and total expected row count; Python rejects mismatched terms or a
 truncated download.
 
+Candidate selection is shared in `refund_scope.sql`: target-term activity,
+qualifying HOMP charges, or a negative stored payment balance within two years
+of terms. Known positive full-account balances are excluded. Selected accounts
+retain all transaction history; the two-year condition is not a replay cutoff.
+Python can report zero-net accounts with restricted refunds and offsetting
+unpaid charges. See [the workflow rules](../../../workflows/refunds/README.md)
+for current delivery, ownership, housing, and third-party review behavior.
+
+Re-download both exports after this change. To maintain the standalone manual
+SQL, edit the extract templates or shared scope, then regenerate from the
+repository root:
+
+```python
+from data_processing.refunds.extract import QUERY_DIRECTORY, render_manual_extract_sql
+
+for name in ("transactions", "context"):
+    template = (QUERY_DIRECTORY / f"refund_{name}_extract.sql").read_text(encoding="utf-8")
+    (QUERY_DIRECTORY / f"refund_{name}_manual.sql").write_text(
+        render_manual_extract_sql(template), encoding="utf-8"
+    )
+```
+
+Tests ensure checked-in manual exports match this shared source. Change manual
+run settings for a specific run only; do not commit identifying filters.
+
 ### Optional API/batched mode
 
 The repository can run the extraction automatically when its Insights API/SSO
@@ -67,7 +97,9 @@ start-refunds -TargetTerm 202680 -BatchCount 50
 
 Each completed batch is cached. After a failed connection or session, rerun the
 same term and batch count with `-Resume`. The manifest prevents mixing a cache
-from a different term, batch count, or validation account.
+from a different term, batch count, run date, policy version, or validation
+account. For a later-day resume/offline run, use `-RunDate YYYY-MM-DD` with the
+original extraction date. Older policy-version caches must be extracted again.
 
 ```powershell
 start-refunds -TargetTerm 202680 -BatchCount 50 -Resume
@@ -81,11 +113,11 @@ start-refunds -TargetTerm 202680 -Cwid TEST-CWID
 ```
 
 To recalculate from an already complete cache without contacting Insights, add
-`-Offline` and keep the same term and batch count. `Refunds.sql` remains as a
-SQL reference and one-account diagnostic fallback, but the recursive full
-population query is no longer the recommended operational path.
+`-Offline` and keep the same term, run date, and batch count. `Refunds.sql` remains
+as a historical SQL reference. It does not implement the latest Python refund
+policy and must not be used as an equivalent operational fallback.
 
-## `Refunds.sql`
+## Legacy `Refunds.sql` reference (not the current Python rules)
 
 `Refunds.sql` reconstructs payment application from transaction amounts,
 current detail-code configuration, Mines fiscal-year policy, and the approved

@@ -16,26 +16,108 @@ The local Python process then performs:
 - Mines term and Fall-through-Summer fiscal-year mapping;
 - separate charge pools for every term and priority, processed oldest term first;
 - a settled-history boundary at the latest completed term where the cumulative
-  raw account balance returned to zero, preventing closed payments and refunds
-  from being reopened under current priorities;
+  raw account balance and every stored transaction balance in that prefix are
+  known to be zero, preventing closed payments and refunds from being reopened
+  while retaining unresolved, offsetting restricted credits and charges;
 - Title IV classification and separate $200 giving/receiving fiscal-year caps;
 - unrestricted cross-term allocation;
 - Banner positional priority matching;
-- the 800A, 000A, and 000Z artificial ordering bands;
+- the 800A (TPDT/TPPY) and 000A (COFP) artificial ordering bands;
 - earliest transaction-number tie breaking;
 - FDPL ownership by aid year and PLUS authorization;
 - ACH/credit-card delivery routing and review statuses; and
-- Excel output in the same column order as `Refunds.sql`.
+- Excel output grouped into plain worksheets by refund method and review type.
 
 Financial calculations use `Decimal` cents rather than binary floating point.
 
-`total_refund_amount` is the actual full-account credit available for a refund.
-`total_unused_payment_amount`, `unused_fdpl_amount`, and `unpaid_charge_amount`
-show the reconstructed policy allocation. If reconstructed unused payments do
-not equal the account credit, the workflow leaves the parent/student amounts
-blank, suppresses actionable delivery codes, and reports
-`REAPPLICATION_REQUIRED`. This keeps the allocation discrepancy visible without
-recommending a refund that the current account balance cannot support.
+### Population and refund amounts
+
+The two exports share one candidate definition: target-term activity **or** a
+qualifying HOMP charge **or** a negative stored payment balance in the last two
+years of terms through the target term. The lookback starts with the whole term
+containing `run_date - 2 years` (September 7, 2026 starts at `202480`). It selects
+accounts, not transactions: selected accounts retain their full history. There
+is no five-year history cutoff. A CWID filter selects that account directly.
+
+The SQL excludes known positive full-account balances. Python also excludes
+positive balances and accounts with no reconstructed unused payments. A zero
+balance is eligible when restricted payments leave a refund and offsetting
+unpaid charges. For example, $10,000 of `899` charges plus $1,000 of `897`
+charges, paid by $9,500 at `899` and $1,500 at `897`, produces a $500 student
+refund and $500 unpaid tuition, despite a zero net balance.
+
+`full_account_balance` remains charges minus payments across all history.
+`total_refund_amount` is now the reconstructed unused payment total, split by
+ownership; it is not capped at the net account credit. Restricted refunds with
+unpaid charges show amounts and delivery methods but require manual review with
+`RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE`. Missing or inconsistent allocation
+inputs still suppress an unreliable recipient split. The former
+`REAPPLICATION_REQUIRED` gate no longer hides a valid restricted refund.
+
+### Priorities, delivery, and review
+
+Priorities without a zero, such as `899` and `869`, match only that exact charge
+priority. Existing zero wildcard rules and Title IV fiscal-year limits also
+apply across terms. Payments use descending priority and then earliest
+transaction number. ACH and cards have no special last-payment band: at `000`
+they follow COFP (`000A`), then compete with other `000` payments by transaction
+number. FDPL likewise uses the existing chronological tie rule.
+
+Only each unused ACH/card source remainder routes to Transact. Remaining aid,
+scholarship, and PLUS funds authorized for the student use the student's normal
+`ARFD (System)` or `RFND (CHECK)` route; PLUS authorized for the parent uses
+`RFDP`. `CRAM`, `CRDS`, `CRMC`, and `CRVC` display their own code plus `(Transact)`
+with no clearing wait. ACHK uses its effective date: available on day 16
+(August 1 becomes August 17), through day 180. Younger funds show the eligibility
+date; older funds show `AFRD (Transact) - May Be Too Old`. Reversals are netted
+before identifying the surviving source and its refund amount. Holds continue
+to override student delivery.
+
+- Surviving target-term refund sources `C529`, `Z0LE`, or `TPPY` add
+  `Possible Third Party refund`, identify the code in `third_party_match_source`,
+  and suppress automatic delivery with `THIRD_PARTY_REVIEW`. Amounts remain
+  visible. Fully consumed/reversed sources and other terms do not trigger this
+  new code rule; existing third-party account flags remain effective.
+- A surviving positive HOMP charge in the target term, or effective 0–32 days
+  ago in any term, adds `Mines Park Charge - Review`. This includes paid charges
+  in settled history, but excludes fully reversed charges. Refund amounts and
+  delivery remain visible for staff review.
+
+These implement the institution's supplied allocation policies; the workbook
+remains a review proposal, not approval to disburse funds.
+
+### Workbook tabs
+
+The workbook has these tabs, including headers when a category is empty:
+
+- **Transact Refunds:** available ACH and credit-card portions.
+- **Check Refunds:** student `RFND (CHECK)` portions.
+- **Parent Refunds:** parent `RFDP` portions.
+- **System Refunds:** student `ARFD (System)` portions.
+- **Third Party Reviews:** the entire account refund pending ownership review.
+- **Refund Holds:** held student portions; a separate parent portion remains on
+  Parent Refunds if its delivery is RFDP.
+- **ACH Clearing:** ACH portions still within the clearing period, with the
+  eligibility date retained.
+- **ACH Reviews:** ACH portions over 180 days old or requiring effective-date review.
+- **Mines Park Reviews:** the entire account refund pending housing review.
+- **Manual Reviews:** undetermined splits, unrecognized delivery methods, or
+  delivery components that do not reconcile to recipient amounts.
+
+Third-party review takes precedence over Mines Park review; both reasons remain
+visible if both apply. Other existing review statuses and reasons stay on the
+applicable method tabs: a tab assignment is **not approval to issue a refund**.
+
+Mixed refunds can appear on multiple tabs, but each account appears at most
+once per tab. `tab_delivery` identifies that tab's method(s), and
+`tab_refund_amount` contains only that portion. Sum **tab_refund_amount**, not the
+original account-level totals, across tabs. `tab_review_note` explains account
+review placement. Original report columns retain their values and relative
+order after these three fields, which follow the student's name.
+
+The sheets use ordinary cells with formatted headers, currency/date formats,
+frozen headers, and regular column filters. They contain no Excel Table objects.
+This presentation change does not alter allocation, ownership, or SQL scope.
 
 ## Run
 
@@ -98,8 +180,18 @@ the batch count changes every PIDM partition, so old batches cannot safely be
 mixed with the new run.
 
 To recalculate an already complete extraction without Insights, use `-Offline`
-with the same term, batch count, extract directory, and optional CWID used for
-the original extraction.
+with the same term, batch count, extract directory, optional CWID, and run date
+used for the original extraction. When resuming or recalculating on a later
+date, set `-RunDate YYYY-MM-DD` to the original date. The cache manifest also
+records the extraction policy version; caches from before this population
+change must be extracted again.
+
+Re-download **both** manual exports after this update. Older downloads do not
+necessarily contain the newly eligible accounts. Use identical SQL settings
+and pass the matching `-TargetTerm` and `-RunDate` to Python.
+
+The later workbook-tab-only change does not require new SQL downloads; existing
+compatible extracts can be recalculated to produce the new layout.
 
 ## Validation expectation
 
