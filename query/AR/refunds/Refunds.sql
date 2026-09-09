@@ -1,92 +1,55 @@
 /*
-Student Refund Review
-Colorado School of Mines | Banner Insights (PostgreSQL-flavored SQL)
+Student Refund Review | Colorado School of Mines | Banner Insights / PostgreSQL
 
-PURPOSE AND SAFETY
-  Read-only decision support. This query calculates expected source ownership
-  and delivery routes; it does not approve or issue a refund and does not create
-  a Transact or TSARFND file. Rerun it immediately before staff take action.
-  Full-population runs can exceed the Insights timeout. The supported
-  operational path is launcher/run_refunds.ps1, which uses flat SQL extracts
-  and performs this allocation locally. Retain this query as an auditable rule
-  reference and targeted-account diagnostic.
+One read-only statement: daily candidate selection, complete-history allocation,
+Parent PLUS ownership by aid year, and source-specific delivery. No database
+functions, temp tables, schema changes, or Python execution are required.
 
-TERM AND FISCAL-YEAR RULES
-  * TARGET_TERM defaults from RUN_DATE: Spring 10, Summer 55, and Fall 80.
-    Historical Summer 50 and 60 are recognized. PREVIOUS_TERM_OVERRIDE exists
-    for an old Fall whose immediately preceding Summer was 60 rather than 55.
-  * A Mines fiscal year runs Fall through Summer. Term 80 starts the fiscal
-    year; following terms 10, 50, 55, and 60 belong to that fiscal year.
-  * Previous term is shown separately. All older terms are one audit total, but
-    allocation retains fiscal-year boundaries because the Title IV caps require
-    them.
-  * The unfiltered operational population starts with accounts that have target-
-    term TBRACCD activity, then reads full history only for those PIDMs. A CWID
-    or last-name validation filter can deliberately inspect historical-only
-    accounts.
+CURRENT POLICY
+- Candidates: target-term activity OR HOMP effective in the past 32 days OR a
+  stored payment credit from the whole term containing run_date minus two years
+  through the target term. Validation CWID/name filters bypass activity criteria.
+- Full-account positive balances are excluded. Zero balances can have restricted
+  refunds with equal unpaid charges. Final rows require unused payment principal.
+- Keep every term and charge priority. Oldest charge terms apply first, then
+  descending charge priority. Payment zero digits are positional wildcards;
+  899/869 only pay their exact priorities in any term. Payments apply by descending
+  priority, then earliest transaction number. TPDT/TPPY retain 800A; COFP retains
+  000A. ACH/cards use their normal stored priority; there is no 000Z.
+- A completed historical prefix is settled only when its cumulative raw total
+  and every stored transaction balance are known zero. Other history is replayed.
+- Reversals reduce newest positive payment rows within term/aid year/detail and
+  charge rows within term/priority. Payments retain source ownership and dates.
+- TBBDETC_TIV_IND=Y overrides category. FA% without Y, CSH, and other non-Title-IV
+  funds are unrestricted. Within one FY Title IV has no cap. Between different
+  FYs, each source FY gives at most 200 and each destination FY receives at most
+  200, using independent ledgers, including older funds paying newer charges.
+  Fiscal years run Fall 80 through Summer 55 (historical 50/60 supported).
+- Each unused FDPL aid year uses its own PLUS authorization: N parent/RFDP,
+  Y student. Missing/conflicting authorization blocks a reliable recipient split.
+- Only unused ACH/card principal goes to Transact; ordinary student funds use
+  ARFD (System) with ED, otherwise RFND (CHECK). RH holds override student delivery.
+  ACHK clears on effective date +16 days; after 180 days it carries an age warning.
+  CRAM, CRDS, CRMC, CRVC are immediately available via their respective codes.
+- Unused target-term C529/Z0LE/TPPY sources flag Possible Third Party refund,
+  along with existing TPS/legacy account controls. Third-party delivery is blocked.
+- Surviving HOMP charges in the target term OR effective 0..32 days ago trigger
+  Mines Park Charge - Review, including paid charges in settled history.
 
-PAYMENT CLASSIFICATION AND CROSS-TERM POLICY
-  * TBBDETC_TIV_IND = 'Y' makes a payment Title IV and overrides category.
-    Otherwise a TBBDETC_DCAT_CODE beginning FA is non-Title-IV aid, CSH is cash,
-    and remaining categories are unrestricted for this allocation.
-  * Title IV may pay any charge in the same fiscal year. Across different fiscal
-    years, each source fiscal year may give at most $200 in total and each
-    destination fiscal year may receive at most $200 in total. Give and receive
-    are independent ledgers. The oldest unpaid fiscal year receives funds first.
-  * Non-Title-IV aid and other unrestricted payments may cross terms and fiscal
-    years without a dollar cap. Prior or previous surpluses may pay current-term
-    charges; Title IV retains the cross-fiscal-year cap when doing so.
-  * A balanced or debit pre-current fiscal year is carried forward as one net
-    amount. Only a pre-current fiscal year with an actual credit reconstructs
-    source-level priority application, because only that year can contribute a
-    refundable historical source.
-  * Positive payments are netted with reversals within PIDM, term, aid year,
-    and detail code. Charge-side credits are netted within PIDM, term, and
-    charge priority so paired detail codes such as HLTH/HIWR cancel before
-    allocation. Reversals reduce the newest positive row first so the earliest
-    surviving transaction remains the tie winner.
+PERFORMANCE
+Normalize selected account history once. Net reversals and pool charges before
+building one matching-payment list per charge priority. Each account walks its
+charges independently and selects the earliest still-eligible source. Recursion
+emits only actual transfers or completed charges, never empty source-pair steps.
+All money uses exact numeric cents.
+Runtime still depends on Insights hardware, indexes, and candidate/history volume;
+validate a representative population against the ten-minute server limit.
 
-PRIORITY APPLICATION
-  * Current charges are processed from priority 999 down. A payment priority
-    matches the charge positionally, with zero as a wildcard: 899 matches 899,
-    890 matches 89x, 800 matches 8xx, and 000 matches any charge.
-  * Payment order is 999..801, 800A, 800, 799..001, 000A, 000, 000Z. Within an
-    effective priority the lowest TBRACCD_TRAN_NUMBER applies first.
-  * TPDT and TPPY are 800A; COFP is 000A; ACHK, CRAM, CRDS, CRMC, and CRVC are
-    000Z. These suffixes change order only. Eligibility still uses the stored
-    three-digit TBBDETC_PRIORITY. A configured base priority that conflicts with
-    an artificial rule triggers review rather than silently changing matching.
-
-REFUND OWNERSHIP AND DELIVERY
-  * TOTAL_REFUND_AMOUNT is reconstructed unused payment principal. This may be
-    larger than the full-account credit when lawful Title IV limits leave an
-    older charge unpaid. FULL_ACCOUNT_BALANCE and TBRACCD_BALANCE remain audit
-    evidence and never replace the reconstructed source allocation.
-  * Every unused FDPL source is matched to RLRPAPP by PIDM and its own aid year.
-    An N authorization sends that source to the parent; Y sends it to the
-    student. Missing or conflicting authorization blocks the split. A parent
-    refund uses RFDP.
-  * A student refund with an RH refund hold displays Refund Hold - Student.
-    Otherwise ordinary funds use ARFD (System) with one active ED hold or RFND
-    (CHECK) without ED. CRVC uses CRVC (Transact).
-  * ACHK age uses TBRACCD_EFFECTIVE_DATE. Eligibility begins on effective date
-    plus 16 calendar days (for example, August 1 becomes eligible August 17).
-    Through day 180 it uses AFRD (Transact); after day 180 it remains AFRD with
-    a May Be Too Old note. Waiting rows show their exact eligible date.
-
-FIRST-RUN VALIDATION
-  1. Run validate_refund_schema.sql and resolve every missing column.
-  2. Confirm FULL_ACCOUNT_BALANCE against TSAAREV and inspect any policy refund
-     difference or stored-balance difference. Those are review evidence because
-     Banner balances may reflect an application that staff must correct.
-  3. Validate current TBBDETC priorities, DCAT categories, and Title IV flags.
-     These values are not historical snapshots.
-  4. Confirm the artificial-priority detail codes and the $200 give/receive
-     policy with the functional owner before production use.
-  5. Treat every status other than READY_FOR_STAFF_REVIEW as requiring the
-     stated staff action or review.
+OUTPUT
+One row per account, same calculation columns as the Python allocator. SQL returns
+a single result set; separate Excel tabs remain a workbook-export feature.
+This report proposes amounts/routes for staff review and does not issue refunds.
 */
-
 WITH RECURSIVE
 term_context AS (
     SELECT
@@ -188,11 +151,10 @@ legacy_third_party_cwids AS (
 ),
 
 /*
-Resolve a validation filter to PIDM before touching account history. An
-unfiltered operational report starts from accounts with target-term activity;
-there cannot be a current-term refund without a current-term transaction. A
-CWID/last-name validation run may still inspect an account without target-term
-activity. Both paths then reach full AR history through selected PIDM values.
+Select the daily population before loading history: target-term activity, recent
+HOMP activity, or a stored payment credit in the last two years of whole terms.
+The lookback selects accounts, never cuts their history. Validation filters
+override activity requirements, but known positive account balances stay out.
 */
 validation_scope_pidms AS (
     SELECT DISTINCT s.spriden_pidm AS pidm
@@ -204,136 +166,110 @@ validation_scope_pidms AS (
       AND (p.last_name_filter IS NULL
            OR UPPER(s.spriden_last_name) LIKE UPPER(p.last_name_filter))
 ),
-
-report_scope_pidms AS (
+scope_dates AS (
+    SELECT p.*, CAST(p.run_date - INTERVAL '2 years' AS date) AS lookback_date
+    FROM params p
+),
+scope_terms AS (
+    SELECT d.*, CONCAT(EXTRACT(YEAR FROM lookback_date)::integer,
+        CASE
+            WHEN lookback_date <= MAKE_DATE(EXTRACT(YEAR FROM lookback_date)::integer, 5, 15) THEN '10'
+            WHEN lookback_date <= MAKE_DATE(EXTRACT(YEAR FROM lookback_date)::integer, 7, 15) THEN '55'
+            ELSE '80'
+        END) AS lookback_term
+    FROM scope_dates d
+),
+report_scope_pidms AS MATERIALIZED (
     SELECT t.tbraccd_pidm AS pidm
     FROM taismgr.tbraccd t
     CROSS JOIN params p
-    WHERE p.cwid_filter IS NULL
-      AND p.last_name_filter IS NULL
+    WHERE p.cwid_filter IS NULL AND p.last_name_filter IS NULL
       AND t.tbraccd_term_code = p.target_term
-    GROUP BY t.tbraccd_pidm
 
-    UNION ALL
+    UNION
 
-    SELECT v.pidm
-    FROM validation_scope_pidms v
-),
+    SELECT t.tbraccd_pidm
+    FROM taismgr.tbraccd t
+    JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+    CROSS JOIN params p
+    WHERE p.cwid_filter IS NULL AND p.last_name_filter IS NULL
+      AND t.tbraccd_detail_code = 'HOMP'
+      AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
+      AND t.tbraccd_amount > 0
+      AND t.tbraccd_effective_date >= p.run_date - INTERVAL '32 days'
+      AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
 
-screening_transactions AS (
-    SELECT
-        t.tbraccd_pidm,
-        t.tbraccd_term_code,
-        t.tbraccd_detail_code,
-        t.tbraccd_amount,
-        t.tbraccd_balance,
-        t.tbraccd_activity_date
-    FROM report_scope_pidms v
-    INNER JOIN taismgr.tbraccd t ON t.tbraccd_pidm = v.pidm
+    UNION
+
+    SELECT t.tbraccd_pidm
+    FROM taismgr.tbraccd t
+    JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+    CROSS JOIN scope_terms p
+    WHERE p.cwid_filter IS NULL AND p.last_name_filter IS NULL
+      AND t.tbraccd_term_code >= p.lookback_term
+      AND t.tbraccd_term_code <= p.target_term
+      AND t.tbraccd_balance < 0
+      AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
+
+    UNION
+
+    SELECT pidm FROM validation_scope_pidms
 ),
 
 /*
-Group one selected AR stream for the full balance, fiscal-year credits, and
-target-term stored unapplied payments before the smaller candidate set is allocated.
+Load and normalize each selected account's history once for all consumers.
+Carry boolean classifications through materialized CTEs: on PostgreSQL 16,
+string-equality predicates on those outputs can severely underestimate rows
+and cause repeated nested-loop scans instead of population-scale hash joins.
 */
-account_fiscal_rollup AS (
+screening_transactions AS MATERIALIZED (
     SELECT
         t.tbraccd_pidm AS pidm,
+        TRIM(t.tbraccd_term_code) AS term_code,
+        NULLIF(TRIM(t.tbraccd_aidy_code), '') AS aidy_code,
+        t.tbraccd_tran_number AS tran_number,
+        UPPER(TRIM(t.tbraccd_detail_code)) AS detail_code,
+        COALESCE(NULLIF(TRIM(d.tbbdetc_desc), ''), '[Description unavailable]') AS detail_desc,
+        UPPER(TRIM(d.tbbdetc_type_ind)) AS type_ind,
+        UPPER(TRIM(d.tbbdetc_type_ind)) = 'P' AS is_payment,
+        UPPER(TRIM(d.tbbdetc_type_ind)) = 'C' AS is_charge,
+        UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
+        CASE WHEN UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) = 'Y'
+            THEN 1 ELSE 0 END AS is_title_iv,
+        CASE WHEN TRIM(CAST(d.tbbdetc_priority AS text)) ~ '^[0-9]{1,3}$'
+            THEN LPAD(TRIM(CAST(d.tbbdetc_priority AS text)), 3, '0') END AS priority_code,
+        CASE WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60|80)$'
+            THEN CAST(TRIM(t.tbraccd_term_code) AS integer) END AS term_sort,
         CASE
             WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}80$'
-                THEN CAST(SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4) AS integer)
+                THEN SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4)::integer
             WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60)$'
-                THEN CAST(SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4) AS integer) - 1
-            ELSE NULL
+                THEN SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4)::integer - 1
         END AS fiscal_year_start,
-        ROUND(SUM(CASE
-            WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-                THEN -COALESCE(t.tbraccd_amount, 0)
-            WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
-                THEN COALESCE(t.tbraccd_amount, 0)
-            ELSE 0
-        END), 2) AS full_account_balance_component,
-        ROUND(SUM(CASE
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60|80)$'
-             AND CAST(TRIM(t.tbraccd_term_code) AS integer)
-                    <= CAST(p.target_term AS integer)
-             AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-                THEN -COALESCE(t.tbraccd_amount, 0)
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60|80)$'
-             AND CAST(TRIM(t.tbraccd_term_code) AS integer)
-                    <= CAST(p.target_term AS integer)
-             AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
-                THEN COALESCE(t.tbraccd_amount, 0)
-            ELSE 0
-        END), 2) AS allocation_fiscal_year_balance,
-        COUNT(*) FILTER (
-            WHERE UPPER(TRIM(COALESCE(d.tbbdetc_type_ind, '')))
-                  NOT IN ('C', 'P')
-        ) AS unclassified_detail_type_count,
-        COUNT(*) FILTER (
-            WHERE TRIM(t.tbraccd_term_code) = p.target_term
-        ) AS target_term_activity_count,
-        COUNT(*) FILTER (
-            WHERE UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-              AND t.tbraccd_balance < 0
-              AND TRIM(t.tbraccd_term_code) = p.target_term
-        ) AS negative_stored_payment_count,
-        MAX(t.tbraccd_activity_date) AS last_ar_activity_date
-    FROM screening_transactions t
-    LEFT JOIN taismgr.tbbdetc d
-        ON d.tbbdetc_detail_code = t.tbraccd_detail_code
-    CROSS JOIN params p
-    GROUP BY
-        t.tbraccd_pidm,
-        CASE
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}80$'
-                THEN CAST(SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4) AS integer)
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60)$'
-                THEN CAST(SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4) AS integer) - 1
-            ELSE NULL
-        END
+        CASE WHEN t.tbraccd_amount IS NULL THEN 1 ELSE 0 END AS amount_missing_ind,
+        COALESCE(t.tbraccd_amount, 0) AS raw_amount,
+        CASE UPPER(TRIM(d.tbbdetc_type_ind))
+            WHEN 'P' THEN -COALESCE(t.tbraccd_amount, 0)
+            WHEN 'C' THEN COALESCE(t.tbraccd_amount, 0)
+        END AS accounting_amount,
+        t.tbraccd_balance AS raw_transaction_balance,
+        CAST(t.tbraccd_effective_date AS date) AS effective_date,
+        t.tbraccd_activity_date AS activity_date
+    FROM report_scope_pidms v
+    JOIN taismgr.tbraccd t ON t.tbraccd_pidm = v.pidm
+    LEFT JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
 ),
-
-/*
-Calculate one row per account from the fiscal-year screening groups. Detail
-codes without a C/P type are counted so an indeterminate account is never
-presented as a reliable refund amount.
-*/
 account_balance_rollup AS (
-    SELECT
-        f.pidm,
-        ROUND(SUM(f.full_account_balance_component), 2) AS full_account_balance,
-        SUM(f.unclassified_detail_type_count) AS unclassified_detail_type_count,
-        SUM(f.target_term_activity_count) AS target_term_activity_count,
-        SUM(f.negative_stored_payment_count) AS negative_stored_payment_count,
-        MIN(f.allocation_fiscal_year_balance) FILTER (
-            WHERE f.fiscal_year_start IS NOT NULL
-        ) AS lowest_fiscal_year_balance,
-        MAX(f.last_ar_activity_date) AS last_ar_activity_date
-    FROM account_fiscal_rollup f
-    GROUP BY f.pidm
+    SELECT pidm, ROUND(SUM(accounting_amount), 2) AS full_account_balance,
+        BOOL_OR(type_ind IS NULL OR type_ind NOT IN ('C', 'P')) AS has_unclassified_detail_type,
+        MAX(activity_date) AS last_ar_activity_date
+    FROM screening_transactions
+    GROUP BY pidm
 ),
-
-/*
-Full-account credits remain in scope. A target-term stored unapplied payment is
-a fast additional signal. Fiscal-year credits enter only for accounts active in the
-target term, preventing dormant historical credits from entering recursion.
-*/
-account_balances AS (
-    SELECT
-        r.pidm,
-        r.full_account_balance,
-        r.last_ar_activity_date
-    FROM account_balance_rollup r
-    WHERE r.unclassified_detail_type_count = 0
-      AND (
-        r.full_account_balance < 0
-        OR r.negative_stored_payment_count > 0
-        OR (
-            r.target_term_activity_count > 0
-            AND r.lowest_fiscal_year_balance < 0
-        )
-      )
+account_balances AS MATERIALIZED (
+    SELECT pidm, full_account_balance, last_ar_activity_date
+    FROM account_balance_rollup
+    WHERE NOT has_unclassified_detail_type AND full_account_balance <= 0
 ),
 
 /*
@@ -398,52 +334,72 @@ terms at or before the target term enter allocation. The full-account balance
 above stays unrestricted so excluded/future activity produces a reconciliation
 exception rather than disappearing.
 */
-candidate_transactions AS (
-    SELECT
-        t.tbraccd_pidm AS pidm,
-        TRIM(t.tbraccd_term_code) AS term_code,
-        t.tbraccd_aidy_code AS aidy_code,
-        t.tbraccd_tran_number AS tran_number,
-        UPPER(TRIM(t.tbraccd_detail_code)) AS detail_code,
-        COALESCE(d.tbbdetc_desc, '[Description unavailable]') AS detail_desc,
-        UPPER(TRIM(d.tbbdetc_type_ind)) AS type_ind,
-        UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
-        CASE WHEN UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) = 'Y'
-            THEN 1 ELSE 0 END AS is_title_iv,
-        CASE
-            WHEN TRIM(CAST(d.tbbdetc_priority AS text)) ~ '^[0-9]{1,3}$'
-                THEN LPAD(TRIM(CAST(d.tbbdetc_priority AS text)), 3, '0')
-            ELSE NULL
-        END AS priority_code,
-        CASE
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60|80)$'
-                THEN CAST(TRIM(t.tbraccd_term_code) AS integer)
-            ELSE NULL
-        END AS term_sort,
-        CASE
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}80$'
-                THEN CAST(SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4) AS integer)
-            WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60)$'
-                THEN CAST(SUBSTRING(TRIM(t.tbraccd_term_code) FROM 1 FOR 4) AS integer) - 1
-            ELSE NULL
-        END AS fiscal_year_start,
-        CASE WHEN t.tbraccd_amount IS NULL THEN 1 ELSE 0 END
-            AS amount_missing_ind,
-        COALESCE(t.tbraccd_amount, 0) AS raw_amount,
-        CASE
-            WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-                THEN -COALESCE(t.tbraccd_amount, 0)
-            WHEN UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
-                THEN COALESCE(t.tbraccd_amount, 0)
-            ELSE NULL
-        END AS accounting_amount,
-        t.tbraccd_balance AS raw_transaction_balance,
-        t.tbraccd_effective_date AS effective_date,
-        t.tbraccd_activity_date AS activity_date
-    FROM taismgr.tbraccd t
-    INNER JOIN account_balances b ON b.pidm = t.tbraccd_pidm
-    LEFT JOIN taismgr.tbbdetc d
-        ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+candidate_transactions AS MATERIALIZED (
+    SELECT x.*
+    FROM screening_transactions x
+    JOIN account_balances b ON b.pidm = x.pidm
+),
+
+/*
+A zero account total alone is not settlement. Cut only the latest completed
+prefix whose raw cumulative total is zero AND every stored row balance is
+known zero. Preserve unresolved strict-priority offsets even in old terms.
+*/
+open_term_balances AS (
+    SELECT x.pidm, x.term_sort, SUM(x.accounting_amount) AS term_balance,
+        COUNT(*) FILTER (WHERE x.raw_transaction_balance IS DISTINCT FROM 0
+                            OR x.amount_missing_ind = 1) AS unresolved_rows
+    FROM candidate_transactions x
+    CROSS JOIN params p
+    WHERE x.term_sort <= p.target_term::integer
+    GROUP BY x.pidm, x.term_sort
+),
+running_term_balances AS (
+    SELECT t.*,
+        ROUND(SUM(term_balance) OVER (PARTITION BY pidm ORDER BY term_sort), 2) AS cumulative_balance,
+        SUM(unresolved_rows) OVER (PARTITION BY pidm ORDER BY term_sort) AS unresolved_prefix
+    FROM open_term_balances t
+),
+settled_history AS (
+    SELECT pidm, MAX(term_sort) AS settled_through
+    FROM running_term_balances
+    CROSS JOIN params p
+    WHERE term_sort < p.target_term::integer
+      AND cumulative_balance = 0 AND unresolved_prefix = 0
+    GROUP BY pidm
+),
+allocation_transactions AS MATERIALIZED (
+    SELECT x.*
+    FROM candidate_transactions x
+    LEFT JOIN settled_history h ON h.pidm = x.pidm
+    CROSS JOIN params p
+    WHERE x.term_sort <= p.target_term::integer
+      AND (h.settled_through IS NULL OR x.term_sort > h.settled_through)
+),
+allocation_ledger AS (
+    SELECT pidm, ROUND(SUM(accounting_amount), 2) AS included_balance
+    FROM allocation_transactions
+    GROUP BY pidm
+),
+
+/* Housing review uses surviving charges, including paid/settled history. */
+housing_rows AS (
+    SELECT x.*,
+        SUM(raw_amount) OVER (PARTITION BY pidm, term_code) AS group_net,
+        COALESCE(SUM(GREATEST(raw_amount, 0)) OVER (
+            PARTITION BY pidm, term_code ORDER BY tran_number
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ), 0) AS prior_positive
+    FROM candidate_transactions x
+    WHERE is_charge AND detail_code = 'HOMP'
+),
+housing_review AS MATERIALIZED (
+    SELECT x.pidm
+    FROM housing_rows x
+    CROSS JOIN params p
+    WHERE LEAST(x.raw_amount, GREATEST(x.group_net - x.prior_positive, 0)) > 0
+      AND (x.term_code = p.target_term OR p.run_date - x.effective_date BETWEEN 0 AND 32)
+    GROUP BY x.pidm
 ),
 
 /* Account-level summaries are materialized once for the same join-plan reason. */
@@ -466,10 +422,8 @@ balance_input_checks AS MATERIALIZED (
         COUNT(*) FILTER (
             WHERE x.raw_amount <> 0
               AND (
-                (x.detail_code IN ('TPDT', 'TPPY') AND x.priority_code <> '800')
-                OR (x.detail_code = 'COFP' AND x.priority_code <> '000')
-                OR (x.detail_code IN ('ACHK', 'CRAM', 'CRDS', 'CRMC', 'CRVC')
-                    AND x.priority_code <> '000')
+                (x.detail_code IN ('TPDT', 'TPPY') AND x.priority_code IS DISTINCT FROM '800')
+                OR (x.detail_code = 'COFP' AND x.priority_code IS DISTINCT FROM '000')
               )
         ) AS special_priority_mismatch_count,
         COUNT(*) FILTER (WHERE x.raw_transaction_balance IS NULL)
@@ -493,9 +447,9 @@ payment_rows AS (
                 ORDER BY x.tran_number
                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
             ), 0) AS prior_positive_payment_amount
-    FROM candidate_transactions x
+    FROM allocation_transactions x
     CROSS JOIN params p
-    WHERE x.type_ind = 'P'
+    WHERE x.is_payment
       AND x.term_sort IS NOT NULL
       AND x.term_sort <= CAST(p.target_term AS integer)
 ),
@@ -509,6 +463,7 @@ payment_sources AS (
         r.aidy_code,
         r.tran_number,
         r.detail_code,
+        r.detail_code = 'FDPL' AS is_fdpl,
         r.detail_desc,
         r.category_code,
         r.is_title_iv,
@@ -524,8 +479,6 @@ payment_sources AS (
                 THEN '800A'
             WHEN r.detail_code = 'COFP' AND r.priority_code = '000'
                 THEN '000A'
-            WHEN r.detail_code IN ('ACHK', 'CRAM', 'CRDS', 'CRMC', 'CRVC')
-             AND r.priority_code = '000' THEN '000Z'
             ELSE r.priority_code
         END AS effective_priority_code,
         CASE
@@ -533,8 +486,6 @@ payment_sources AS (
                 THEN 8002
             WHEN r.priority_code = '800' THEN 8001
             WHEN r.detail_code = 'COFP' AND r.priority_code = '000' THEN 2
-            WHEN r.detail_code IN ('ACHK', 'CRAM', 'CRDS', 'CRMC', 'CRVC')
-             AND r.priority_code = '000' THEN 0
             WHEN r.priority_code IS NOT NULL
                 THEN CAST(r.priority_code AS integer) * 10 + 1
             ELSE NULL
@@ -555,31 +506,7 @@ payment_sources AS (
       ) > 0
 ),
 
-/*
-Historical fiscal years that are balanced or debit-balance years contribute no
-refundable payment source. Carry their net deficit forward directly. Only an
-actual historical fiscal-year credit needs source-level reconstruction so its
-remaining fund type and owner can be determined. This implements the requested
-prior-term lumping and keeps closed years out of the recursive allocator.
-*/
-precurrent_fiscal_balances AS (
-    SELECT
-        x.pidm,
-        x.fiscal_year_start,
-        ROUND(SUM(x.accounting_amount), 2) AS fiscal_balance
-    FROM candidate_transactions x
-    CROSS JOIN params p
-    WHERE x.term_sort IS NOT NULL
-      AND x.term_sort < CAST(p.target_term AS integer)
-      AND x.fiscal_year_start IS NOT NULL
-    GROUP BY x.pidm, x.fiscal_year_start
-),
 
-precurrent_credit_fiscal_years AS (
-    SELECT f.pidm, f.fiscal_year_start, f.fiscal_balance
-    FROM precurrent_fiscal_balances f
-    WHERE f.fiscal_balance < 0
-),
 
 charge_rows AS (
     SELECT
@@ -593,20 +520,11 @@ charge_rows AS (
                 ORDER BY x.tran_number
                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
             ), 0) AS prior_positive_charge_amount
-    FROM candidate_transactions x
+    FROM allocation_transactions x
     CROSS JOIN params p
-    WHERE x.type_ind = 'C'
+    WHERE x.is_charge
       AND x.term_sort IS NOT NULL
       AND x.term_sort <= CAST(p.target_term AS integer)
-      AND (
-          x.term_sort = CAST(p.target_term AS integer)
-          OR EXISTS (
-              SELECT 1
-              FROM precurrent_credit_fiscal_years f
-              WHERE f.pidm = x.pidm
-                AND f.fiscal_year_start = x.fiscal_year_start
-          )
-      )
 ),
 
 charge_source_rows AS (
@@ -682,448 +600,203 @@ net_source_checks AS MATERIALIZED (
 ),
 
 /*
-For the comparatively small set of pre-current fiscal years with a real credit,
-reconstruct source application inside that fiscal year. Charges in the oldest
-term are handled first, then by descending priority. Debit and balanced years
-were already reduced to one fiscal-year amount above and never enter recursion.
+Number actual sources and term/priority charge pools once. Historical charges
+retain their eligibility; no synthetic unrestricted fiscal-year deficit exists.
 */
-precurrent_local_payments AS (
-    SELECT
-        s.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY s.pidm, s.fiscal_year_start
-            ORDER BY s.payment_priority_sort DESC NULLS LAST,
-                     s.tran_number, s.term_sort, s.detail_code
-        ) AS local_payment_sequence,
-        CONCAT('LP', ROW_NUMBER() OVER (
-            PARTITION BY s.pidm, s.fiscal_year_start
-            ORDER BY s.payment_priority_sort DESC NULLS LAST,
-                     s.tran_number, s.term_sort, s.detail_code
-        )) AS local_payment_key
-    FROM payment_sources s
-    INNER JOIN precurrent_credit_fiscal_years f
-        ON f.pidm = s.pidm
-       AND f.fiscal_year_start = s.fiscal_year_start
-),
-
-precurrent_local_charges AS (
-    SELECT
-        c.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY c.pidm, c.fiscal_year_start
-            ORDER BY c.term_sort,
-                     c.priority_code DESC NULLS LAST,
-                     c.tran_number, c.detail_code
-        ) AS local_charge_sequence,
-        CONCAT('LC', ROW_NUMBER() OVER (
-            PARTITION BY c.pidm, c.fiscal_year_start
-            ORDER BY c.term_sort,
-                     c.priority_code DESC NULLS LAST,
-                     c.tran_number, c.detail_code
-        )) AS local_charge_key
-    FROM charge_sources c
-    INNER JOIN precurrent_credit_fiscal_years f
-        ON f.pidm = c.pidm
-       AND f.fiscal_year_start = c.fiscal_year_start
-),
-
-precurrent_local_pairs AS (
-    SELECT
-        c.pidm,
-        c.fiscal_year_start,
-        c.local_charge_sequence,
-        c.local_charge_key,
-        c.charge_amount,
-        s.local_payment_sequence,
-        s.local_payment_key,
-        s.source_amount AS payment_amount,
-        ROW_NUMBER() OVER (
-            PARTITION BY c.pidm, c.fiscal_year_start
-            ORDER BY c.local_charge_sequence,
-                     s.local_payment_sequence
-        ) AS local_allocation_step
-    FROM precurrent_local_charges c
-    INNER JOIN precurrent_local_payments s
-        ON s.pidm = c.pidm
-       AND s.fiscal_year_start = c.fiscal_year_start
-    WHERE c.priority_code LIKE REPLACE(s.priority_code, '0', '_')
-),
-
-precurrent_local_pair_counts AS (
-    SELECT pidm, fiscal_year_start, COUNT(*) AS pair_count
-    FROM precurrent_local_pairs
-    GROUP BY pidm, fiscal_year_start
-),
-
-precurrent_local_allocation AS (
-    SELECT
-        f.pidm,
-        f.fiscal_year_start,
-        CAST(0 AS bigint) AS local_allocation_step,
-        CAST('{}' AS jsonb) AS charge_remaining,
-        CAST('{}' AS jsonb) AS payment_remaining
-    FROM precurrent_credit_fiscal_years f
-
-    UNION ALL
-
-    SELECT
-        a.pidm,
-        a.fiscal_year_start,
-        e.local_allocation_step,
-        JSONB_SET(
-            a.charge_remaining,
-            ARRAY[e.local_charge_key],
-            TO_JSONB(v.charge_available - applied.amount),
-            TRUE
-        ),
-        JSONB_SET(
-            a.payment_remaining,
-            ARRAY[e.local_payment_key],
-            TO_JSONB(v.payment_available - applied.amount),
-            TRUE
-        )
-    FROM precurrent_local_allocation a
-    INNER JOIN precurrent_local_pairs e
-        ON e.pidm = a.pidm
-       AND e.fiscal_year_start = a.fiscal_year_start
-       AND e.local_allocation_step = a.local_allocation_step + 1
-    CROSS JOIN LATERAL (
-        SELECT
-            COALESCE(CAST(a.charge_remaining ->> e.local_charge_key AS numeric),
-                     e.charge_amount) AS charge_available,
-            COALESCE(CAST(a.payment_remaining ->> e.local_payment_key AS numeric),
-                     e.payment_amount) AS payment_available
-    ) v
-    CROSS JOIN LATERAL (
-        SELECT ROUND(LEAST(v.charge_available, v.payment_available), 2) AS amount
-    ) applied
-),
-
-precurrent_local_final AS (
-    SELECT a.*
-    FROM precurrent_local_allocation a
-    LEFT JOIN precurrent_local_pair_counts n
-        ON n.pidm = a.pidm
-       AND n.fiscal_year_start = a.fiscal_year_start
-    WHERE a.local_allocation_step = COALESCE(n.pair_count, 0)
-),
-
-precurrent_payment_remaining AS (
-    SELECT
-        s.*,
-        ROUND(COALESCE(
-            CAST(a.payment_remaining ->> s.local_payment_key AS numeric),
-            s.source_amount
-        ), 2) AS remaining_after_local_fy
-    FROM precurrent_local_payments s
-    INNER JOIN precurrent_local_final a
-        ON a.pidm = s.pidm
-       AND a.fiscal_year_start = s.fiscal_year_start
-),
-
-precurrent_fiscal_summary AS (
-    /* Debit fiscal years carry forward as one amount with no source recursion. */
-    SELECT
-        f.pidm,
-        f.fiscal_year_start,
-        f.fiscal_balance AS fiscal_deficit
-    FROM precurrent_fiscal_balances f
-    WHERE f.fiscal_balance > 0
-
-    UNION ALL
-
-    /* A credit year may still have a priority-restricted unpaid charge. */
-    SELECT
-        f.pidm,
-        f.fiscal_year_start,
-        ROUND(COALESCE(SUM(COALESCE(
-            CAST(a.charge_remaining ->> c.local_charge_key AS numeric),
-            c.charge_amount
-        )), 0), 2) AS fiscal_deficit
-    FROM precurrent_credit_fiscal_years f
-    INNER JOIN precurrent_local_final a
-        ON a.pidm = f.pidm
-       AND a.fiscal_year_start = f.fiscal_year_start
-    LEFT JOIN precurrent_local_charges c
-        ON c.pidm = f.pidm
-       AND c.fiscal_year_start = f.fiscal_year_start
-    GROUP BY f.pidm, f.fiscal_year_start
-    HAVING COALESCE(SUM(COALESCE(
-        CAST(a.charge_remaining ->> c.local_charge_key AS numeric),
-        c.charge_amount
-    )), 0) > 0
-),
-
-stage_payment_inputs AS (
-    SELECT
-        s.*,
-        CASE
-            WHEN s.term_sort < CAST(p.target_term AS integer)
-             AND f.pidm IS NULL THEN 0
-            WHEN s.term_sort < CAST(p.target_term AS integer)
-                THEN COALESCE(r.remaining_after_local_fy, s.source_amount)
-            ELSE s.source_amount
-        END AS stage_source_amount
-    FROM payment_sources s
-    CROSS JOIN params p
-    LEFT JOIN precurrent_credit_fiscal_years f
-        ON f.pidm = s.pidm
-       AND f.fiscal_year_start = s.fiscal_year_start
-    LEFT JOIN precurrent_payment_remaining r
-        ON r.pidm = s.pidm
-       AND r.fiscal_year_start = s.fiscal_year_start
-       AND r.term_code = s.term_code
-       AND r.tran_number = s.tran_number
-       AND r.detail_code = s.detail_code
-    WHERE s.term_sort <= CAST(p.target_term AS integer)
-),
-
-numbered_payment_sources AS (
-    SELECT
-        s.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY s.pidm
-            ORDER BY s.payment_priority_sort DESC NULLS LAST,
-                     s.tran_number, s.term_sort, s.detail_code
-        ) AS payment_sequence,
+numbered_payment_sources AS MATERIALIZED (
+    SELECT s.*, s.source_amount AS stage_source_amount,
+        CAST(ROW_NUMBER() OVER (
+            PARTITION BY s.pidm ORDER BY s.payment_priority_sort DESC NULLS LAST,
+                s.tran_number, s.term_sort, s.detail_code
+        ) AS integer) AS payment_sequence,
         CONCAT('P', ROW_NUMBER() OVER (
-            PARTITION BY s.pidm
-            ORDER BY s.payment_priority_sort DESC NULLS LAST,
-                     s.tran_number, s.term_sort, s.detail_code
+            PARTITION BY s.pidm ORDER BY s.payment_priority_sort DESC NULLS LAST,
+                s.tran_number, s.term_sort, s.detail_code
         )) AS payment_key
-    FROM stage_payment_inputs s
-    WHERE s.stage_source_amount > 0
+    FROM payment_sources s
 ),
-
-stage_charge_inputs AS (
-    SELECT
-        f.pidm,
-        f.fiscal_year_start,
-        CAST(NULL AS varchar(6)) AS term_code,
-        CAST(NULL AS integer) AS term_sort,
-        CAST(0 AS bigint) AS tran_number,
-        'PRIOR_FY_BALANCE' AS detail_code,
-        CONCAT('Fiscal year ', f.fiscal_year_start, '-', f.fiscal_year_start + 1,
-               ' balance') AS detail_desc,
-        CAST(NULL AS varchar(3)) AS priority_code,
-        f.fiscal_deficit AS charge_amount,
-        'HISTORICAL_FY_DEFICIT' AS charge_kind
-    FROM precurrent_fiscal_summary f
-    WHERE f.fiscal_deficit > 0
-
-    UNION ALL
-
-    SELECT
-        c.pidm,
-        c.fiscal_year_start,
-        c.term_code,
-        c.term_sort,
-        c.tran_number,
-        c.detail_code,
-        c.detail_desc,
-        c.priority_code,
-        c.charge_amount,
-        'CURRENT_TERM_CHARGE' AS charge_kind
+numbered_charges AS MATERIALIZED (
+    SELECT c.*,
+        CAST(ROW_NUMBER() OVER (
+            PARTITION BY c.pidm ORDER BY c.term_sort, c.priority_code DESC NULLS LAST,
+                c.tran_number, c.detail_code
+        ) AS integer) AS charge_sequence
     FROM charge_sources c
-    CROSS JOIN params p
-    WHERE c.term_sort = CAST(p.target_term AS integer)
 ),
-
-numbered_charges AS (
-    SELECT
-        c.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY c.pidm
-            ORDER BY
-                CASE WHEN c.charge_kind = 'HISTORICAL_FY_DEFICIT' THEN 0 ELSE 1 END,
-                c.fiscal_year_start,
-                c.priority_code DESC NULLS LAST,
-                c.tran_number,
-                c.detail_code
-        ) AS charge_sequence,
-        CONCAT('C', ROW_NUMBER() OVER (
-            PARTITION BY c.pidm
-            ORDER BY
-                CASE WHEN c.charge_kind = 'HISTORICAL_FY_DEFICIT' THEN 0 ELSE 1 END,
-                c.fiscal_year_start,
-                c.priority_code DESC NULLS LAST,
-                c.tran_number,
-                c.detail_code
-        )) AS charge_key
-    FROM stage_charge_inputs c
+/*
+Matching depends on priority digits, not term. Compute each priority's ordered
+payment indexes once per account; repeating this list for every charge term
+would multiply the intermediate rows on long histories.
+*/
+charge_priority_types AS (
+    SELECT DISTINCT pidm, priority_code
+    FROM numbered_charges
+    WHERE priority_code IS NOT NULL
+),
+priority_matches AS (
+    SELECT c.pidm, c.priority_code,
+        ARRAY_AGG(s.payment_sequence ORDER BY s.payment_sequence) AS payment_indexes
+    FROM charge_priority_types c
+    JOIN numbered_payment_sources s ON s.pidm = c.pidm
+    WHERE c.priority_code LIKE REPLACE(s.priority_code, '0', '_')
+    GROUP BY c.pidm, c.priority_code
+),
+priority_vectors AS MATERIALIZED (
+    SELECT pidm, JSONB_OBJECT_AGG(priority_code, TO_JSONB(payment_indexes)) AS matches
+    FROM priority_matches
+    GROUP BY pidm
+),
+payment_vectors AS MATERIALIZED (
+    SELECT pidm,
+        ARRAY_AGG(source_amount ORDER BY payment_sequence) AS amounts,
+        ARRAY_AGG(fiscal_year_start ORDER BY payment_sequence) AS fiscal_years,
+        ARRAY_AGG(term_sort ORDER BY payment_sequence) AS terms,
+        ARRAY_AGG(is_title_iv = 1 ORDER BY payment_sequence) AS title_iv_flags
+    FROM numbered_payment_sources
+    GROUP BY pidm
+),
+charge_vectors AS MATERIALIZED (
+    SELECT pidm,
+        ARRAY_AGG(charge_amount ORDER BY charge_sequence) AS amounts,
+        ARRAY_AGG(priority_code ORDER BY charge_sequence) AS priorities,
+        ARRAY_AGG(fiscal_year_start ORDER BY charge_sequence) AS fiscal_years,
+        ARRAY_AGG(term_sort ORDER BY charge_sequence) AS terms
+    FROM numbered_charges
+    GROUP BY pidm
+),
+allocation_inputs AS MATERIALIZED (
+    SELECT b.pidm,
+        COALESCE(v.matches, '{}'::jsonb) AS priority_matches,
+        COALESCE(p.amounts, ARRAY[]::numeric[]) AS initial_payments,
+        p.fiscal_years AS payment_years, p.terms AS payment_terms,
+        p.title_iv_flags AS payment_title_iv,
+        COALESCE(c.amounts, ARRAY[]::numeric[]) AS initial_charges,
+        c.priorities AS charge_priorities, c.fiscal_years AS charge_years,
+        c.terms AS charge_terms
+    FROM account_balances b
+    LEFT JOIN priority_vectors v USING (pidm)
+    LEFT JOIN payment_vectors p USING (pidm)
+    LEFT JOIN charge_vectors c USING (pidm)
 ),
 
 /*
-Historical deficits accept every payment allowed by fiscal-year policy. Current
-charges retain Banner's positional-zero priority matching. Artificial suffixes
-change payment order only; matching always uses the original three digits.
+Run one independent greedy allocation per account. For the current charge,
+MIN(payment index) selects the first still-eligible source in the exact Python
+order. Exhausted principal or FY caps are skipped without emitting recursion
+rows. Each iteration either transfers money or finishes an unpayable charge.
+No population relation is joined inside recursion, and completed charge
+balances need not be copied into every recursive state.
 */
-allocation_pairs AS (
-    SELECT
-        c.pidm,
-        c.charge_sequence,
-        c.charge_key,
-        c.charge_amount,
-        c.fiscal_year_start AS charge_fiscal_year_start,
-        c.charge_kind,
-        s.payment_sequence,
-        s.payment_key,
-        s.stage_source_amount AS payment_amount,
-        s.fiscal_year_start AS payment_fiscal_year_start,
-        s.is_title_iv,
-        s.fund_type,
-        ROW_NUMBER() OVER (
-            PARTITION BY c.pidm
-            ORDER BY c.charge_sequence, s.payment_sequence
-        ) AS allocation_step
-    FROM numbered_charges c
-    INNER JOIN numbered_payment_sources s ON s.pidm = c.pidm
-    WHERE c.charge_kind = 'HISTORICAL_FY_DEFICIT'
-       OR c.priority_code LIKE REPLACE(s.priority_code, '0', '_')
-),
-
-allocation_pair_counts AS (
-    SELECT pidm, COUNT(*) AS pair_count
-    FROM allocation_pairs
-    GROUP BY pidm
-),
-
-priority_allocation AS (
-    SELECT
-        b.pidm,
-        CAST(0 AS bigint) AS allocation_step,
-        CAST('{}' AS jsonb) AS charge_remaining,
-        CAST('{}' AS jsonb) AS payment_remaining,
-        CAST('{}' AS jsonb) AS title_iv_given_by_fy,
-        CAST('{}' AS jsonb) AS title_iv_received_by_fy,
-        CAST(0 AS numeric) AS last_applied_amount,
-        CAST(NULL AS integer) AS last_payment_fiscal_year_start,
-        CAST(NULL AS integer) AS last_charge_fiscal_year_start,
-        CAST(NULL AS integer) AS last_is_title_iv,
-        CAST(NULL AS varchar(40)) AS last_fund_type,
-        CAST(NULL AS varchar(40)) AS last_charge_kind
-    FROM account_balances b
-
-    UNION ALL
-
-    SELECT
-        a.pidm,
-        e.allocation_step,
-        JSONB_SET(
-            a.charge_remaining,
-            ARRAY[e.charge_key],
-            TO_JSONB(v.charge_available - applied.amount),
-            TRUE
-        ),
-        JSONB_SET(
-            a.payment_remaining,
-            ARRAY[e.payment_key],
-            TO_JSONB(v.payment_available - applied.amount),
-            TRUE
-        ),
-        CASE WHEN limits.cross_fy_title_iv = 1 THEN JSONB_SET(
-            a.title_iv_given_by_fy,
-            ARRAY[CAST(e.payment_fiscal_year_start AS text)],
-            TO_JSONB(limits.given_so_far + applied.amount),
-            TRUE
-        ) ELSE a.title_iv_given_by_fy END,
-        CASE WHEN limits.cross_fy_title_iv = 1 THEN JSONB_SET(
-            a.title_iv_received_by_fy,
-            ARRAY[CAST(e.charge_fiscal_year_start AS text)],
-            TO_JSONB(limits.received_so_far + applied.amount),
-            TRUE
-        ) ELSE a.title_iv_received_by_fy END,
-        applied.amount,
-        e.payment_fiscal_year_start,
-        e.charge_fiscal_year_start,
-        e.is_title_iv,
-        CAST(e.fund_type AS varchar(40)),
-        CAST(e.charge_kind AS varchar(40))
-    FROM priority_allocation a
-    INNER JOIN allocation_pairs e
-        ON e.pidm = a.pidm
-       AND e.allocation_step = a.allocation_step + 1
+allocation_final AS MATERIALIZED (
+    SELECT i.pidm, a.*
+    FROM allocation_inputs i
     CROSS JOIN params p
     CROSS JOIN LATERAL (
-        SELECT
-            COALESCE(CAST(a.charge_remaining ->> e.charge_key AS numeric),
-                     e.charge_amount) AS charge_available,
-            COALESCE(CAST(a.payment_remaining ->> e.payment_key AS numeric),
-                     e.payment_amount) AS payment_available
-    ) v
-    CROSS JOIN LATERAL (
-        SELECT
-            CASE WHEN e.is_title_iv = 1
-                       AND e.payment_fiscal_year_start <> e.charge_fiscal_year_start
-                THEN 1 ELSE 0 END AS cross_fy_title_iv,
-            COALESCE(CAST(a.title_iv_given_by_fy
-                ->> CAST(e.payment_fiscal_year_start AS text) AS numeric), 0)
-                AS given_so_far,
-            COALESCE(CAST(a.title_iv_received_by_fy
-                ->> CAST(e.charge_fiscal_year_start AS text) AS numeric), 0)
-                AS received_so_far
-    ) limits
-    CROSS JOIN LATERAL (
-        SELECT ROUND(LEAST(
-            v.charge_available,
-            v.payment_available,
-            CASE WHEN limits.cross_fy_title_iv = 1 THEN GREATEST(LEAST(
-                p.title_iv_cross_fy_cap - limits.given_so_far,
-                p.title_iv_cross_fy_cap - limits.received_so_far
-            ), 0) ELSE v.payment_available END
-        ), 2) AS amount
-    ) applied
-),
+        WITH RECURSIVE priority_allocation AS (
+            SELECT 0 AS allocation_step,
+                1 AS charge_index,
+                COALESCE(i.initial_charges[1], 0) AS current_charge_remaining,
+                0::numeric AS unpaid_charge_amount,
+                i.initial_payments AS payment_remaining,
+                '{}'::jsonb AS title_iv_given_by_fy,
+                '{}'::jsonb AS title_iv_received_by_fy,
+                0::numeric AS title_iv_to_older_fy,
+                0::numeric AS unrestricted_to_older_terms
 
-allocation_final AS (
-    SELECT a.*
-    FROM priority_allocation a
-    LEFT JOIN allocation_pair_counts n ON n.pidm = a.pidm
-    WHERE a.allocation_step = COALESCE(n.pair_count, 0)
-),
+            UNION ALL
 
+            SELECT
+                a.allocation_step + 1,
+                CASE WHEN e.s IS NULL OR a.current_charge_remaining = applied.amount
+                    THEN a.charge_index + 1 ELSE a.charge_index END,
+                CASE WHEN e.s IS NULL OR a.current_charge_remaining = applied.amount
+                    THEN COALESCE(i.initial_charges[a.charge_index + 1], 0)
+                    ELSE a.current_charge_remaining - applied.amount END,
+                a.unpaid_charge_amount + CASE WHEN e.s IS NULL
+                    THEN a.current_charge_remaining ELSE 0 END,
+                CASE WHEN applied.amount > 0 THEN
+                    a.payment_remaining[:e.s - 1]
+                    || ARRAY[a.payment_remaining[e.s] - applied.amount]
+                    || a.payment_remaining[e.s + 1:]
+                    ELSE a.payment_remaining END,
+                CASE WHEN applied.amount > 0 AND limits.cross_fy_title_iv THEN
+                    JSONB_SET(a.title_iv_given_by_fy, ARRAY[i.payment_years[e.s]::text],
+                        TO_JSONB(limits.given_so_far + applied.amount), TRUE)
+                    ELSE a.title_iv_given_by_fy END,
+                CASE WHEN applied.amount > 0 AND limits.cross_fy_title_iv THEN
+                    JSONB_SET(a.title_iv_received_by_fy, ARRAY[i.charge_years[a.charge_index]::text],
+                        TO_JSONB(limits.received_so_far + applied.amount), TRUE)
+                    ELSE a.title_iv_received_by_fy END,
+                a.title_iv_to_older_fy + CASE WHEN i.payment_title_iv[e.s]
+                    AND i.payment_years[e.s] > i.charge_years[a.charge_index]
+                    THEN applied.amount ELSE 0 END,
+                a.unrestricted_to_older_terms + CASE WHEN NOT i.payment_title_iv[e.s]
+                    AND i.payment_terms[e.s] > i.charge_terms[a.charge_index]
+                    THEN applied.amount ELSE 0 END
+            FROM priority_allocation a
+            CROSS JOIN LATERAL (
+                SELECT MIN(k.value::integer) AS s
+                FROM JSONB_ARRAY_ELEMENTS_TEXT(COALESCE(
+                    i.priority_matches -> i.charge_priorities[a.charge_index], '[]'::jsonb
+                )) k
+                WHERE a.payment_remaining[k.value::integer] > 0
+                  AND (
+                    NOT i.payment_title_iv[k.value::integer]
+                    OR i.payment_years[k.value::integer] = i.charge_years[a.charge_index]
+                    OR (
+                        COALESCE((a.title_iv_given_by_fy
+                            ->> i.payment_years[k.value::integer]::text)::numeric, 0) < p.title_iv_cross_fy_cap
+                        AND COALESCE((a.title_iv_received_by_fy
+                            ->> i.charge_years[a.charge_index]::text)::numeric, 0) < p.title_iv_cross_fy_cap
+                    )
+                  )
+            ) e
+            CROSS JOIN LATERAL (
+                SELECT i.payment_title_iv[e.s]
+                    AND i.payment_years[e.s] <> i.charge_years[a.charge_index] AS cross_fy_title_iv,
+                    COALESCE((a.title_iv_given_by_fy
+                        ->> i.payment_years[e.s]::text)::numeric, 0) AS given_so_far,
+                    COALESCE((a.title_iv_received_by_fy
+                        ->> i.charge_years[a.charge_index]::text)::numeric, 0) AS received_so_far
+            ) limits
+            CROSS JOIN LATERAL (
+                SELECT CASE WHEN e.s IS NULL THEN 0::numeric ELSE ROUND(LEAST(
+                    a.current_charge_remaining, a.payment_remaining[e.s],
+                    CASE WHEN limits.cross_fy_title_iv THEN GREATEST(LEAST(
+                        p.title_iv_cross_fy_cap - limits.given_so_far,
+                        p.title_iv_cross_fy_cap - limits.received_so_far
+                    ), 0) ELSE a.payment_remaining[e.s] END
+                ), 2) END AS amount
+            ) applied
+            WHERE a.charge_index <= CARDINALITY(i.initial_charges)
+        )
+        SELECT * FROM priority_allocation
+        WHERE charge_index > CARDINALITY(i.initial_charges)
+    ) a
+),
 allocation_transfer_summary AS MATERIALIZED (
-    SELECT
-        a.pidm,
-        ROUND(SUM(a.last_applied_amount) FILTER (
-            WHERE a.last_is_title_iv = 1
-              AND a.last_payment_fiscal_year_start
-                    > a.last_charge_fiscal_year_start
-        ), 2) AS title_iv_to_older_fy,
-        ROUND(SUM(a.last_applied_amount) FILTER (
-            WHERE a.last_is_title_iv = 0
-              AND a.last_charge_kind = 'HISTORICAL_FY_DEFICIT'
-        ), 2) AS unrestricted_to_older_terms
-    FROM priority_allocation a
-    WHERE a.allocation_step > 0
-    GROUP BY a.pidm
+    SELECT pidm, title_iv_to_older_fy, unrestricted_to_older_terms
+    FROM allocation_final
 ),
 
 selected_balance_sources AS (
     SELECT
         s.*,
         ROUND(COALESCE(
-            CAST(a.payment_remaining ->> s.payment_key AS numeric),
+            a.payment_remaining[s.payment_sequence],
             s.stage_source_amount
         ), 2) AS source_credit_amount
     FROM numbered_payment_sources s
     INNER JOIN allocation_final a ON a.pidm = s.pidm
     WHERE COALESCE(
-        CAST(a.payment_remaining ->> s.payment_key AS numeric),
+        a.payment_remaining[s.payment_sequence],
         s.stage_source_amount
     ) > 0
 ),
 
 unpaid_charge_summary AS MATERIALIZED (
-    SELECT
-        c.pidm,
-        ROUND(SUM(COALESCE(
-            CAST(a.charge_remaining ->> c.charge_key AS numeric),
-            c.charge_amount
-        )), 2) AS unpaid_charge_amount
-    FROM numbered_charges c
-    INNER JOIN allocation_final a ON a.pidm = c.pidm
-    GROUP BY c.pidm
+    SELECT pidm, unpaid_charge_amount
+    FROM allocation_final
 ),
 
 stored_balance_comparison AS MATERIALIZED (
@@ -1198,14 +871,14 @@ fdpl_summary AS MATERIALIZED (
     FROM payment_sources s
     CROSS JOIN params p
     WHERE s.term_code = p.target_term
-      AND s.detail_code = 'FDPL'
+      AND s.is_fdpl
     GROUP BY s.pidm
 ),
 
 unused_fdpl_aid_years AS (
     SELECT DISTINCT s.pidm, s.aidy_code
     FROM selected_balance_sources s
-    WHERE s.detail_code = 'FDPL'
+    WHERE s.is_fdpl
 ),
 
 plus_authorization_by_aid_year AS MATERIALIZED (
@@ -1225,9 +898,12 @@ plus_authorization_by_aid_year AS MATERIALIZED (
               AND UPPER(TRIM(COALESCE(r.rlrpapp_plus_to_student, '')))
                     NOT IN ('Y', 'N')
         ) AS plus_auth_invalid_count,
-        STRING_AGG(DISTINCT COALESCE(
-            NULLIF(TRIM(r.rlrpapp_plus_to_student), ''), '[blank]'
-        ), ', ') AS plus_auth_raw_values,
+        CASE WHEN COUNT(r.rlrpapp_pidm) = 0 THEN NULL ELSE
+            STRING_AGG(DISTINCT COALESCE(
+                NULLIF(UPPER(TRIM(r.rlrpapp_plus_to_student)), ''), '[blank]'
+            ), ', ' ORDER BY COALESCE(
+                NULLIF(UPPER(TRIM(r.rlrpapp_plus_to_student)), ''), '[blank]'
+            )) END AS plus_auth_raw_values,
         MAX(r.rlrpapp_activity_date) AS plus_auth_activity_date
     FROM unused_fdpl_aid_years f
     LEFT JOIN faismgr.rlrpapp r
@@ -1252,7 +928,7 @@ unused_fdpl_authorized_sources AS (
     INNER JOIN plus_authorization_by_aid_year a
         ON a.pidm = s.pidm
        AND a.aidy_code IS NOT DISTINCT FROM s.aidy_code
-    WHERE s.detail_code = 'FDPL'
+    WHERE s.is_fdpl
 ),
 
 fdpl_refund_summary AS MATERIALIZED (
@@ -1292,6 +968,14 @@ plus_authorization AS MATERIALIZED (
     GROUP BY a.pidm
 ),
 
+third_party_sources AS MATERIALIZED (
+    SELECT s.pidm, STRING_AGG(DISTINCT s.detail_code, ', ' ORDER BY s.detail_code) AS detail_codes
+    FROM selected_balance_sources s
+    CROSS JOIN params p
+    WHERE s.term_code = p.target_term AND s.detail_code IN ('C529', 'Z0LE', 'TPPY')
+    GROUP BY s.pidm
+),
+
 original_payment_summary AS MATERIALIZED (
     SELECT
         s.pidm,
@@ -1319,12 +1003,14 @@ student_delivery_sources AS MATERIALIZED (
         ROUND(SUM(CASE
             WHEN s.detail_code = 'ACHK'
              AND s.effective_date IS NOT NULL
+             AND s.effective_date <= p.run_date
              AND p.run_date < CAST(s.effective_date AS date) + 16
                 THEN s.source_credit_amount ELSE 0
         END), 2) AS achk_clearing_wait_amount,
         MIN(CAST(s.effective_date AS date) + 16) FILTER (
             WHERE s.detail_code = 'ACHK'
               AND s.effective_date IS NOT NULL
+              AND s.effective_date <= p.run_date
               AND p.run_date < CAST(s.effective_date AS date) + 16
         ) AS achk_next_eligible_date,
         ROUND(SUM(CASE
@@ -1347,7 +1033,13 @@ student_delivery_sources AS MATERIALIZED (
                 THEN s.source_credit_amount ELSE 0
         END), 2) AS achk_date_review_amount,
         ROUND(SUM(CASE WHEN s.detail_code = 'CRVC'
-            THEN s.source_credit_amount ELSE 0 END), 2) AS crvc_transact_amount
+            THEN s.source_credit_amount ELSE 0 END), 2) AS crvc_transact_amount,
+        ROUND(SUM(CASE WHEN s.detail_code = 'CRAM'
+            THEN s.source_credit_amount ELSE 0 END), 2) AS cram_transact_amount,
+        ROUND(SUM(CASE WHEN s.detail_code = 'CRDS'
+            THEN s.source_credit_amount ELSE 0 END), 2) AS crds_transact_amount,
+        ROUND(SUM(CASE WHEN s.detail_code = 'CRMC'
+            THEN s.source_credit_amount ELSE 0 END), 2) AS crmc_transact_amount
     FROM selected_balance_sources s
     CROSS JOIN params p
     GROUP BY s.pidm
@@ -1364,17 +1056,20 @@ joined AS (
         pc.confidential_ind,
         CASE
             WHEN UPPER(TRIM(COALESCE(i.cwid, ''))) LIKE 'TPS%'
-              OR legacy_tps.cwid IS NOT NULL
+              OR legacy_tps.cwid IS NOT NULL OR tp.pidm IS NOT NULL
                 THEN 'Y'
             ELSE 'N'
         END AS third_party_review_required_ind,
-        CASE
-            WHEN UPPER(TRIM(COALESCE(i.cwid, ''))) LIKE 'TPS%'
-                THEN 'TPS_CWID_PREFIX'
-            WHEN legacy_tps.cwid IS NOT NULL
-                THEN 'LEGACY_CWID_LIST'
-            ELSE NULL
-        END AS third_party_match_source,
+        NULLIF(CONCAT_WS(', ',
+            CASE WHEN UPPER(TRIM(COALESCE(i.cwid, ''))) LIKE 'TPS%' THEN 'TPS_CWID_PREFIX' END,
+            CASE WHEN legacy_tps.cwid IS NOT NULL THEN 'LEGACY_CWID_LIST' END,
+            tp.detail_codes
+        ), '') AS third_party_match_source,
+        tp.detail_codes AS third_party_detail_codes,
+        hr.pidm IS NOT NULL AS mines_park_review,
+        COALESCE(al.included_balance, 0)
+            - (COALESCE(uc.unpaid_charge_amount, 0) - COALESCE(bs.balance_source_credit_total, 0))
+            AS ledger_residual,
         b.full_account_balance,
         COALESCE(bs.balance_source_credit_total, 0) AS total_refund_amount,
         bs.balance_sources,
@@ -1407,6 +1102,8 @@ joined AS (
                OR COALESCE(n.negative_net_source_count, 0) > 0
                OR COALESCE(fr.missing_fdpl_auth_count, 0) > 0
                OR COALESCE(fr.conflicting_fdpl_auth_count, 0) > 0
+               OR COALESCE(al.included_balance, 0)
+                    <> COALESCE(uc.unpaid_charge_amount, 0) - COALESCE(bs.balance_source_credit_total, 0)
             THEN 'Y' ELSE 'N' END AS refund_split_blocked_ind,
         b.last_ar_activity_date,
         COALESCE(ac.account_control_row_count, 0) AS account_control_row_count,
@@ -1461,7 +1158,10 @@ joined AS (
         ds.achk_next_eligible_date,
         COALESCE(ds.achk_too_old_amount, 0) AS achk_too_old_amount,
         COALESCE(ds.achk_date_review_amount, 0) AS achk_date_review_amount,
-        COALESCE(ds.crvc_transact_amount, 0) AS crvc_transact_amount
+        COALESCE(ds.crvc_transact_amount, 0) AS crvc_transact_amount,
+        COALESCE(ds.cram_transact_amount, 0) AS cram_transact_amount,
+        COALESCE(ds.crds_transact_amount, 0) AS crds_transact_amount,
+        COALESCE(ds.crmc_transact_amount, 0) AS crmc_transact_amount
     FROM account_balances b
     INNER JOIN balance_input_checks v ON v.pidm = b.pidm
     LEFT JOIN current_identity i
@@ -1483,6 +1183,9 @@ joined AS (
     LEFT JOIN stored_balance_comparison sc ON sc.pidm = b.pidm
     LEFT JOIN term_balance_summary tb ON tb.pidm = b.pidm
     LEFT JOIN allocation_transfer_summary ts ON ts.pidm = b.pidm
+    LEFT JOIN allocation_ledger al ON al.pidm = b.pidm
+    LEFT JOIN housing_review hr ON hr.pidm = b.pidm
+    LEFT JOIN third_party_sources tp ON tp.pidm = b.pidm
     LEFT JOIN fdpl_refund_summary fr ON fr.pidm = b.pidm
     LEFT JOIN plus_authorization pa
         ON pa.pidm = b.pidm
@@ -1537,7 +1240,7 @@ delivery_amounts AS (
                 - s.achk_clearing_wait_amount
                 - s.achk_too_old_amount
                 - s.achk_date_review_amount
-                - s.crvc_transact_amount,
+                - s.crvc_transact_amount - s.cram_transact_amount - s.crds_transact_amount - s.crmc_transact_amount,
             0
         ), 2) AS standard_student_delivery_amount,
         (CASE WHEN s.achk_transact_eligible_amount > 0 THEN 1 ELSE 0 END
@@ -1545,12 +1248,15 @@ delivery_amounts AS (
          + CASE WHEN s.achk_too_old_amount > 0 THEN 1 ELSE 0 END
          + CASE WHEN s.achk_date_review_amount > 0 THEN 1 ELSE 0 END
          + CASE WHEN s.crvc_transact_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.cram_transact_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.crds_transact_amount > 0 THEN 1 ELSE 0 END
+         + CASE WHEN s.crmc_transact_amount > 0 THEN 1 ELSE 0 END
          + CASE WHEN COALESCE(s.proposed_student_refund_amount, 0)
                     - s.achk_transact_eligible_amount
                     - s.achk_clearing_wait_amount
                     - s.achk_too_old_amount
                     - s.achk_date_review_amount
-                    - s.crvc_transact_amount > 0
+                    - s.crvc_transact_amount - s.cram_transact_amount - s.crds_transact_amount - s.crmc_transact_amount > 0
                 THEN 1 ELSE 0 END) AS student_delivery_component_count
     FROM refund_split s
 ),
@@ -1576,6 +1282,12 @@ delivery AS (
             WHEN s.student_delivery_component_count = 1
              AND s.achk_date_review_amount > 0 THEN 'ACHK Date Review'
             WHEN s.student_delivery_component_count = 1
+             AND s.cram_transact_amount > 0 THEN 'CRAM (Transact)'
+            WHEN s.student_delivery_component_count = 1
+             AND s.crds_transact_amount > 0 THEN 'CRDS (Transact)'
+            WHEN s.student_delivery_component_count = 1
+             AND s.crmc_transact_amount > 0 THEN 'CRMC (Transact)'
+            WHEN s.student_delivery_component_count = 1
              AND s.crvc_transact_amount > 0 THEN 'CRVC (Transact)'
             WHEN s.student_delivery_component_count = 1
              AND s.standard_student_delivery_amount > 0
@@ -1586,6 +1298,15 @@ delivery AS (
                 CASE WHEN s.achk_transact_eligible_amount > 0 THEN CONCAT(
                     'AFRD (Transact) ',
                     TO_CHAR(s.achk_transact_eligible_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.cram_transact_amount > 0 THEN CONCAT(
+                    'CRAM (Transact) ', TO_CHAR(s.cram_transact_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.crds_transact_amount > 0 THEN CONCAT(
+                    'CRDS (Transact) ', TO_CHAR(s.crds_transact_amount, 'FM999999990.00')
+                ) END,
+                CASE WHEN s.crmc_transact_amount > 0 THEN CONCAT(
+                    'CRMC (Transact) ', TO_CHAR(s.crmc_transact_amount, 'FM999999990.00')
                 ) END,
                 CASE WHEN s.crvc_transact_amount > 0 THEN CONCAT(
                     'CRVC (Transact) ',
@@ -1613,6 +1334,8 @@ delivery AS (
         END AS proposed_student_delivery,
         CASE
             WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
+             AND s.third_party_review_required_ind = 'Y' THEN 'THIRD_PARTY_REVIEW'
+            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
              AND s.plus_to_student_status IN ('N', 'MIXED') THEN 'RFDP'
             WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
                 THEN 'PARENT_PLUS_AUTH_REVIEW'
@@ -1624,7 +1347,7 @@ delivery AS (
 final_review AS (
     SELECT
         d.*,
-        CONCAT_WS(
+        NULLIF(CONCAT_WS(
             '; ',
             CASE WHEN d.invalid_priority_count > 0
                 THEN 'MISSING_OR_INVALID_DETAIL_PRIORITY' END,
@@ -1644,6 +1367,10 @@ final_review AS (
                 THEN 'NEGATIVE_NET_SOURCE_REQUIRES_REVIEW' END,
             CASE WHEN d.unpaid_charge_amount > 0
                 THEN 'UNPAID_CHARGES_AFTER_POLICY_ALLOCATION' END,
+            CASE WHEN d.unpaid_charge_amount > 0 AND d.refund_split_blocked_ind = 'N'
+                THEN 'RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE' END,
+            CASE WHEN d.ledger_residual <> 0
+                THEN 'ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS' END,
             CASE WHEN d.balance_source_credit_total
                           <> GREATEST(-d.full_account_balance, 0)
                 THEN 'POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT' END,
@@ -1652,6 +1379,8 @@ final_review AS (
                 THEN 'DECEASED_PERSON' END,
             CASE WHEN d.third_party_review_required_ind = 'Y'
                 THEN 'THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED' END,
+            CASE WHEN d.third_party_detail_codes IS NOT NULL THEN 'Possible Third Party refund' END,
+            CASE WHEN d.mines_park_review THEN 'Mines Park Charge - Review' END,
             CASE WHEN d.cwid IS NULL THEN 'CURRENT_SPRIDEN_MISSING' END,
             CASE WHEN d.account_control_row_count <> 1
                 THEN CONCAT('TBBACCT_ROW_COUNT_', d.account_control_row_count) END,
@@ -1669,7 +1398,7 @@ final_review AS (
                 THEN 'ACHK_OVER_180_DAYS_MAY_BE_TOO_OLD_FOR_ORIGINAL_METHOD' END,
             CASE WHEN d.achk_date_review_amount > 0
                 THEN 'ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END
-        ) AS review_reasons
+        ), '') AS review_reasons
     FROM delivery d
 )
 
@@ -1727,6 +1456,7 @@ SELECT
         WHEN f.allocation_review_required_ind = 'Y' THEN 'MANUAL_REVIEW'
         WHEN UPPER(TRIM(COALESCE(f.deceased_ind, ''))) = 'Y' THEN 'MANUAL_REVIEW'
         WHEN f.third_party_review_required_ind = 'Y' THEN 'MANUAL_REVIEW'
+        WHEN f.mines_park_review THEN 'MANUAL_REVIEW'
         WHEN f.cwid IS NULL THEN 'MANUAL_REVIEW'
         WHEN f.account_control_row_count <> 1 THEN 'MANUAL_REVIEW'
         WHEN f.active_ed_row_count > 1 THEN 'MANUAL_REVIEW'
@@ -1747,7 +1477,7 @@ CROSS JOIN params p
 WHERE (p.cwid_filter IS NULL OR f.cwid = TRIM(p.cwid_filter))
   AND (p.last_name_filter IS NULL
        OR UPPER(f.last_name) LIKE UPPER(p.last_name_filter))
-  AND (f.total_refund_amount > 0 OR f.full_account_balance < 0)
+  AND f.total_refund_amount > 0
 ORDER BY
     f.last_name,
     f.first_name,

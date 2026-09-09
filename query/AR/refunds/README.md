@@ -113,147 +113,151 @@ start-refunds -TargetTerm 202680 -Cwid TEST-CWID
 ```
 
 To recalculate from an already complete cache without contacting Insights, add
-`-Offline` and keep the same term, run date, and batch count. `Refunds.sql` remains
-as a historical SQL reference. It does not implement the latest Python refund
-policy and must not be used as an equivalent operational fallback.
+`-Offline` and keep the same term, run date, and batch count.
 
-## Legacy `Refunds.sql` reference (not the current Python rules)
+## Single-query alternative: `Refunds.sql`
 
-`Refunds.sql` reconstructs payment application from transaction amounts,
-current detail-code configuration, Mines fiscal-year policy, and the approved
-priority rules. `TBRACCD_BALANCE` is retained as a diagnostic comparison because
-Banner application may be wrong until staff correct it; it does not decide
-refund ownership.
+Run the entire `Refunds.sql` file once in Insights to calculate the report in
+the database. It implements the current Python allocation rules in one read-only
+statement, with no database functions, temporary tables, schema changes, or
+Python process. Run settings and optional validation filters remain near the top.
 
-### Terms and fiscal years
+The result has one row per account with the allocator's existing column order,
+source breakdown, recipient amounts, delivery methods, and review flags. SQL
+produces one result set; the separate Excel tabs remain a Python workbook-export
+feature. The two-download Python workflow remains available if Insights cannot
+complete the single query within its ten-minute limit.
 
-`params.target_term` defaults from `run_date` using Mines boundaries: Spring
-`10`, Summer `55`, and Fall `80`. The query also recognizes historical Summer
-terms `50` and `60`. Use `target_term_override` for an intentional historical or
-work-ahead run. Use `previous_term_override` only when a historical Fall should
-point to Summer `60` rather than the modern `55`.
+### Terms, population, and settlement
 
-A fiscal year begins with Fall and ends with Summer. For example, fiscal year
-2026 contains `202680`, `202710`, and `202755`; historical `50` and `60` terms
-use the same rule. The immediately previous term has its own audit balance. All
-older terms appear as one prior-term balance, while internal allocation still
-retains fiscal years for the Title IV caps.
+The target defaults from the run date using Mines boundaries: Spring `10`,
+Summer `55`, and Fall `80`. Historical Summer `50` and `60` are supported.
+Use `target_term_override` for a historical/work-ahead run and
+`previous_term_override` when an old Fall should follow Summer `60`.
 
-### Fund classification and cross-term rules
+A fiscal year starts with Fall and ends with Summer: FY2026 contains `202680`,
+`202710`, and `202755`. Previous and prior terms have separate audit totals.
+Internal allocation keeps every term and charge priority separate and processes
+the oldest charges first.
 
-Payments use `TBBDETC_TIV_IND` and `TBBDETC_DCAT_CODE`:
+Candidates have target-term activity, a qualifying HOMP charge, or a negative
+stored payment balance within the last two years of whole terms through the
+target term. The two-year condition selects accounts; their complete history
+is retained. There is no five-year history cutoff. A CWID or last-name validation
+filter bypasses the activity conditions but still excludes positive balances.
+Do not commit identifying filters.
 
-- `TIV_IND = 'Y'` is Title IV and takes precedence over category.
-- A non-Title-IV category beginning `FA` is unrestricted financial aid.
-- `CSH` is cash.
-- Remaining non-Title-IV categories are treated as other unrestricted funds.
+Positive full-account balances are excluded. Zero-balance accounts can contain
+restricted refunds and offsetting unpaid charges. Final output requires a
+positive reconstructed refund. `total_refund_amount` is unused payment principal
+and may exceed the net account credit.
 
-Title IV may pay charges freely within its fiscal year. When it crosses a
-fiscal-year boundary, each source fiscal year may give at most $200 total and
-each destination fiscal year may receive at most $200 total. The two ledgers are
-independent, and the oldest unpaid fiscal year is handled first. Non-Title-IV
-aid and other unrestricted payments may cross terms and fiscal years without a
-dollar cap. A prior surplus may pay current charges, but Title IV retains the
-cross-fiscal-year cap.
+The latest completed historical prefix is excluded from replay only if its
+cumulative raw balance is zero and every stored transaction balance in that
+prefix is known zero. A zero account total with unresolved row balances does
+not count as settlement. All remaining historical charges retain their actual
+term and priority; no fiscal-year deficit becomes an unrestricted synthetic
+charge. Stored balances provide settlement evidence and diagnostics, while
+reconstructed allocation determines refund ownership.
 
-`total_refund_amount` is the reconstructed unused payment amount. It can exceed
-the absolute full-account credit when Title IV restrictions leave an older
-charge unpaid. The unfiltered operational population first selects PIDMs with
-target-term TBRACCD activity, then reads full account history only for those
-PIDMs. Within that scope, candidates include accounts with a full-account
-credit, a fiscal-year credit, or a negative target-term stored payment balance.
-The final output removes candidates with neither a calculated refund nor a
-full-account credit. This target-term scope is deliberate: an account cannot
-have a current-term refund without current-term activity.
+### Classification and priority
 
-For a targeted validation run, set `params.cwid_filter` or
-`params.last_name_filter`. Both are applied during account screening, before
-historical allocation, so they reduce runtime rather than filtering only the
-final display. A populated filter may also inspect an account without target-
-term activity. Do not commit a populated CWID.
+`TBBDETC_TIV_IND = 'Y'` classifies Title IV and overrides category. Non-Title-IV
+`FA%` is unrestricted aid, `CSH` is cash, and other non-Title-IV categories are
+also unrestricted for this allocation. Title IV has no same-FY cap. Between
+different FYs, each source FY may give at most $200 total and each destination
+FY may receive at most $200 total, in independent ledgers. This includes older
+funds paying newer charges. Non-Title-IV payments cross FYs without a cap.
 
-Balanced and debit pre-current fiscal years are carried into allocation as one
-net fiscal-year amount. Source-level priority reconstruction runs only for a
-pre-current fiscal year with an actual credit, because only such a year can
-contribute a refundable historical source. Any remaining historical recursion
-is partitioned by PIDM and fiscal year rather than growing across the account's
-entire history. Account-level control and audit summaries are explicitly
-materialized once; this prevents PostgreSQL from inlining them into the wide
-final join and repeatedly rescanning the same Banner data.
+Within each term, charges apply from priority `999` downward. Payment zeros
+are positional wildcards: `899` matches only `899`, `890` matches `89x`,
+`800` matches `8xx`, and `000` matches any charge. Strict priorities retain
+this restriction when crossing terms and fiscal years.
 
-### Priority application
+Payments apply by descending priority, then earliest transaction number:
+`999..801`, `800A` (TPDT/TPPY), regular `800`, `799..001`, `000A` (COFP),
+and regular `000`. ACH/cards use their configured numeric priority like ordinary
+payments; the former `000Z` band is removed. Artificial suffixes change order
+only; matching still uses the stored three digits. Conflicting base priorities
+for TPDT/TPPY/COFP require review.
 
-Current charges apply from priority `999` downward. A payment priority uses
-positional zeros as wildcards: `899` matches `899`, `890` matches `89x`, `800`
-matches `8xx`, and `000` matches any charge.
+Reversals reduce newest positive payments within term/aid year/detail, and
+charges within term/priority. Charge pooling permits paired detail codes, such
+as a charge and waiver at the same priority, to offset. Negative net source
+groups still require review.
 
-Payments apply in this order:
+### Ownership, delivery, and review
 
-1. `999` through `801`
-2. artificial `800A`: `TPDT`, `TPPY`
-3. regular `800`, including `FDPL`
-4. `799` through `001`
-5. artificial `000A`: `COFP`
-6. regular `000`
-7. artificial `000Z`: `ACHK`, `CRAM`, `CRDS`, `CRMC`, `CRVC`
+Each unused FDPL source uses its own aid year's PLUS authorization. N assigns
+the refund to the parent/RFDP; Y assigns it to the student. Missing or conflicting
+authorization blocks the recipient split. Multiple aid years can produce a
+mixed parent/student result.
 
-The lowest `TBRACCD_TRAN_NUMBER` wins a tie within an effective priority. The
-artificial suffix affects order only; charge eligibility always uses the base
-three-digit `TBBDETC_PRIORITY`. If a listed detail code does not have its
-expected base priority, the report flags the configuration instead of silently
-changing eligibility.
+Only unused ACH/card principal routes to Transact. Ordinary student funds use
+ARFD (System) with active ED, otherwise RFND (CHECK). RH overrides student
+delivery. CRAM, CRDS, CRMC, and CRVC use their own code plus (Transact), without
+a clearing delay. ACHK becomes eligible on effective date +16 days; day 180 is
+included, and older funds carry the May Be Too Old note. Waiting funds show the
+eligibility date. Multiple methods show their individual amounts.
 
-Positive payments are netted with reversals within PIDM, term, aid year, and
-detail code. Charge-side credits are netted within PIDM, term, and charge
-priority. That distinction is necessary when Banner uses paired codes, such as
-an insurance charge and waiver, that have different detail codes but the same
-priority. A reversal reduces the newest positive transaction first, preserving
-the earliest surviving transaction as the tie winner. A charge-priority pool
-that remains negative after netting still requires review.
+Unused target-term C529/Z0LE/TPPY sources add `Possible Third Party refund`
+and suppress delivery with `THIRD_PARTY_REVIEW`. Existing TPS-prefix and legacy
+account flags remain effective. A surviving HOMP charge in the target term, or
+effective 0–32 days ago in any term, adds `Mines Park Charge - Review` without
+hiding amounts or delivery. Paid HOMP charges qualify; fully reversed charges
+do not.
 
-### Parent PLUS and delivery
+Restricted refunds with unpaid charges retain their recipient amounts and add
+`RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE`. Allocation metadata problems,
+negative source groups, authorization problems, or a ledger mismatch block an
+unreliable split. Existing account controls and review columns are preserved.
+The full rules and workbook presentation are also described in the
+[workflow guide](../../../workflows/refunds/README.md).
 
-Every unused `FDPL` source is matched to `RLRPAPP_PLUS_TO_STUDENT` by PIDM and
-that source's aid year. `N` assigns it to the parent and `Y` assigns it to the
-student. Missing, blank/invalid, or conflicting authorization prevents a split.
-Multiple unused FDPL aid years are supported, including a mixed parent/student
-result. A calculated parent delivery uses `RFDP`.
+### Execution design
 
-For student funds:
+The query loads and normalizes selected history once. Window aggregates net
+reversals before charges are pooled by term and priority. Each account builds one
+ordered list of matching payment indexes per distinct charge priority and reuses
+it across terms. For each charge, the allocator selects the first source with
+remaining principal and available FY allowance. Exhausted sources and capped
+transfers do not generate recursive steps. Each step transfers money or finishes
+a charge. Numeric arrays hold payment principal; separate small JSON ledgers
+track FY caps. Recursion never rejoins population-wide transaction relations.
 
-- An `RH` refund hold displays `Refund Hold - Student`.
-- Ordinary funds use `ARFD (System)` when exactly one active ED hold exists, or
-  `RFND (CHECK)` when ED is not active.
-- Unused `CRVC` uses `CRVC (Transact)`.
-- Unused `ACHK` uses its effective date. It becomes eligible on effective date
-  plus 16 calendar days, so August 1 is eligible August 17. Through day 180 it
-  uses `AFRD (Transact)`. After day 180, it remains AFRD with a
-  `May Be Too Old` note. A waiting result states the exact eligibility date.
+Summaries and vectors are materialized where repeated evaluation was observed.
+Boolean classification flags help PostgreSQL 16 retain usable row estimates
+across those boundaries; string comparisons on intermediate results had caused
+repeated nested-loop scans in local population tests. See PostgreSQL's
+[CTE evaluation and materialization](https://www.postgresql.org/docs/16/queries-with.html)
+and [correlated lateral evaluation](https://www.postgresql.org/docs/16/queries-table-expressions.html#QUERIES-LATERAL).
 
-If the student amount contains multiple delivery sources, the delivery column
-lists each route and amount separately.
+#### Local synthetic measurements
 
-### Audit and review fields
+Measured on PostgreSQL 16.2 with `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)` on
+September 8, 2026. These are individual query execution measurements, excluding
+fixture loading and result download, not Insights timings or a production SLA.
 
-The output includes:
+| Synthetic workload | Original SQL (`8b666fd`) | Updated SQL |
+| --- | ---: | ---: |
+| 2,500 accounts, 17,500 current-term transactions | 8.10 seconds | 0.75 seconds |
+| 1,000 accounts, 103,000 transactions, eight years of settled history | Not measured | 0.51 seconds |
+| 1,000 accounts, 103,000 transactions, eight years of open history | Not measured | 2.35 seconds |
 
-- previous-term balance before current payments,
-- one prior-terms balance before current payments,
-- Title IV applied to older fiscal years,
-- unrestricted payments applied to older terms,
-- reconstructed unused payment sources and unpaid charges,
-- current target-term FDPL context and aid-year authorization,
-- stored-balance differences, holds, delivery status, and review reasons.
+The direct comparison repeats the test suite's seven-transaction worked example
+for each account. The history workloads prepend eight years of spring, summer,
+and fall tuition, fee, FDPL, and unrestricted payment rows. The two versions
+differ only in whether those historical stored balances are zero (settled) or
+nonzero (open). Temporary fixture tables have transaction PIDM, term, and
+detail/effective-date indexes, a unique detail-code index, and an identity CWID
+index; table statistics are analyzed before each measurement. Real account
+histories, population sizes, table statistics, and available indexes will differ.
 
-A lawful cap can produce both a refund and an unpaid older charge. In that case
-the calculated parent/student amounts remain visible while
-`allocation_review_required_ind` is `Y`. Missing/invalid allocation metadata or
-missing/conflicting Parent PLUS authorization makes the split undetermined.
-
-`banner_pidm`, `target_term_fdpl_tran_number`,
-`calculated_parent_plus_credit`, and `invalid_priority_count` remain omitted from
-the displayed output as requested. `fdpl_priority_tie_rule` now reports
-`EFFECTIVE_PRIORITY_THEN_EARLIEST_TRAN_NUMBER`.
+The query changes no database settings and does not bypass the timeout.
+Remaining costs include candidate selection, history lookups, source sorting,
+priority matching, and open-history length. Production runtime must be measured
+in Insights. If it still times out, use the Python workflow and obtain an
+execution plan from an administrator before changing planner settings or indexes.
 
 ## Diagnostics
 
@@ -287,10 +291,9 @@ REFUNDS_TEST_DSN='host=localhost dbname=refunds_test user=refunds_test' \
   python -m unittest discover -s tests/python -p test_refunds_query.py -v
 ```
 
-Set `REFUNDS_TEST_PSQL` if `psql` is not on `PATH`. Without a DSN, database tests
-skip explicitly. Current coverage includes fiscal-year mapping, both Title IV
-caps, same-year and cross-year transfers, unrestricted funds, artificial and
-base priority order, wildcard matching, tie breakers, reversals, full-account
-debit cases with legally refundable Title IV, per-aid-year FDPL authorization,
-ACH clearing/180-day boundaries, CRVC, standard delivery routes, output order,
-and stored-balance diagnostics.
+Set `REFUNDS_TEST_PSQL` if `psql` is not on `PATH`. Without a DSN, database
+tests skip explicitly. The SQL tests also run the existing Python allocation
+scenarios through the SQL and compare every output column (review-reason order
+is ignored). Daily population selection and a seeded population of 80 accounts
+with open histories, varied priorities, reversals, and Title IV classifications
+are compared with Python as well. Synthetic data contains no real student IDs.

@@ -3,6 +3,12 @@
 This read-only workflow moves the expensive allocation work out of Insights.
 It does not approve or issue refunds.
 
+For a single Insights execution, `query/AR/refunds/Refunds.sql` also implements
+the current allocation rules entirely in SQL. See the
+[single-query guide](../../query/AR/refunds/README.md#single-query-alternative-refundssql)
+for its execution design and performance limits. The SQL result is one account
+report; this Python workflow adds the refund-type workbook tabs.
+
 ## What runs where
 
 For the normal manual process, Insights runs two flat queries. One returns

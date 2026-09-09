@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -14,10 +15,11 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from data_processing.refunds import REPORT_COLUMNS, RefundParameters
+from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
 from data_processing.refunds.export import WORKBOOK_COLUMNS
 from data_processing.refunds.extract import ExtractSettings, render_extract_sql
 from data_processing.refunds.pipeline import run_refund_download_pipeline
+from tests.python import test_refunds_workflow as python_cases
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -33,116 +35,35 @@ class RefundsQueryContractTests(unittest.TestCase):
     def section(self, start: str, end: str) -> str:
         return self.query[self.query.index(start) : self.query.index(end)].upper()
 
-    def test_population_includes_full_account_and_fiscal_year_credits(self) -> None:
-        self.assertNotIn("GLBEXTR", self.normalized_query)
-        self.assertNotIn("POPSEL", self.normalized_query)
-        self.assertIn("FROM TAISMGR.TBRACCD T", self.normalized_query)
-        self.assertIn("ACCOUNT_FISCAL_ROLLUP AS", self.normalized_query)
-        self.assertIn("LOWEST_FISCAL_YEAR_BALANCE", self.normalized_query)
-        self.assertIn("R.FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
-        self.assertIn("R.TARGET_TERM_ACTIVITY_COUNT > 0", self.normalized_query)
-        self.assertIn("R.NEGATIVE_STORED_PAYMENT_COUNT > 0", self.normalized_query)
+    def test_query_is_one_read_only_statement(self) -> None:
+        body = re.sub(r"/\*.*?\*/|--[^\n]*", "", self.query, flags=re.S)
+        body = re.sub(r"'(?:''|[^'])*'", "''", body)
+        self.assertEqual(body.count(";"), 1)
+        self.assertNotRegex(body.upper(), r"\b(CREATE|INSERT|UPDATE|DELETE|DROP|TRUNCATE|CALL)\b")
+        self.assertTrue(body.lstrip().startswith("WITH RECURSIVE"))
 
-    def test_large_tables_are_scoped_before_secondary_lookups(self) -> None:
-        self.assertEqual(self.normalized_query.count("TAISMGR.TBRACCD T"), 3)
-        scope = self.section("validation_scope_pidms AS", "account_fiscal_rollup AS")
-        self.assertIn("FROM SATURN.SPRIDEN S", scope)
-        self.assertIn("UNION ALL", scope)
-        self.assertIn("WHERE P.CWID_FILTER IS NULL", scope)
-        self.assertIn("AND P.LAST_NAME_FILTER IS NULL", scope)
-        self.assertIn("T.TBRACCD_TERM_CODE = P.TARGET_TERM", scope)
-        self.assertIn("REPORT_SCOPE_PIDMS AS", scope)
-        self.assertIn("INNER JOIN TAISMGR.TBRACCD T ON T.TBRACCD_PIDM = V.PIDM", scope)
-        screening = self.section("account_fiscal_rollup AS", "account_balance_rollup AS")
-        self.assertIn("FROM SCREENING_TRANSACTIONS T", screening)
-        identity = self.section(
-            "current_identity AS MATERIALIZED", "person_controls AS MATERIALIZED"
-        )
-        people = self.section(
-            "person_controls AS MATERIALIZED", "account_controls AS MATERIALIZED"
-        )
-        accounts = self.section(
-            "account_controls AS MATERIALIZED", "active_ed AS MATERIALIZED"
-        )
-        holds = self.section(
-            "active_ed AS MATERIALIZED", "candidate_transactions AS"
-        )
-        for section in (identity, people, accounts, holds):
-            self.assertIn("INNER JOIN ACCOUNT_BALANCES", section)
+    def test_history_is_loaded_once_after_candidate_selection(self) -> None:
+        screening = self.section("screening_transactions AS MATERIALIZED", "account_balance_rollup AS")
+        self.assertIn("FROM REPORT_SCOPE_PIDMS V", screening)
+        self.assertIn("T.TBRACCD_PIDM = V.PIDM", screening)
+        self.assertNotIn("TAISMGR.TBRACCD", self.query[self.query.index("account_balance_rollup AS"):].upper())
+        self.assertIn("FULL_ACCOUNT_BALANCE <= 0", self.normalized_query)
 
-    def test_title_iv_and_category_are_loaded_for_payments(self) -> None:
-        transactions = self.section(
-            "candidate_transactions AS", "balance_input_checks AS MATERIALIZED"
-        )
-        self.assertIn("TBBDETC_DCAT_CODE", transactions)
-        self.assertIn("TBBDETC_TIV_IND", transactions)
-        classification = self.section("payment_sources AS", "charge_rows AS")
-        self.assertLess(classification.index("WHEN R.IS_TITLE_IV = 1"), classification.index("LIKE 'FA%'"))
-
-    def test_fiscal_year_mapping_supports_modern_and_historical_summers(self) -> None:
-        terms = self.section("current_term AS", "legacy_third_party_cwids AS")
-        for suffix in ("'10'", "'50'", "'55'", "'60'", "'80'"):
-            self.assertIn(suffix, terms)
-        self.assertIn("PREVIOUS_TERM_OVERRIDE", terms)
-        transactions = self.section(
-            "candidate_transactions AS", "balance_input_checks AS MATERIALIZED"
-        )
-        self.assertIn("(10|50|55|60)", transactions)
-        self.assertIn("FISCAL_YEAR_START", transactions)
-
-    def test_cross_fiscal_year_title_iv_has_separate_give_and_receive_caps(self) -> None:
-        allocation = self.section("priority_allocation AS", "allocation_final AS")
+    def test_recursion_uses_per_account_vectors_without_pair_relation_rescans(self) -> None:
+        allocation = self.section("allocation_final AS MATERIALIZED", "allocation_transfer_summary AS")
+        self.assertIn("CROSS JOIN LATERAL", allocation)
+        self.assertIn("I.PRIORITY_MATCHES", allocation)
+        self.assertIn("MIN(K.VALUE::INTEGER)", allocation)
         self.assertIn("TITLE_IV_GIVEN_BY_FY", allocation)
         self.assertIn("TITLE_IV_RECEIVED_BY_FY", allocation)
-        self.assertIn("P.TITLE_IV_CROSS_FY_CAP - LIMITS.GIVEN_SO_FAR", allocation)
-        self.assertIn("P.TITLE_IV_CROSS_FY_CAP - LIMITS.RECEIVED_SO_FAR", allocation)
-        self.assertIn("CAST(200.00 AS NUMERIC) AS TITLE_IV_CROSS_FY_CAP", self.normalized_query)
+        self.assertNotIn("JOIN ALLOCATION_PAIRS", allocation)
+        self.assertNotIn("JOIN NUMBERED_PAYMENT_SOURCES", allocation)
+        self.assertNotIn("PRECURRENT_LOCAL_ALLOCATION", self.normalized_query)
 
-    def test_priority_order_and_artificial_bands_are_explicit(self) -> None:
-        sources = self.section("payment_sources AS", "charge_rows AS")
-        for code in ("TPDT", "TPPY", "COFP", "ACHK", "CRAM", "CRDS", "CRMC", "CRVC"):
-            self.assertIn(f"'{code}'", sources)
-        for band in ("'800A'", "'000A'", "'000Z'"):
-            self.assertIn(band, sources)
-        ordering = self.section("numbered_payment_sources AS", "stage_charge_inputs AS")
-        self.assertIn("PAYMENT_PRIORITY_SORT DESC", ordering)
-        self.assertIn("S.TRAN_NUMBER", ordering)
-
-    def test_current_charge_matching_uses_unsuffixed_three_digit_priority(self) -> None:
-        pairs = self.section("allocation_pairs AS", "allocation_pair_counts AS")
-        self.assertIn("REPLACE(S.PRIORITY_CODE, '0', '_')", pairs)
-        self.assertNotIn("EFFECTIVE_PRIORITY_CODE", pairs)
-
-    def test_closed_noncredit_fiscal_years_bypass_local_recursion(self) -> None:
-        history = self.section(
-            "precurrent_fiscal_balances AS", "stage_payment_inputs AS"
-        )
-        self.assertIn("PRECURRENT_CREDIT_FISCAL_YEARS AS", history)
-        self.assertIn("WHERE F.FISCAL_BALANCE < 0", history)
-        self.assertIn(
-            "PARTITION BY S.PIDM, S.FISCAL_YEAR_START", history
-        )
-        self.assertIn("FROM PRECURRENT_CREDIT_FISCAL_YEARS F", history)
-        self.assertNotIn("FROM ACCOUNT_BALANCES B\n\n    UNION ALL", history)
-
-    def test_parent_plus_authorization_is_matched_by_each_unused_aid_year(self) -> None:
-        plus = self.section(
-            "unused_fdpl_aid_years AS", "original_payment_summary AS MATERIALIZED"
-        )
-        self.assertIn("R.RLRPAPP_AIDY_CODE IS NOT DISTINCT FROM F.AIDY_CODE", plus)
-        self.assertIn("PARENT_FDPL_AMOUNT", plus)
-        self.assertNotIn("MULTIPLE_TARGET_TERM_FDPL_ROWS", self.normalized_query)
-
-    def test_ach_uses_effective_date_sixteen_day_date_and_180_day_note(self) -> None:
-        delivery = self.section(
-            "student_delivery_sources AS MATERIALIZED", "joined AS"
-        )
-        self.assertIn("S.EFFECTIVE_DATE", delivery)
-        self.assertIn("+ 16", delivery)
-        self.assertIn("<= 180", delivery)
-        self.assertIn("> 180", delivery)
-        self.assertIn("ACHK CLEARING WAIT UNTIL", self.normalized_query)
-        self.assertIn("MAY BE TOO OLD", self.normalized_query)
+    def test_settlement_requires_known_zero_balances(self) -> None:
+        history = self.section("open_term_balances AS", "allocation_ledger AS")
+        self.assertIn("RAW_TRANSACTION_BALANCE IS DISTINCT FROM 0", history)
+        self.assertIn("CUMULATIVE_BALANCE = 0 AND UNRESOLVED_PREFIX = 0", history)
 
     def test_schema_inventory_requires_new_metadata(self) -> None:
         schema_query = REFUNDS_QUERY.with_name("validate_refund_schema.sql").read_text(
@@ -151,12 +72,6 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("('TAISMGR', 'TBBDETC', 'PRIORITY')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'DCAT_CODE')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
-
-    def test_third_party_controls_remain(self) -> None:
-        self.assertIn("LEGACY_THIRD_PARTY_CWIDS AS", self.normalized_query)
-        self.assertIn("LIKE 'TPS%'", self.normalized_query)
-        self.assertIn("THIRD_PARTY_ACCOUNT_REVIEW_REQUIRED", self.normalized_query)
-        self.assertIn("THEN 'THIRD_PARTY_REVIEW'", self.normalized_query)
 
 
 @dataclass(frozen=True)
@@ -213,6 +128,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         previous_term_override: str | None = None,
         run_date: str = "2099-08-31",
         query: str | None = None,
+        context_activity_date: str | None = None,
+        explain: bool = False,
     ) -> list[dict]:
         report_query = re.sub(
             r"\b(?:taismgr|saturn|faismgr)\.", "pg_temp.",
@@ -234,7 +151,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         schemas = {
             "tbraccd": "pidm int, term_code text, aidy_code text, tran_number int, "
                 "detail_code text, amount numeric, balance numeric, "
-                "effective_date date, activity_date date",
+                "effective_date date, activity_date timestamp",
             "tbbdetc": "detail_code text, desc text, type_ind text, priority text, "
                 "dcat_code text, tiv_ind text",
             "spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
@@ -288,21 +205,35 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ))
 
         authorization_rows = {"9900": "N"} if authorizations is None else authorizations
+        control_date = context_activity_date or run_date
         for pidm in sorted({transaction.pidm for transaction in transactions}):
             insert("spriden", (pidm, f"TEST-{pidm}", "Synthetic", "Example", None))
             insert("spbpers", (pidm, "N", None, "N", run_date))
-            insert("tbbacct", (pidm, "RH" if refund_hold else None, "N", run_date))
+            insert("tbbacct", (pidm, "RH" if refund_hold else None, "N", control_date))
             if active_ed:
-                insert("sprhold", (pidm, "ED", "9999-12-31", run_date))
+                insert("sprhold", (pidm, "ED", "9999-12-31", control_date))
             for aid_year, values in authorization_rows.items():
                 for value in values if isinstance(values, list) else [values]:
-                    insert("rlrpapp", (pidm, aid_year, value, run_date))
+                    insert("rlrpapp", (pidm, aid_year, value, control_date))
 
-        sql.append(
-            "SELECT COALESCE(JSON_AGG(report), '[]'::json) FROM ("
-            + report_query.rstrip().removesuffix(";")
-            + ") report; ROLLBACK;"
-        )
+        if explain:
+            # Representative lookup indexes belong only to this temporary fixture.
+            sql.extend([
+                "CREATE INDEX ON tbraccd (tbraccd_pidm);",
+                "CREATE INDEX ON tbraccd (tbraccd_term_code);",
+                "CREATE INDEX ON tbraccd (tbraccd_detail_code, tbraccd_effective_date);",
+                "CREATE UNIQUE INDEX ON tbbdetc (tbbdetc_detail_code);",
+                "CREATE INDEX ON spriden (spriden_id);",
+                *(f"ANALYZE {table};" for table in schemas),
+            ])
+            sql.append("EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) "
+                       + report_query.rstrip().removesuffix(";") + "; ROLLBACK;")
+        else:
+            sql.append(
+                "SELECT COALESCE(JSON_AGG(report), '[]'::json) FROM ("
+                + report_query.rstrip().removesuffix(";")
+                + ") report; ROLLBACK;"
+            )
         result = subprocess.run(
             [self.psql, "-X", "-qAt", "--set=ON_ERROR_STOP=1", "--dbname", self.dsn],
             input="\n".join(sql), text=True, capture_output=True, timeout=30, check=False,
@@ -323,6 +254,18 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         self.assertEqual(row["total_refund_amount"], parent_amount + student_amount)
         self.assertEqual(row["total_unused_payment_amount"], row["total_refund_amount"])
         self.assertEqual(row["refund_split_status"], "CALCULATED_SUBJECT_TO_REVIEW")
+
+    def assert_matches_python(self, actual: dict, expected: dict, label: str = "") -> None:
+        for column in REPORT_COLUMNS:
+            a, e = actual[column], expected[column]
+            a = None if pd.isna(a) else a
+            e = None if pd.isna(e) else e
+            if column == "review_reasons":
+                a, e = set((a or "").split("; ")), set((e or "").split("; "))
+            elif column.endswith("_date"):
+                a = pd.Timestamp(a) if a else None
+                e = pd.Timestamp(e) if e else None
+            self.assertEqual(a, e, f"{label}: {column}")
 
     def test_worked_example_uses_priority_allocation(self) -> None:
         row = self.one(self.worked_example())
@@ -374,16 +317,13 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         self.assertEqual(row["allocation_review_required_ind"], "Y")
         self.assertIn("POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT", row["review_reasons"])
 
-    def test_title_iv_refund_is_not_hidden_by_a_full_account_debit(self) -> None:
-        row = self.one([
+    def test_positive_full_account_balances_are_excluded(self) -> None:
+        rows = self.run_report([
             RefundTransaction("OLD", "C", "899", 1500, balance=1300, term="209955"),
             RefundTransaction("TIVA", "P", "000", 1200, balance=-1000,
                               category="FA", title_iv="Y"),
         ])
-        self.assertEqual(row["full_account_balance"], 300)
-        self.assert_split(row, 0, 1000)
-        self.assertEqual(row["unpaid_charge_amount"], 1300)
-        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 200)
+        self.assertEqual(rows, [])
 
     def test_dormant_historical_fiscal_credit_does_not_enter_recursion(self) -> None:
         rows = self.run_report([
@@ -444,12 +384,12 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
     def test_prior_surplus_can_pay_current_charges_with_title_iv_cap_retained(self) -> None:
         title_iv = self.one([
-            RefundTransaction("TIVA", "P", "000", 500, balance=-300,
+            RefundTransaction("TIVA", "P", "000", 1200, balance=-1000,
                               term="209955", aid_year="9899", category="FA", title_iv="Y"),
             RefundTransaction("CURR", "C", "700", 1000, balance=800),
         ])
-        self.assert_split(title_iv, 0, 300)
-        self.assertEqual(title_iv["full_account_balance"], 500)
+        self.assert_split(title_iv, 0, 1000)
+        self.assertEqual(title_iv["full_account_balance"], -200)
         self.assertEqual(title_iv["unpaid_charge_amount"], 800)
 
         unrestricted = self.one([
@@ -525,7 +465,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         ])
         self.assert_split(late_fdpl, 100, 0)
 
-    def test_000a_applies_first_and_000z_last(self) -> None:
+    def test_000a_applies_first_then_ordinary_000_by_transaction(self) -> None:
         cofp = self.one([
             RefundTransaction("CHG", "C", "700", 100),
             RefundTransaction("PAY0", "P", "000", 100, balance=-100),
@@ -542,8 +482,9 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("PAY0", "P", "000", 100),
         ])
         self.assert_split(ach, 0, 100)
-        self.assertIn("000Z", ach["balance_sources"])
-        self.assertEqual(ach["proposed_student_delivery"], "AFRD (Transact)")
+        self.assertIn("PAY0", ach["balance_sources"])
+        self.assertNotIn("ACHK", ach["balance_sources"])
+        self.assertEqual(ach["proposed_student_delivery"], "ARFD (System)")
 
     def test_payment_priority_wildcard_and_charge_descending_order(self) -> None:
         row = self.one([
@@ -586,7 +527,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         ])
         self.assert_split(row, 0, 100)
         self.assertEqual(row["unpaid_charge_amount"], 0)
-        self.assertNotIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"])
+        self.assertNotIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"] or "")
 
     def test_cross_detail_charge_credits_do_not_create_false_historical_debt(self) -> None:
         row = self.one([
@@ -808,6 +749,11 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             )
             expected_refunds = {"TEST-1": 100, "TEST-2": 20, "TEST-4": 10, "TEST-10": 10}
             self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), expected_refunds)
+            sql_rows = self.run_report(transactions)
+            self.assertEqual({row["cwid"] for row in sql_rows}, set(expected_refunds))
+            by_cwid = {row["cwid"]: row for row in report.to_dict("records")}
+            for row in sql_rows:
+                self.assert_matches_python(row, by_cwid[row["cwid"]], row["cwid"])
             for row in report.to_dict("records"):
                 self.assertEqual(row["student_refund_amount"], expected_refunds[row["cwid"]])
                 self.assertEqual(row["parent_refund_amount"], Decimal("0.00"))
@@ -822,6 +768,74 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ], ignore_index=True)
             self.assertEqual(dict(zip(workbook.cwid, workbook.tab_refund_amount)), expected_refunds)
             self.assertEqual(set(sheets["Mines Park Reviews"].cwid), {"TEST-4", "TEST-10"})
+
+    def test_sql_matches_current_python_allocation_scenarios(self) -> None:
+        sql_case = self
+        filtered = self.query.replace(
+            "CAST(NULL AS varchar(30)) AS cwid_filter",
+            "CAST('TEST-1' AS varchar(30)) AS cwid_filter",
+        )
+
+        class CompareWithSQL(python_cases.RefundAllocationTests):
+            def report(self, transactions, **kwargs):
+                expected = super().report(transactions, **kwargs)
+                converted = [RefundTransaction(
+                    detail_code=t.detail_code, type_ind=t.type_ind, priority=t.priority,
+                    amount=t.amount, balance=t.stored_balance, term=t.term,
+                    aid_year=t.aid_year, effective_date=t.effective_date,
+                    activity_date=t.activity_date, category=t.category,
+                    title_iv=t.title_iv, tran_number=t.tran_number,
+                ) for t in transactions]
+                arguments = {key: value for key, value in kwargs.items() if key != "expected_rows"}
+                if "run_date" in arguments:
+                    arguments["run_date"] = arguments["run_date"].isoformat()
+                actual = sql_case.run_report(converted, query=filtered,
+                                             context_activity_date="2099-08-31", **arguments)
+                sql_case.assertEqual(len(actual), kwargs.get("expected_rows", 1))
+                if actual:
+                    sql_case.assert_matches_python(actual[0], expected, self._testMethodName)
+                return expected
+
+        for method in unittest.defaultTestLoader.getTestCaseNames(CompareWithSQL):
+            with self.subTest(scenario=method):
+                CompareWithSQL(method).debug()
+
+    def test_sql_matches_python_for_seeded_open_history_population(self) -> None:
+        rng = random.Random(90210)
+        terms = ("209580", "209610", "209655", "209880", "209910", "209955", "209980")
+        priorities = ("899", "897", "869", "890", "800", "700", "000")
+        transactions = []
+        for pidm in range(1, 81):
+            for number in range(1, 31):
+                kind = "P" if rng.random() < 0.55 else "C"
+                priority = rng.choice(priorities)
+                tiv = "Y" if kind == "P" and rng.random() < 0.5 else "N"
+                code = "FDPL" if kind == "P" and priority == "800" and tiv == "Y" else kind + priority + tiv
+                amount = Decimal(rng.randrange(1, 60000)) / 100
+                if rng.random() < 0.1:
+                    amount = -amount
+                transactions.append(RefundTransaction(
+                    code, kind, priority, amount, balance=-amount if kind == "P" else amount,
+                    term=rng.choice(terms), aid_year="9900", pidm=pidm,
+                    category="FA" if tiv == "Y" else "CSH", title_iv=tiv, tran_number=number,
+                ))
+            # Establish current activity, retaining both credit and positive-net cases.
+            transactions.append(RefundTransaction("BASE", "P", "000", 100, balance=-100,
+                                                  pidm=pidm, tran_number=31))
+        actual = self.run_report(transactions)
+        downloads = {}
+        for name in ("transactions", "context"):
+            downloads[name] = pd.DataFrame(self.run_report(
+                transactions, query=REFUNDS_QUERY.with_name(f"refund_{name}_manual.sql").read_text(),
+            ))
+        expected = allocate_refunds(downloads["transactions"], downloads["context"],
+                                    RefundParameters("209980", date(2099, 8, 31)))
+        self.assertGreater(len(expected), 20)
+        self.assertEqual({row["cwid"] for row in actual}, set(expected.cwid))
+        by_cwid = {row["cwid"]: row for row in expected.to_dict("records")}
+        for row in actual:
+            with self.subTest(cwid=row["cwid"]):
+                self.assert_matches_python(row, by_cwid[row["cwid"]], row["cwid"])
 
     def test_export_two_year_term_boundaries_and_validation_filter(self) -> None:
         root = REFUNDS_QUERY.parent
