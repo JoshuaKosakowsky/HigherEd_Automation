@@ -550,6 +550,18 @@ class RefundAllocationTests(unittest.TestCase):
         hold = self.report([Transaction("PAY0", "P", "000", 50, -50)], refund_hold=True)
         self.assertEqual(hold["proposed_student_delivery"], "Refund Hold - Student")
 
+    def test_rh_hold_overrides_mines_park_and_parent_delivery(self) -> None:
+        row = self.report([
+            Transaction("HOMP", "C", "889", 100),
+            Transaction("FDPL", "P", "800", 200, -100, category="FA", title_iv="Y"),
+        ], authorizations={"9900": "N"}, refund_hold=True)
+        self.assert_split(row, "100.00", "0.00")
+        self.assertEqual(row["proposed_student_delivery"], "NONE")
+        self.assertEqual(row["proposed_parent_delivery"], "Refund Hold - Parent")
+        self.assertEqual(row["review_status"], "HOLD")
+        self.assertIn("REFUND_HOLD_RH", row["review_reasons"])
+        self.assertIn("Mines Park Charge - Review", row["review_reasons"])
+
     def test_activity_audit_columns_retain_time_of_day(self) -> None:
         row = self.report([
             Transaction(
@@ -689,7 +701,10 @@ class RefundExtractTests(unittest.TestCase):
                     "AFRD (Transact) 20.00; CRVC (Transact) 30.00; RFND (CHECK) 100.00"),
             account("TEST-SYS", 90, delivery="ARFD (System)", review_status="MANUAL_REVIEW"),
             account("TEST-WAIT", 100, delivery="ACHK Clearing Wait until 09/16/2099 / 40.00; ARFD (System) 60.00"),
-            account("TEST-HOLD", 45, 5, "Refund Hold - Student", review_status="HOLD"),
+            account("TEST-HOLD", 45, 5, "Refund Hold - Student",
+                    proposed_parent_delivery="Refund Hold - Parent", refund_hold_ind="Y",
+                    review_status="HOLD",
+                    review_reasons="REFUND_HOLD_RH; Mines Park Charge - Review"),
             account("TEST-OLD", 15, delivery="AFRD (Transact) - May Be Too Old"),
             account("TEST-DATE", 10, delivery="ACHK Date Review"),
             account("TEST-THIRD", 10, 20, "THIRD_PARTY_REVIEW",
@@ -702,9 +717,9 @@ class RefundExtractTests(unittest.TestCase):
         expected = {
             "Transact Refunds": {"TEST-MIX": 50},
             "Check Refunds": {"TEST-MIX": 100},
-            "Parent Refunds": {"TEST-MIX": 75, "TEST-HOLD": 5},
+            "Parent Refunds": {"TEST-MIX": 75},
             "System Refunds": {"TEST-SYS": 90, "TEST-WAIT": 60},
-            "Refund Holds": {"TEST-HOLD": 45},
+            "Refund Holds": {"TEST-HOLD": 50},
             "ACH Clearing": {"TEST-WAIT": 40},
             "ACH Reviews": {"TEST-OLD": 15, "TEST-DATE": 10},
             "Third Party Reviews": {"TEST-THIRD": 30},
@@ -723,6 +738,9 @@ class RefundExtractTests(unittest.TestCase):
                              sum(row["total_refund_amount"] for row in rows))
             self.assertEqual(sheets["Transact Refunds"].iloc[0].total_refund_amount, 225)
             self.assertEqual(sheets["System Refunds"].iloc[0].review_status, "MANUAL_REVIEW")
+            self.assertNotIn("TEST-HOLD", set(sheets["Mines Park Reviews"].cwid))
+            self.assertEqual(sheets["Refund Holds"].iloc[0].tab_review_note,
+                             "RH account hold: do not issue any refund.")
             self.assertTrue(sheets["Manual Reviews"].tab_review_note.notna().all())
             workbook = load_workbook(output)
             for sheet in workbook:

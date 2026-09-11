@@ -101,8 +101,9 @@ The workbook has these tabs, including headers when a category is empty:
 - **Parent Refunds:** parent `RFDP` portions.
 - **System Refunds:** student `ARFD (System)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
-- **Refund Holds:** held student portions; a separate parent portion remains on
-  Parent Refunds if its delivery is RFDP.
+- **Refund Holds:** the entire account refund when RH is present, including any
+  student and parent portions. No portion remains on a delivery or other review
+  tab while the hold is active.
 - **ACH Clearing:** ACH portions still within the clearing period, with the
   eligibility date retained.
 - **ACH Reviews:** ACH portions over 180 days old or requiring effective-date review.
@@ -110,9 +111,11 @@ The workbook has these tabs, including headers when a category is empty:
 - **Manual Reviews:** undetermined splits, unrecognized delivery methods, or
   delivery components that do not reconcile to recipient amounts.
 
-Third-party review takes precedence over Mines Park review; both reasons remain
-visible if both apply. Other existing review statuses and reasons stay on the
-applicable method tabs: a tab assignment is **not approval to issue a refund**.
+RH takes precedence over every delivery and review tab. Without RH, third-party
+review takes precedence over Mines Park review. All applicable reasons remain
+visible so staff can address them after a hold is removed. Other existing review
+statuses and reasons stay on the applicable method tabs: a tab assignment is
+**not approval to issue a refund**.
 
 Mixed refunds can appear on multiple tabs, but each account appears at most
 once per tab. `tab_delivery` identifies that tab's method(s), and

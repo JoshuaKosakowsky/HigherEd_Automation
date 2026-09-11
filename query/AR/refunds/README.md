@@ -195,7 +195,9 @@ mixed parent/student result.
 
 Only unused ACH/card principal routes to Transact. Ordinary student funds use
 ARFD (System) with active ED, otherwise RFND (CHECK). RH overrides student
-delivery. CRAM, CRDS, CRMC, and CRVC use their own code plus (Transact), without
+and parent delivery and every workbook review route. The entire account refund
+stays on Refund Holds while RH is active; other review reasons remain visible.
+CRAM, CRDS, CRMC, and CRVC use their own code plus (Transact), without
 a clearing delay. ACHK becomes eligible on effective date +16 days; day 180 is
 included, and older funds carry the May Be Too Old note. Waiting funds show the
 eligibility date. Multiple methods show their individual amounts.

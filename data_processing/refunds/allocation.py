@@ -816,7 +816,9 @@ def _allocate_account(
         third_party=third_party,
         active_ed=active_ed,
     )
-    if third_party and (parent_amount or ZERO) > ZERO:
+    if refund_hold and (parent_amount or ZERO) > ZERO:
+        parent_delivery = "Refund Hold - Parent"
+    elif third_party and (parent_amount or ZERO) > ZERO:
         parent_delivery = "THIRD_PARTY_REVIEW"
     elif (parent_amount or ZERO) > 0 and plus_status in {"N", "MIXED"}:
         parent_delivery = "RFDP"

@@ -28,9 +28,11 @@ CURRENT POLICY
 - Each unused FDPL aid year uses its own PLUS authorization: N parent/RFDP,
   Y student. Missing/conflicting authorization blocks a reliable recipient split.
 - Only unused ACH/card principal goes to Transact; ordinary student funds use
-  ARFD (System) with ED, otherwise RFND (CHECK). RH holds override student delivery.
+  ARFD (System) with ED, otherwise RFND (CHECK).
   ACHK clears on effective date +16 days; after 180 days it carries an age warning.
   CRAM, CRDS, CRMC, CRVC are immediately available via their respective codes.
+- RH is an account-level hold and overrides every student/parent delivery and
+  workbook review route. Other review reasons remain visible for later handling.
 - Unused target-term C529/Z0LE/TPPY sources flag Possible Third Party refund,
   along with existing TPS/legacy account controls. Third-party delivery is blocked.
 - Surviving HOMP charges in the target term OR effective 0..32 days ago trigger
@@ -1333,6 +1335,8 @@ delivery AS (
             )
         END AS proposed_student_delivery,
         CASE
+            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
+             AND s.refund_hold_ind = 'Y' THEN 'Refund Hold - Parent'
             WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
              AND s.third_party_review_required_ind = 'Y' THEN 'THIRD_PARTY_REVIEW'
             WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0

@@ -92,7 +92,12 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
         return [(sheet, {**row, "tab_delivery": "REVIEW REQUIRED",
                          "tab_refund_amount": total, "tab_review_note": note})]
 
-    # Account-level reviews stay together rather than appearing in payment queues.
+    # RH is an account-level instruction to issue no refund. Keep every recipient
+    # portion together on the hold tab even when another review reason also applies.
+    if row["refund_hold_ind"] == "Y":
+        return review("Refund Holds", "RH account hold: do not issue any refund.")
+
+    # Other account-level reviews stay together rather than appearing in payment queues.
     if row["third_party_review_required_ind"] == "Y":
         return review("Third Party Reviews", "Resolve third-party ownership before issuing refunds.")
     if "Mines Park Charge - Review" in str(row["review_reasons"]):
