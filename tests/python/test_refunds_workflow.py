@@ -527,6 +527,72 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("ARFD", "C", "800", 100, 0),
         ], expected_rows=0)
 
+    def test_later_student_refunds_reconcile_restrictive_payment_remainders(self) -> None:
+        for refund_code in ("ARFD", "RFND"):
+            with self.subTest(refund_code=refund_code):
+                self.report([
+                    Transaction("R879", "P", "879", 2500, 0, term="209955", tran_number=10),
+                    Transaction(refund_code, "C", "800", 2500, 0,
+                                term="209980", tran_number=20),
+                ], expected_rows=0)
+
+        partial = self.report([
+            Transaction("OLD8", "C", "879", 1000, 0, term="209955", tran_number=1),
+            Transaction("R879", "P", "879", 3000, -500, term="209980", tran_number=10),
+            Transaction("ARFD", "C", "800", 1500, 0, term="209980", tran_number=20),
+        ])
+        self.assert_split(partial, "0.00", "500.00")
+        self.assertEqual(partial["unpaid_charge_amount"], Decimal("0.00"))
+        self.assertIn("R879", partial["balance_sources"])
+        self.assertIn(
+            "POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_1500.00",
+            partial["review_reasons"],
+        )
+
+        ordered = self.report([
+            Transaction("R879", "P", "879", 2500, 0, tran_number=10),
+            Transaction("FREE", "P", "000", 2500, -2500, tran_number=11),
+            Transaction("ARFD", "C", "800", 2500, 0, tran_number=20),
+        ])
+        self.assert_split(ordered, "0.00", "2500.00")
+        self.assertNotIn("R879", ordered["balance_sources"])
+        self.assertIn("FREE", ordered["balance_sources"])
+
+    def test_posted_student_refund_requires_an_earlier_payment_and_excludes_rfdp(self) -> None:
+        earlier_refund = self.report([
+            Transaction("ARFD", "C", "800", 2500, 2500, tran_number=10),
+            Transaction("R879", "P", "879", 2500, -2500, tran_number=20),
+        ])
+        self.assert_split(earlier_refund, "0.00", "2500.00")
+        self.assertEqual(earlier_refund["unpaid_charge_amount"], Decimal("2500.00"))
+        self.assertNotIn(
+            "POSTED_STUDENT_REFUND_RECONCILED",
+            earlier_refund["review_reasons"] or "",
+        )
+
+        parent_refund = self.report([
+            Transaction("R879", "P", "879", 2500, -2500, tran_number=10),
+            Transaction("RFDP", "C", "800", 2500, 2500, tran_number=20),
+        ])
+        self.assert_split(parent_refund, "0.00", "2500.00")
+        self.assertEqual(parent_refund["unpaid_charge_amount"], Decimal("2500.00"))
+        self.assertNotIn(
+            "POSTED_STUDENT_REFUND_RECONCILED",
+            parent_refund["review_reasons"] or "",
+        )
+
+    def test_posted_student_refund_reversals_net_before_reconciliation(self) -> None:
+        row = self.report([
+            Transaction("R879", "P", "879", 3000, -1000, tran_number=10),
+            Transaction("ARFD", "C", "800", 2500, 2000, tran_number=20),
+            Transaction("ARFD", "C", "800", -500, 0, tran_number=21),
+        ])
+        self.assert_split(row, "0.00", "1000.00")
+        self.assertIn(
+            "POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_2000.00",
+            row["review_reasons"],
+        )
+
     def test_bad_inputs_block_split_without_displaying_zero(self) -> None:
         missing_amount = self.report(
             self.worked_example() + [Transaction("NULL", "C", "700", None)]

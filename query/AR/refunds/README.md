@@ -187,6 +187,15 @@ charges within term/priority. Charge pooling permits paired detail codes, such
 as a charge and waiver at the same priority, to offset. Negative net source
 groups still require review.
 
+Posted `ARFD` and `RFND` student refunds are reconciled after ordinary charges,
+so the normal oldest-term-first charge allocation remains intact. Each surviving
+posted refund can consume only unused payment sources with a lower transaction
+number, across the complete account, and bypasses priority matching because the
+money has already been issued. Partial matches reduce only the remaining refund
+proposal and add `POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_...` to the review
+reasons. Refund reversals are netted within term/detail before reconciliation.
+`RFDP` is deliberately excluded and continues through normal charge allocation.
+
 ### Ownership, delivery, and review
 
 Each unused FDPL source uses its own aid year's PLUS authorization. N assigns

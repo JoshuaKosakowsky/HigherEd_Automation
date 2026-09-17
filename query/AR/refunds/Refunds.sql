@@ -16,6 +16,9 @@ CURRENT POLICY
   899/869 only pay their exact priorities in any term. Payments apply by descending
   priority, then earliest transaction number. TPDT/TPPY retain 800A; COFP retains
   000A. ACH/cards use their normal stored priority; there is no 000Z.
+- After normal charges are allocated oldest-term first, posted ARFD/RFND student
+  refunds consume remaining payment sources with lower transaction numbers
+  across the account, regardless of priority. RFDP is not part of this rule.
 - A completed historical prefix is settled only when its cumulative raw total
   and every stored transaction balance are known zero. Other history is replayed.
 - Reversals reduce newest positive payment rows within term/aid year/detail and
@@ -46,7 +49,8 @@ Normalize selected account history once. Net reversals and pool charges before
 building one matching-payment list per charge priority. Each account walks its
 charges independently and selects the earliest still-eligible source. Recursion
 emits only actual transfers or completed charges, never empty source-pair steps.
-All money uses exact numeric cents.
+ARFD/RFND reconciliation uses a second compact per-account pass. All money uses
+exact numeric cents.
 Runtime still depends on Insights hardware, indexes, and candidate/history volume;
 validate a representative population against the ten-minute server limit.
 
@@ -448,7 +452,9 @@ balance_input_checks AS MATERIALIZED (
     SELECT
         b.pidm,
         COUNT(*) FILTER (
-            WHERE x.raw_amount <> 0 AND x.priority_code IS NULL
+            WHERE x.raw_amount <> 0
+              AND x.priority_code IS NULL
+              AND x.detail_code NOT IN ('ARFD', 'RFND')
         ) AS invalid_priority_count,
         COUNT(*) FILTER (WHERE x.amount_missing_ind = 1)
             AS missing_transaction_amount_count,
@@ -564,6 +570,7 @@ charge_rows AS (
     FROM allocation_transactions x
     CROSS JOIN params p
     WHERE x.is_charge
+      AND x.detail_code NOT IN ('ARFD', 'RFND')
       AND x.term_sort IS NOT NULL
       AND x.term_sort <= CAST(p.target_term AS integer)
 ),
@@ -611,11 +618,47 @@ charge_sources AS (
         r.priority_code
 ),
 
+/* Posted student refunds reconcile after normal oldest-term charge allocation. */
+posted_refund_rows AS (
+    SELECT x.*,
+        SUM(x.raw_amount) OVER (
+            PARTITION BY x.pidm, x.term_code, x.detail_code
+        ) AS refund_group_net,
+        COALESCE(SUM(CASE WHEN x.raw_amount > 0 THEN x.raw_amount ELSE 0 END)
+            OVER (
+                PARTITION BY x.pidm, x.term_code, x.detail_code
+                ORDER BY x.tran_number
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ), 0) AS prior_positive_refund_amount
+    FROM allocation_transactions x
+    WHERE x.is_charge
+      AND x.detail_code IN ('ARFD', 'RFND')
+),
+posted_refund_sources AS (
+    SELECT
+        r.pidm,
+        r.term_code,
+        r.term_sort,
+        r.tran_number,
+        r.detail_code,
+        ROUND(LEAST(
+            r.raw_amount,
+            GREATEST(r.refund_group_net - r.prior_positive_refund_amount, 0)
+        ), 2) AS refund_amount
+    FROM posted_refund_rows r
+    WHERE r.raw_amount > 0
+      AND LEAST(
+          r.raw_amount,
+          GREATEST(r.refund_group_net - r.prior_positive_refund_amount, 0)
+      ) > 0
+),
+
 net_source_checks AS MATERIALIZED (
     SELECT
         b.pidm,
         COALESCE(p.negative_payment_group_count, 0)
             + COALESCE(c.negative_charge_group_count, 0)
+            + COALESCE(r.negative_posted_refund_group_count, 0)
             AS negative_net_source_count
     FROM account_balances b
     LEFT JOIN (
@@ -638,6 +681,16 @@ net_source_checks AS MATERIALIZED (
         ) g
         GROUP BY pidm
     ) c ON c.pidm = b.pidm
+    LEFT JOIN (
+        SELECT pidm, COUNT(*) AS negative_posted_refund_group_count
+        FROM (
+            SELECT pidm, term_code, detail_code
+            FROM posted_refund_rows
+            GROUP BY pidm, term_code, detail_code
+            HAVING SUM(raw_amount) < 0
+        ) g
+        GROUP BY pidm
+    ) r ON r.pidm = b.pidm
 ),
 
 /*
@@ -663,6 +716,13 @@ numbered_charges AS MATERIALIZED (
                 c.tran_number, c.detail_code
         ) AS integer) AS charge_sequence
     FROM charge_sources c
+),
+numbered_posted_refunds AS MATERIALIZED (
+    SELECT r.*,
+        CAST(ROW_NUMBER() OVER (
+            PARTITION BY r.pidm ORDER BY r.tran_number, r.term_sort, r.detail_code
+        ) AS integer) AS refund_sequence
+    FROM posted_refund_sources r
 ),
 /*
 Matching depends on priority digits, not term. Compute each priority's ordered
@@ -692,6 +752,7 @@ payment_vectors AS MATERIALIZED (
         ARRAY_AGG(source_amount ORDER BY payment_sequence) AS amounts,
         ARRAY_AGG(fiscal_year_start ORDER BY payment_sequence) AS fiscal_years,
         ARRAY_AGG(term_sort ORDER BY payment_sequence) AS terms,
+        ARRAY_AGG(tran_number ORDER BY payment_sequence) AS transaction_numbers,
         ARRAY_AGG(is_title_iv = 1 ORDER BY payment_sequence) AS title_iv_flags
     FROM numbered_payment_sources
     GROUP BY pidm
@@ -705,19 +766,30 @@ charge_vectors AS MATERIALIZED (
     FROM numbered_charges
     GROUP BY pidm
 ),
+posted_refund_vectors AS MATERIALIZED (
+    SELECT pidm,
+        ARRAY_AGG(refund_amount ORDER BY refund_sequence) AS amounts,
+        ARRAY_AGG(tran_number ORDER BY refund_sequence) AS transaction_numbers
+    FROM numbered_posted_refunds
+    GROUP BY pidm
+),
 allocation_inputs AS MATERIALIZED (
     SELECT b.pidm,
         COALESCE(v.matches, '{}'::jsonb) AS priority_matches,
         COALESCE(p.amounts, ARRAY[]::numeric[]) AS initial_payments,
         p.fiscal_years AS payment_years, p.terms AS payment_terms,
+        p.transaction_numbers AS payment_transaction_numbers,
         p.title_iv_flags AS payment_title_iv,
         COALESCE(c.amounts, ARRAY[]::numeric[]) AS initial_charges,
         c.priorities AS charge_priorities, c.fiscal_years AS charge_years,
-        c.terms AS charge_terms
+        c.terms AS charge_terms,
+        COALESCE(r.amounts, ARRAY[]::numeric[]) AS posted_refunds,
+        r.transaction_numbers AS posted_refund_transaction_numbers
     FROM account_balances b
     LEFT JOIN priority_vectors v USING (pidm)
     LEFT JOIN payment_vectors p USING (pidm)
     LEFT JOIN charge_vectors c USING (pidm)
+    LEFT JOIN posted_refund_vectors r USING (pidm)
 ),
 
 /*
@@ -815,6 +887,60 @@ allocation_final AS MATERIALIZED (
         WHERE charge_index > CARDINALITY(i.initial_charges)
     ) a
 ),
+/*
+After normal charges are paid oldest-term first, reconcile ARFD/RFND already
+issued to the student. A refund may consume only an earlier payment source;
+priority matching and Title IV cross-FY caps do not apply to money already sent.
+*/
+posted_refund_final AS MATERIALIZED (
+    SELECT i.pidm, r.*
+    FROM allocation_inputs i
+    INNER JOIN allocation_final a ON a.pidm = i.pidm
+    CROSS JOIN LATERAL (
+        WITH RECURSIVE posted_refund_allocation AS (
+            SELECT 0 AS reconciliation_step,
+                1 AS refund_index,
+                COALESCE(i.posted_refunds[1], 0) AS current_refund_remaining,
+                0::numeric AS unmatched_posted_refund_amount,
+                0::numeric AS posted_student_refund_applied,
+                a.payment_remaining
+
+            UNION ALL
+
+            SELECT r.reconciliation_step + 1,
+                CASE WHEN e.s IS NULL OR r.current_refund_remaining = applied.amount
+                    THEN r.refund_index + 1 ELSE r.refund_index END,
+                CASE WHEN e.s IS NULL OR r.current_refund_remaining = applied.amount
+                    THEN COALESCE(i.posted_refunds[r.refund_index + 1], 0)
+                    ELSE r.current_refund_remaining - applied.amount END,
+                r.unmatched_posted_refund_amount + CASE WHEN e.s IS NULL
+                    THEN r.current_refund_remaining ELSE 0 END,
+                r.posted_student_refund_applied + applied.amount,
+                CASE WHEN applied.amount > 0 THEN
+                    r.payment_remaining[:e.s - 1]
+                    || ARRAY[r.payment_remaining[e.s] - applied.amount]
+                    || r.payment_remaining[e.s + 1:]
+                    ELSE r.payment_remaining END
+            FROM posted_refund_allocation r
+            CROSS JOIN LATERAL (
+                SELECT MIN(source_index.s) AS s
+                FROM GENERATE_SUBSCRIPTS(r.payment_remaining, 1) AS source_index(s)
+                WHERE r.payment_remaining[source_index.s] > 0
+                  AND i.payment_transaction_numbers[source_index.s]
+                        < i.posted_refund_transaction_numbers[r.refund_index]
+            ) e
+            CROSS JOIN LATERAL (
+                SELECT CASE WHEN e.s IS NULL THEN 0::numeric ELSE ROUND(LEAST(
+                    r.current_refund_remaining,
+                    r.payment_remaining[e.s]
+                ), 2) END AS amount
+            ) applied
+            WHERE r.refund_index <= CARDINALITY(i.posted_refunds)
+        )
+        SELECT * FROM posted_refund_allocation
+        WHERE refund_index > CARDINALITY(i.posted_refunds)
+    ) r
+),
 allocation_transfer_summary AS MATERIALIZED (
     SELECT pidm, title_iv_to_older_fy, unrestricted_to_older_terms
     FROM allocation_final
@@ -828,7 +954,7 @@ selected_balance_sources AS (
             s.stage_source_amount
         ), 2) AS source_credit_amount
     FROM numbered_payment_sources s
-    INNER JOIN allocation_final a ON a.pidm = s.pidm
+    INNER JOIN posted_refund_final a ON a.pidm = s.pidm
     WHERE COALESCE(
         a.payment_remaining[s.payment_sequence],
         s.stage_source_amount
@@ -836,8 +962,15 @@ selected_balance_sources AS (
 ),
 
 unpaid_charge_summary AS MATERIALIZED (
-    SELECT pidm, unpaid_charge_amount
-    FROM allocation_final
+    SELECT a.pidm,
+        a.unpaid_charge_amount + r.unmatched_posted_refund_amount AS unpaid_charge_amount
+    FROM allocation_final a
+    INNER JOIN posted_refund_final r ON r.pidm = a.pidm
+),
+
+posted_refund_summary AS MATERIALIZED (
+    SELECT pidm, posted_student_refund_applied
+    FROM posted_refund_final
 ),
 
 stored_balance_comparison AS MATERIALIZED (
@@ -1163,6 +1296,8 @@ joined AS (
         COALESCE(ts.title_iv_to_older_fy, 0) AS title_iv_to_older_fy,
         COALESCE(ts.unrestricted_to_older_terms, 0)
             AS unrestricted_to_older_terms,
+        COALESCE(pr.posted_student_refund_applied, 0)
+            AS posted_student_refund_applied,
         CASE WHEN v.invalid_priority_count > 0
                OR v.missing_transaction_amount_count > 0
                OR v.invalid_term_count > 0
@@ -1255,6 +1390,7 @@ joined AS (
     LEFT JOIN stored_balance_comparison sc ON sc.pidm = b.pidm
     LEFT JOIN term_balance_summary tb ON tb.pidm = b.pidm
     LEFT JOIN allocation_transfer_summary ts ON ts.pidm = b.pidm
+    LEFT JOIN posted_refund_summary pr ON pr.pidm = b.pidm
     LEFT JOIN allocation_ledger al ON al.pidm = b.pidm
     LEFT JOIN housing_review hr ON hr.pidm = b.pidm
     LEFT JOIN third_party_sources tp ON tp.pidm = b.pidm
@@ -1478,7 +1614,11 @@ final_review AS (
                 '_AMOUNT_', TO_CHAR(d.chck_clearing_wait_amount, 'FM999999990.00')
             ) END,
             CASE WHEN d.chck_date_review_amount > 0
-                THEN 'CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END
+                THEN 'CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END,
+            CASE WHEN d.posted_student_refund_applied > 0 THEN CONCAT(
+                'POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_',
+                TO_CHAR(d.posted_student_refund_applied, 'FM999999990.00')
+            ) END
         ), '') AS review_reasons
     FROM delivery d
 )

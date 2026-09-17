@@ -18,6 +18,7 @@ PRIORITY_PATTERN = re.compile(r"^[0-9]{1,3}$")
 ORIGINAL_PAYMENT_CODES = {"ACHK", "CRDS", "CRED", "CRVC", "CRAM", "CRMC"}
 CARD_PAYMENT_CODES = ("CRAM", "CRDS", "CRMC", "CRVC")
 THIRD_PARTY_PAYMENT_CODES = {"C529", "Z0LE", "TPPY"}
+POSTED_STUDENT_REFUND_CODES = {"ARFD", "RFND"}
 
 TRANSACTION_COLUMNS = {
     "pidm",
@@ -321,6 +322,7 @@ def _charge_sources(
     rows = [
         row for row in transactions
         if row["type_ind"] == "C"
+        and row["detail_code"] not in POSTED_STUDENT_REFUND_CODES
         and row["term_sort"] is not None
         and row["term_sort"] <= target_term_sort
     ]
@@ -357,6 +359,33 @@ def _charge_sources(
             "charge_amount": _money(sum((amount for _, amount in surviving), ZERO)),
         })
     return charges, negative_groups
+
+
+def _posted_student_refunds(
+    transactions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Net posted ARFD/RFND rows separately from priority-based charges."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in transactions:
+        if row["type_ind"] == "C" and row["detail_code"] in POSTED_STUDENT_REFUND_CODES:
+            grouped[(row["term_code"], row["detail_code"])].append(row)
+
+    refunds: list[dict[str, Any]] = []
+    negative_groups = 0
+    for group in grouped.values():
+        group_net = sum((row["raw_amount"] for row in group), ZERO)
+        if group_net < ZERO:
+            negative_groups += 1
+        prior_positive = ZERO
+        for row in sorted(group, key=lambda item: item["tran_number"]):
+            if row["raw_amount"] <= ZERO:
+                continue
+            amount = _money(min(row["raw_amount"], max(group_net - prior_positive, ZERO)))
+            prior_positive += row["raw_amount"]
+            if amount > ZERO:
+                refunds.append({**row, "refund_amount": amount})
+    refunds.sort(key=lambda row: row["tran_number"])
+    return refunds, negative_groups
 
 
 def _payment_sort_key(source: dict[str, Any]) -> tuple[object, ...]:
@@ -454,6 +483,37 @@ def _apply_pairs(
                 received_by_fy[charge["fiscal_year_start"]] += applied
             transfers.append({"amount": applied, "charge": charge, "source": source})
     return payment_remaining, charge_remaining, transfers
+
+
+def _apply_posted_student_refunds(
+    refunds: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    payment_remaining: dict[int, Decimal],
+) -> tuple[Decimal, Decimal]:
+    """Consume unused earlier payments with later posted student refunds.
+
+    Normal charges have already been handled oldest-term first. ARFD/RFND then
+    bypass priority matching because they document money already returned. A
+    refund can never consume a payment posted later in the account chronology.
+    """
+    applied_total = ZERO
+    unmatched_total = ZERO
+    for refund in refunds:
+        refund_remaining = refund["refund_amount"]
+        for source in sources:
+            if refund_remaining <= ZERO:
+                break
+            if source["tran_number"] >= refund["tran_number"]:
+                continue
+            available = payment_remaining[source["source_id"]]
+            if available <= ZERO:
+                continue
+            applied = _money(min(refund_remaining, available))
+            payment_remaining[source["source_id"]] -= applied
+            refund_remaining -= applied
+            applied_total += applied
+        unmatched_total += refund_remaining
+    return _money(applied_total), _money(unmatched_total)
 
 
 def _context_for_account(context_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -663,7 +723,12 @@ def _allocate_account(
     if full_balance > ZERO:
         return None
 
-    invalid_priority_count = sum(row["raw_amount"] != 0 and row["priority_code"] is None for row in transactions)
+    invalid_priority_count = sum(
+        row["raw_amount"] != 0
+        and row["priority_code"] is None
+        and row["detail_code"] not in POSTED_STUDENT_REFUND_CODES
+        for row in transactions
+    )
     missing_amount_count = sum(row["amount_missing"] for row in transactions)
     negative_source_count = sum(row["raw_amount"] < 0 for row in transactions)
     invalid_term_count = sum(row["raw_amount"] != 0 and row["term_sort"] is None for row in transactions)
@@ -694,6 +759,9 @@ def _allocate_account(
         allocation_transactions,
         target_sort,
     )
+    posted_refunds, negative_posted_refund_groups = _posted_student_refunds(
+        allocation_transactions
+    )
 
     # Preserve every payment source and every term/priority charge pool. Charges
     # are handled oldest-term first; payment eligibility and ordering are then
@@ -712,6 +780,11 @@ def _allocate_account(
         staged_sources,
         title_iv_cap=cap,
     )
+    posted_refund_applied, unmatched_posted_refunds = _apply_posted_student_refunds(
+        posted_refunds,
+        staged_sources,
+        payment_remaining,
+    )
 
     selected_sources = []
     for sequence, source in enumerate(staged_sources, start=1):
@@ -719,7 +792,7 @@ def _allocate_account(
         source["payment_sequence"] = sequence
         if remaining > 0:
             selected_sources.append({**source, "source_credit_amount": remaining})
-    unpaid_charges = _money(sum(charge_remaining, ZERO))
+    unpaid_charges = _money(sum(charge_remaining, ZERO) + unmatched_posted_refunds)
     policy_unused_total = _money(sum((source["source_credit_amount"] for source in selected_sources), ZERO))
     unused_fdpl = _money(sum((source["source_credit_amount"] for source in selected_sources if source["detail_code"] == "FDPL"), ZERO))
     unused_non_fdpl = policy_unused_total - unused_fdpl
@@ -735,7 +808,9 @@ def _allocate_account(
         abs(selected_by_id.get(source["source_id"], ZERO) - source["stored_unused_amount"]) > Decimal("0.01")
         for source in staged_sources
     )
-    negative_net_source_count = negative_payment_groups + negative_charge_groups
+    negative_net_source_count = (
+        negative_payment_groups + negative_charge_groups + negative_posted_refund_groups
+    )
 
     title_iv_to_older = _money(sum((
         transfer["amount"] for transfer in transfers
@@ -935,6 +1010,9 @@ def _allocate_account(
         ) if delivery_values["check_wait"] > 0 else None,
         "CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE"
         if delivery_values["check_date_review"] > 0 else None,
+        (
+            f"POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_{_format_money(posted_refund_applied)}"
+        ) if posted_refund_applied > ZERO else None,
     ])
 
     if refund_hold:

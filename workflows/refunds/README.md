@@ -70,6 +70,15 @@ transaction number. ACH and cards have no special last-payment band: at `000`
 they follow COFP (`000A`), then compete with other `000` payments by transaction
 number. FDPL likewise uses the existing chronological tie rule.
 
+After all ordinary charges are allocated oldest-term first, posted student
+refunds with detail code `ARFD` or `RFND` reconcile against still-unused payment
+sources across the account. The refund transaction must have a higher transaction
+number than the payment it consumes. This final reconciliation bypasses priority
+matching because the money has already been issued, preventing restrictive
+payment remnants from being proposed repeatedly. Partial reconciliation is
+identified in `review_reasons`. Refund reversals are netted first. `RFDP` is not
+included in this exception.
+
 Only each unused ACH/card source remainder routes to Transact. Remaining aid,
 scholarship, and PLUS funds authorized for the student use the student's normal
 `ARFD (System)` or `RFND (CHECK)` route; PLUS authorized for the parent uses
