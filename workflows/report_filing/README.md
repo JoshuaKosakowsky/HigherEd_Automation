@@ -5,14 +5,41 @@ Downloads that do not match a configured report filename are ignored silently.
 When a matching PDF finishes downloading, the employee must confirm its report
 date, cashier initials, final filename, and complete destination before it moves.
 
+## Submission confirmations
+
+The watcher recognizes `Submission_Confirmation_MM_DD_YYYY_HH_MM_SS.pdf`
+with a valid date and time. Other names, including browser duplicate names such
+as `... (1).pdf`, are ignored.
+
+The confirmation starts with the date from the downloaded filename and the
+signed-in employee's initials saved during setup. Edit the initials when filing
+for another cashier; this does not change the employee's saved defaults. The
+report/deposit date can also be corrected before confirming.
+
+The final name is `MM-DD-YYYY_INITIALS RDC.pdf`. Select the unchecked-by-default
+**Bank 2723** option to use `MM-DD-YYYY_INITIALS RDC 2723.pdf` instead.
+Review the filename and destination, then choose **Confirm and Move**.
+
+For example, `Submission_Confirmation_07_31_2026_14_05_09.pdf` with initials
+`ABC` is filed as:
+
+```text
+%OneDriveCommercial%\GRP-Bursar Office - General\Y-Brswork\Cashier\Daily Closing\FY27\P01 - July 2026\07-31-2026_ABC RDC.pdf
+```
+
+The shared fiscal-period logic uses July as period 1 and June as period 12.
+The confirmed report date determines both folders.
+
 ## Before installing
 
 1. Run `setup.ps1` and enter the employee's name and initials.
 2. Open `config/report_filing.psd1`.
-3. Replace `PLACEHOLDER_DAILY_CLOSING*.pdf` with the website's downloaded
-   filename or a narrowly scoped PowerShell wildcard pattern.
-4. Confirm the `BusinessDirectory` spelling and the
-   `FiscalYearDirectoryPattern`. The initial fiscal-year assumption is `FY27`.
+3. Confirm the `BusinessDirectory` spelling and the
+   `FiscalYearDirectoryPattern` (`FY27`, for example), and ensure the destination
+   fiscal-year and period folders exist.
+
+`SourceFilePattern` narrows discovery; `SourceTimestampFormat` validates the full
+filename and extracts its date before a confirmation can appear.
 
 ## Install or update the watcher
 

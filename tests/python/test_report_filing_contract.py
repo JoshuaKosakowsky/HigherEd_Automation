@@ -28,13 +28,21 @@ class ReportFilingPowerShellContractTests(unittest.TestCase):
         cls.setup = SETUP.read_text(encoding="utf-8")
         cls.scheduler_setup = SCHEDULER_SETUP.read_text(encoding="utf-8")
 
-    def test_first_report_is_an_inert_pdf_placeholder(self) -> None:
+    def test_submission_confirmation_is_configured(self) -> None:
         self.assertIn(
-            'SourceFilePattern   = "PLACEHOLDER_DAILY_CLOSING*.pdf"',
+            'SourceFilePattern   = "Submission_Confirmation_*.pdf"',
             self.config,
         )
         self.assertIn('RequiredExtension   = ".pdf"', self.config)
         self.assertIn('DestinationSuffix   = "RDC"', self.config)
+        self.assertIn("MM_dd_yyyy_HH_mm_ss", self.config)
+        self.assertIn("[DATETIME]::TRYPARSEEXACT", self.normalized_module)
+
+    def test_confirmation_uses_source_date_and_per_file_bank_choice(self) -> None:
+        self.assertIn("$DATEPICKER.VALUE = $REPORTDATE.DATE", self.normalized_module)
+        self.assertIn("$INITIALSBOX.TEXT = $USERSETTINGS.INITIALS", self.normalized_module)
+        self.assertIn("$BANKBOX.ADD_CHECKEDCHANGED($UPDATEPREVIEW)", self.normalized_module)
+        self.assertEqual(self.normalized_module.count("-BANK2723:$BANKBOX.CHECKED"), 2)
 
     def test_destination_conventions_are_explicit(self) -> None:
         self.assertIn("GRP-Bursar Office - General", self.config)

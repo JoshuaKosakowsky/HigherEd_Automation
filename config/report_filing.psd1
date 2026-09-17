@@ -23,9 +23,10 @@
             Id                  = "cashier_daily_closing_rdc"
             DisplayName         = "Cashier Daily Closing RDC"
 
-            # Replace this placeholder after confirming the website's normal
-            # downloaded filename. PowerShell wildcards are allowed.
-            SourceFilePattern   = "PLACEHOLDER_DAILY_CLOSING*.pdf"
+            # The wildcard is a discovery filter; the timestamp format below
+            # validates the complete filename and supplies the report date.
+            SourceFilePattern   = "Submission_Confirmation_*.pdf"
+            SourceTimestampFormat = "'Submission_Confirmation_'MM_dd_yyyy_HH_mm_ss'.pdf'"
             RequiredExtension   = ".pdf"
 
             DestinationSuffix   = "RDC"

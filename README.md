@@ -114,8 +114,10 @@ folder and ignores unrelated files silently. A matching PDF opens a confirmation
 window showing the report date, cashier initials, final filename, fiscal period,
 and complete destination before anything moves.
 
-The first report filename is intentionally a placeholder until its website
-naming convention is confirmed. Configuration and installation instructions are
+Submission confirmations named `Submission_Confirmation_MM_DD_YYYY_HH_MM_SS.pdf`
+default to the filename's date and the employee's saved initials. The confirmation
+allows another cashier's initials and an optional `2723` bank suffix. Configuration
+and installation instructions are
 in [workflows/report_filing/README.md](workflows/report_filing/README.md).
 
 ## Trusted browser sessions

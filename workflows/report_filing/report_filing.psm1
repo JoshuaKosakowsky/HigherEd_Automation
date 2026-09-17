@@ -90,6 +90,7 @@ function Get-ReportFilingConfiguration {
             "Id",
             "DisplayName",
             "SourceFilePattern",
+            "SourceTimestampFormat",
             "RequiredExtension",
             "DestinationSuffix"
         )) {
@@ -192,6 +193,31 @@ Confirm OneDrive is signed in and fully synchronized.
 }
 
 
+function Get-ReportSourceDate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$FileName,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Report
+    )
+
+    $timestamp = [datetime]::MinValue
+    if ([datetime]::TryParseExact(
+        $FileName,
+        [string]$Report.SourceTimestampFormat,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None,
+        [ref]$timestamp
+    )) {
+        return $timestamp.Date
+    }
+
+    return $null
+}
+
+
 function Get-ReportDestinationProposal {
     [CmdletBinding()]
     param(
@@ -205,7 +231,9 @@ function Get-ReportDestinationProposal {
         [hashtable]$Report,
 
         [Parameter(Mandatory)]
-        [hashtable]$DestinationConfiguration
+        [hashtable]$DestinationConfiguration,
+
+        [switch]$Bank2723
     )
 
     $fiscalPeriod = Get-MinesFiscalPeriod -Date $ReportDate
@@ -225,10 +253,12 @@ function Get-ReportDestinationProposal {
         $fiscalYearDirectory `
         $fiscalPeriod.PeriodDirectoryName
     $normalizedInitials = $Initials.Trim().ToUpperInvariant()
-    $fileName = "{0} {1} {2}.pdf" -f `
+    $bankSuffix = if ($Bank2723) { " 2723" } else { "" }
+    $fileName = "{0}_{1} {2}{3}.pdf" -f `
         $ReportDate.ToString("MM-dd-yyyy"),
         $normalizedInitials,
-        ([string]$Report.DestinationSuffix)
+        ([string]$Report.DestinationSuffix),
+        $bankSuffix
 
     [pscustomobject]@{
         ReportDate             = $ReportDate.Date
@@ -482,7 +512,10 @@ function Show-ReportFilingConfirmation {
         [hashtable]$DestinationConfiguration,
 
         [Parameter(Mandatory)]
-        [psobject]$UserSettings
+        [psobject]$UserSettings,
+
+        [Parameter(Mandatory)]
+        [datetime]$ReportDate
     )
 
     Add-Type -AssemblyName System.Windows.Forms
@@ -534,9 +567,7 @@ function Show-ReportFilingConfirmation {
 
     $datePicker = New-Object System.Windows.Forms.DateTimePicker
     $datePicker.Format = [System.Windows.Forms.DateTimePickerFormat]::Long
-    $datePicker.Value = (Get-Date).Date
-    $datePicker.MaxDate = (Get-Date).Date
-    $datePicker.MinDate = (Get-Date).Date.AddYears(-2)
+    $datePicker.Value = $ReportDate.Date
     $datePicker.Location = New-Object System.Drawing.Point(30, 198)
     $datePicker.Size = New-Object System.Drawing.Size(380, 30)
     $form.Controls.Add($datePicker)
@@ -561,6 +592,12 @@ function Show-ReportFilingConfirmation {
     $nameLabel.ForeColor = [Drawing.Color]::DimGray
     $nameLabel.Location = New-Object System.Drawing.Point(625, 202)
     $form.Controls.Add($nameLabel)
+
+    $bankBox = New-Object System.Windows.Forms.CheckBox
+    $bankBox.Text = "Bank 2723 (append to filename)"
+    $bankBox.AutoSize = $true
+    $bankBox.Location = New-Object System.Drawing.Point(460, 245)
+    $form.Controls.Add($bankBox)
 
     $newNameLabel = New-Object System.Windows.Forms.Label
     $newNameLabel.Text = "New filename"
@@ -595,8 +632,9 @@ function Show-ReportFilingConfirmation {
 
     $instructionLabel = New-Object System.Windows.Forms.Label
     $instructionLabel.Text = (
-        "If the date or cashier is wrong, change it above. " +
-        "The fiscal year, period folder, and filename update automatically."
+        "Is the name correct? Change the initials when filing for someone else. " +
+        "Select Bank 2723 only when needed. " +
+        "Changing the date updates the fiscal year, period, and filename."
     )
     $instructionLabel.AutoSize = $false
     $instructionLabel.Size = New-Object System.Drawing.Size(860, 50)
@@ -621,6 +659,7 @@ function Show-ReportFilingConfirmation {
             $proposal = Get-ReportDestinationProposal `
                 -ReportDate $datePicker.Value.Date `
                 -Initials $previewInitials `
+                -Bank2723:$bankBox.Checked `
                 -Report $Report `
                 -DestinationConfiguration $DestinationConfiguration
             $newNameBox.Text = $proposal.FileName
@@ -634,6 +673,7 @@ function Show-ReportFilingConfirmation {
 
     $datePicker.Add_ValueChanged($updatePreview)
     $initialsBox.Add_TextChanged($updatePreview)
+    $bankBox.Add_CheckedChanged($updatePreview)
     & $updatePreview
 
     $confirmButton = New-Object System.Windows.Forms.Button
@@ -665,6 +705,7 @@ function Show-ReportFilingConfirmation {
             $proposal = Get-ReportDestinationProposal `
                 -ReportDate $datePicker.Value.Date `
                 -Initials $normalizedInitials `
+                -Bank2723:$bankBox.Checked `
                 -Report $Report `
                 -DestinationConfiguration $DestinationConfiguration
         }
@@ -829,7 +870,8 @@ function Invoke-ReportFilingCandidate {
     $matchingReports = @(
         $Configuration.Reports |
             Where-Object {
-                $candidateName -like ([string]$_.SourceFilePattern)
+                $candidateName -like ([string]$_.SourceFilePattern) -and
+                $null -ne (Get-ReportSourceDate -FileName $candidateName -Report $_)
             }
     )
 
@@ -889,7 +931,8 @@ The file was left in Downloads. Download the report again or ask your supervisor
         -File $readyFile `
         -Report $report `
         -DestinationConfiguration $Configuration.Destination `
-        -UserSettings $UserSettings
+        -UserSettings $UserSettings `
+        -ReportDate (Get-ReportSourceDate -FileName $candidateName -Report $report)
 
     if ($selection.Action -ne "Confirm") {
         Add-IgnoredReportFingerprint -Fingerprint $fingerprint
@@ -1134,6 +1177,7 @@ function Start-ReportFilingWatcher {
 Export-ModuleMember -Function @(
     "Get-ReportFilingConfiguration",
     "Get-ReportDestinationProposal",
+    "Get-ReportSourceDate",
     "Get-WindowsDownloadsDirectory",
     "Invoke-ReportFilingCandidate",
     "Start-ReportFilingWatcher"

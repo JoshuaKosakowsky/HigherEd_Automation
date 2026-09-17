@@ -49,8 +49,34 @@ try {
     $env:LOCALAPPDATA = Join-Path $testRoot "LocalAppData"
 
     $report = @($configuration.Reports)[0]
+    $sourceDate = Get-ReportSourceDate `
+        -FileName "Submission_Confirmation_07_31_2026_14_05_09.pdf" `
+        -Report $report
+    Assert-Equal -Expected ([datetime]"2026-07-31") -Actual $sourceDate -Case "Source date"
+
+    foreach ($invalidName in @(
+        "Submission_Confirmation_02_29_2025_12_00_00.pdf",
+        "Submission_Confirmation_07_31_2026_24_00_00.pdf",
+        "Submission_Confirmation_07_31_2026_12_60_00.pdf",
+        "Submission_Confirmation_07_31_2026_12_00_60.pdf",
+        "Submission_Confirmation_7_31_2026_12_00_00.pdf",
+        "Submission_Confirmation_07_31_2026.pdf",
+        "Submission_Confirmation_07_31_2026_12_00_00 (1).pdf",
+        "Submission_Confirmation_07_31_2026_12_00_00.pdf.crdownload",
+        "Submission_Confirmation_07_31_2026_12_00_00.txt",
+        "Other_07_31_2026_12_00_00.pdf"
+    )) {
+        $parsed = Get-ReportSourceDate -FileName $invalidName -Report $report
+        Assert-Equal -Expected $true -Actual ($null -eq $parsed) -Case "Ignore $invalidName"
+    }
+
+    Assert-Equal `
+        -Expected ([datetime]"2024-02-29") `
+        -Actual (Get-ReportSourceDate -FileName "Submission_Confirmation_02_29_2024_00_00_00.pdf" -Report $report) `
+        -Case "Leap day is valid"
+
     $proposal = Get-ReportDestinationProposal `
-        -ReportDate ([datetime]"2026-07-31") `
+        -ReportDate $sourceDate `
         -Initials "abc" `
         -Report $report `
         -DestinationConfiguration $configuration.Destination
@@ -62,17 +88,34 @@ try {
         -Actual $proposal.PeriodDirectoryName `
         -Case "RDC period directory"
     Assert-Equal `
-        -Expected "07-31-2026 ABC RDC.pdf" `
+        -Expected "07-31-2026_ABC RDC.pdf" `
         -Actual $proposal.FileName `
         -Case "RDC filename"
 
     $expectedEnding = Join-Path `
         "FY27\P01 - July 2026" `
-        "07-31-2026 ABC RDC.pdf"
+        "07-31-2026_ABC RDC.pdf"
 
     if (-not $proposal.FullPath.EndsWith($expectedEnding)) {
         throw "FAILED: RDC destination did not end with: $expectedEnding"
     }
+
+    $expectedPath = Join-Path $testRoot (
+        "GRP-Bursar Office - General\Y-Brswork\Cashier\Daily Closing\" +
+        "FY27\P01 - July 2026\07-31-2026_ABC RDC.pdf"
+    )
+    Assert-Equal -Expected $expectedPath -Actual $proposal.FullPath -Case "Complete destination"
+
+    $alternate = Get-ReportDestinationProposal `
+        -ReportDate ([datetime]"2026-06-30") `
+        -Initials " xy " `
+        -Report $report `
+        -DestinationConfiguration $configuration.Destination `
+        -Bank2723
+    Assert-Equal -Expected "06-30-2026_XY RDC 2723.pdf" -Actual $alternate.FileName -Case "Other cashier and bank"
+    Assert-Equal -Expected 2026 -Actual $alternate.FiscalYear -Case "June fiscal year"
+    Assert-Equal -Expected "P12" -Actual $alternate.Period -Case "June period"
+    Assert-Equal -Expected "P12 - June 2026" -Actual $alternate.PeriodDirectoryName -Case "June folder"
 
     Save-AutomationUserSettings `
         -DisplayName "Synthetic Cashier" `
