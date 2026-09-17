@@ -59,6 +59,23 @@ candidate_pidms AS MATERIALIZED (
 
     UNION
 
+    /* Conservative TPPY check; Python nets reversals and decides review. */
+    SELECT t.tbraccd_pidm AS pidm
+    FROM taismgr.tbraccd t
+    INNER JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+    CROSS JOIN params p
+    WHERE p.cwid_filter IS NULL
+      AND t.tbraccd_detail_code = 'TPPY'
+      AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
+      AND t.tbraccd_amount > 0
+      AND (t.tbraccd_term_code = p.target_term OR (
+          t.tbraccd_effective_date >= p.run_date - INTERVAL '32 days'
+          AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
+      ))
+      AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
+
+    UNION
+
     SELECT t.tbraccd_pidm AS pidm
     FROM taismgr.tbraccd t
     INNER JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code

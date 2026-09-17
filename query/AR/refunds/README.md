@@ -53,9 +53,10 @@ target term and total expected row count; Python rejects mismatched terms or a
 truncated download.
 
 Candidate selection is shared in `refund_scope.sql`: target-term activity,
-qualifying HOMP charges, or a negative stored payment balance within two years
-of terms. Known positive full-account balances are excluded. Selected accounts
-retain all transaction history; the two-year condition is not a replay cutoff.
+qualifying HOMP charges, qualifying TPPY payments, or a negative stored payment
+balance within two years of terms. Known positive full-account balances are
+excluded. Selected accounts retain all transaction history; the two-year
+condition is not a replay cutoff.
 Python can report zero-net accounts with restricted refunds and offsetting
 unpaid charges. See [the workflow rules](../../../workflows/refunds/README.md)
 for current delivery, ownership, housing, and third-party review behavior.
@@ -140,12 +141,12 @@ A fiscal year starts with Fall and ends with Summer: FY2026 contains `202680`,
 Internal allocation keeps every term and charge priority separate and processes
 the oldest charges first.
 
-Candidates have target-term activity, a qualifying HOMP charge, or a negative
-stored payment balance within the last two years of whole terms through the
-target term. The two-year condition selects accounts; their complete history
-is retained. There is no five-year history cutoff. A CWID or last-name validation
-filter bypasses the activity conditions but still excludes positive balances.
-Do not commit identifying filters.
+Candidates have target-term activity, a qualifying HOMP charge, a qualifying
+TPPY payment, or a negative stored payment balance within the last two years of
+whole terms through the target term. The two-year condition selects accounts;
+their complete history is retained. There is no five-year history cutoff. A
+CWID or last-name validation filter bypasses the activity conditions but still
+excludes positive balances. Do not commit identifying filters.
 
 Positive full-account balances are excluded. Zero-balance accounts can contain
 restricted refunds and offsetting unpaid charges. Final output requires a
@@ -210,12 +211,15 @@ exact eligibility date. A missing or future effective date requires manual
 review. RH still overrides the status and workbook route, while retaining the
 CHCK clearing information.
 
-Unused target-term C529/Z0LE/TPPY sources add `Possible Third Party refund`
-and suppress delivery with `THIRD_PARTY_REVIEW`. Existing TPS-prefix and legacy
-account flags remain effective. A surviving HOMP charge in the target term, or
-effective 0–32 days ago in any term, adds `Mines Park Charge - Review` without
-hiding amounts or delivery. Paid HOMP charges qualify; fully reversed charges
-do not.
+Unused target-term C529/Z0LE sources add `Possible Third Party refund`. A
+surviving TPPY payment adds the same review when it is in the target term or was
+effective 0–32 days ago in any term, including when the TPPY payment has already
+been applied to charges. Fully reversed TPPY payments do not qualify. These
+conditions suppress delivery with `THIRD_PARTY_REVIEW`; existing TPS-prefix and
+legacy account flags remain effective. A surviving HOMP charge in the target
+term, or effective 0–32 days ago in any term, adds `Mines Park Charge - Review`
+without hiding amounts or delivery. Paid HOMP charges qualify; fully reversed
+charges do not.
 
 Restricted refunds with unpaid charges retain their recipient amounts and add
 `RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE`. Allocation metadata problems,

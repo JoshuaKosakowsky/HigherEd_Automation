@@ -520,6 +520,38 @@ def _mines_park_review(transactions: list[dict[str, Any]], parameters: RefundPar
     return False
 
 
+def _recent_tppy_review(
+    transactions: list[dict[str, Any]], parameters: RefundParameters
+) -> bool:
+    """Review surviving TPPY payments in the target term or past 32 days.
+
+    Inspect full history so an applied TPPY payment still triggers review. Net
+    reversals within the same payment-source group and use the surviving positive
+    payment's effective date rather than the reversal date.
+    """
+    grouped: dict[tuple[str, str | None], list[dict[str, Any]]] = defaultdict(list)
+    for row in transactions:
+        if row["type_ind"] == "P" and row["detail_code"] == "TPPY":
+            grouped[(row["term_code"], row["aidy_code"])].append(row)
+    for (term, _aid_year), rows in grouped.items():
+        group_net = sum((row["raw_amount"] for row in rows), ZERO)
+        prior_positive = ZERO
+        for row in sorted(rows, key=lambda item: item["tran_number"]):
+            if row["raw_amount"] <= ZERO:
+                continue
+            surviving = min(row["raw_amount"], max(group_net - prior_positive, ZERO))
+            prior_positive += row["raw_amount"]
+            if surviving <= ZERO:
+                continue
+            effective = row["effective_date"]
+            if term == parameters.target_term or (
+                effective is not None
+                and 0 <= (parameters.run_date - effective).days <= 32
+            ):
+                return True
+    return False
+
+
 def _student_delivery(
     student_amount: Decimal | None,
     sources: list[dict[str, Any]],
@@ -818,6 +850,9 @@ def _allocate_account(
         if source["term_code"] == parameters.target_term
         and source["detail_code"] in THIRD_PARTY_PAYMENT_CODES
     })
+    recent_tppy_review = _recent_tppy_review(transactions, parameters)
+    if recent_tppy_review and "TPPY" not in third_party_codes:
+        third_party_codes.append("TPPY")
     third_party_matches.extend(third_party_codes)
     third_party = bool(third_party_matches)
     mines_park_review = _mines_park_review(transactions, parameters)

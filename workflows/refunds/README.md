@@ -38,12 +38,13 @@ Financial calculations use `Decimal` cents rather than binary floating point.
 
 ### Population and refund amounts
 
-The two exports share one candidate definition: target-term activity **or** a
-qualifying HOMP charge **or** a negative stored payment balance in the last two
-years of terms through the target term. The lookback starts with the whole term
-containing `run_date - 2 years` (September 7, 2026 starts at `202480`). It selects
-accounts, not transactions: selected accounts retain their full history. There
-is no five-year history cutoff. A CWID filter selects that account directly.
+The two exports share one candidate definition: target-term activity, a
+qualifying HOMP charge, a qualifying TPPY payment, **or** a negative stored
+payment balance in the last two years of terms through the target term. The
+lookback starts with the whole term containing `run_date - 2 years` (September
+7, 2026 starts at `202480`). It selects accounts, not transactions: selected
+accounts retain their full history. There is no five-year history cutoff. A CWID
+filter selects that account directly.
 
 The SQL excludes known positive full-account balances. Python also excludes
 positive balances and accounts with no reconstructed unused payments. A zero
@@ -83,11 +84,13 @@ waiting, the tab note shows the CHCK amount and exact eligibility date. Missing
 or future CHCK effective dates require manual review. RH still sends the entire
 account to Refund Holds and retains the CHCK clearing note.
 
-- Surviving target-term refund sources `C529`, `Z0LE`, or `TPPY` add
-  `Possible Third Party refund`, identify the code in `third_party_match_source`,
-  and suppress automatic delivery with `THIRD_PARTY_REVIEW`. Amounts remain
-  visible. Fully consumed/reversed sources and other terms do not trigger this
-  new code rule; existing third-party account flags remain effective.
+- Surviving target-term refund sources `C529` or `Z0LE` add `Possible Third Party
+  refund`. A surviving TPPY payment adds the same review when it is in the target
+  term or effective 0–32 days ago in any term. TPPY still qualifies after it has
+  been applied to charges, but not after it is fully reversed. The matched code
+  remains visible in `third_party_match_source`, and automatic delivery is
+  suppressed with `THIRD_PARTY_REVIEW`. Existing third-party account flags remain
+  effective.
 - A surviving positive HOMP charge in the target term, or effective 0–32 days
   ago in any term, adds `Mines Park Charge - Review`. This includes paid charges
   in settled history, but excludes fully reversed charges. Refund amounts and

@@ -709,9 +709,22 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             # Older credits do not erase an all-history debt in the scope filter.
             RefundTransaction("PAY0", "P", "000", 20, balance=-20, pidm=11),
             RefundTransaction("OLD", "C", "899", 30, term="208980", pidm=11),
+            # Recent TPPY selects the account even when applied; day 33 does not.
+            RefundTransaction("CHG8", "C", "899", 100, term="209955", pidm=12),
+            RefundTransaction("TPPY", "P", "800", 100, term="209955", pidm=12,
+                              effective_date="2099-07-30"),
+            RefundTransaction("FREE", "P", "000", 50, term="209955", pidm=12),
+            RefundTransaction("TPPY", "P", "800", 10, term="209955", pidm=13,
+                              effective_date="2099-07-29"),
+            RefundTransaction("FREE", "P", "000", 50, term="209955", pidm=13),
+            # Candidate scope is conservative; Python/SQL review nets reversal.
+            RefundTransaction("TPPY", "P", "800", 10, term="209955", pidm=14,
+                              effective_date="2099-07-30"),
+            RefundTransaction("TPPY", "P", "800", -10, term="209955", pidm=14),
+            RefundTransaction("FREE", "P", "000", 50, term="209955", pidm=14),
         ]
         root = REFUNDS_QUERY.parent
-        expected = {1, 2, 4, 8, 10}
+        expected = {1, 2, 4, 8, 10, 12, 14}
         downloads = {}
         for name in ("transactions", "context"):
             with self.subTest(export=name):
@@ -747,7 +760,10 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 context_file=work / "context.csv",
                 output_file=work / "refunds.xlsx",
             )
-            expected_refunds = {"TEST-1": 100, "TEST-2": 20, "TEST-4": 10, "TEST-10": 10}
+            expected_refunds = {
+                "TEST-1": 100, "TEST-2": 20, "TEST-4": 10, "TEST-10": 10,
+                "TEST-12": 50, "TEST-14": 50,
+            }
             self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), expected_refunds)
             sql_rows = self.run_report(transactions)
             self.assertEqual({row["cwid"] for row in sql_rows}, set(expected_refunds))
@@ -759,6 +775,10 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 self.assertEqual(row["parent_refund_amount"], Decimal("0.00"))
                 if row["cwid"] in {"TEST-4", "TEST-10"}:
                     self.assertIn("Mines Park Charge - Review", row["review_reasons"])
+                if row["cwid"] == "TEST-12":
+                    self.assertIn("Possible Third Party refund", row["review_reasons"])
+                if row["cwid"] == "TEST-14":
+                    self.assertNotIn("Possible Third Party refund", row["review_reasons"] or "")
             sheets = pd.read_excel(output, sheet_name=None)
             for sheet in sheets.values():
                 self.assertEqual(sheet.columns.tolist(), WORKBOOK_COLUMNS)
@@ -768,6 +788,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ], ignore_index=True)
             self.assertEqual(dict(zip(workbook.cwid, workbook.tab_refund_amount)), expected_refunds)
             self.assertEqual(set(sheets["Mines Park Reviews"].cwid), {"TEST-4", "TEST-10"})
+            self.assertEqual(set(sheets["Third Party Reviews"].cwid), {"TEST-12"})
 
     def test_sql_matches_current_python_allocation_scenarios(self) -> None:
         sql_case = self

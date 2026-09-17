@@ -6,7 +6,7 @@ Parent PLUS ownership by aid year, and source-specific delivery. No database
 functions, temp tables, schema changes, or Python execution are required.
 
 CURRENT POLICY
-- Candidates: target-term activity OR HOMP effective in the past 32 days OR a
+- Candidates: target-term activity OR HOMP/TPPY effective in the past 32 days OR a
   stored payment credit from the whole term containing run_date minus two years
   through the target term. Validation CWID/name filters bypass activity criteria.
 - Full-account positive balances are excluded. Zero balances can have restricted
@@ -35,7 +35,8 @@ CURRENT POLICY
   until effective date +16 days. Its amount and eligibility date remain visible.
 - RH is an account-level hold and overrides every student/parent delivery and
   workbook review route. Other review reasons remain visible for later handling.
-- Unused target-term C529/Z0LE/TPPY sources flag Possible Third Party refund,
+- Unused target-term C529/Z0LE sources and surviving TPPY payments in the target
+  term or past 32 days flag Possible Third Party refund,
   along with existing TPS/legacy account controls. Third-party delivery is blocked.
 - Surviving HOMP charges in the target term OR effective 0..32 days ago trigger
   Mines Park Charge - Review, including paid charges in settled history.
@@ -156,7 +157,7 @@ legacy_third_party_cwids AS (
 
 /*
 Select the daily population before loading history: target-term activity, recent
-HOMP activity, or a stored payment credit in the last two years of whole terms.
+HOMP/TPPY activity, or a stored payment credit in the last two years of whole terms.
 The lookback selects accounts, never cuts their history. Validation filters
 override activity requirements, but known positive account balances stay out.
 */
@@ -189,6 +190,19 @@ report_scope_pidms AS MATERIALIZED (
     CROSS JOIN params p
     WHERE p.cwid_filter IS NULL AND p.last_name_filter IS NULL
       AND t.tbraccd_term_code = p.target_term
+
+    UNION
+
+    SELECT t.tbraccd_pidm
+    FROM taismgr.tbraccd t
+    JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+    CROSS JOIN params p
+    WHERE p.cwid_filter IS NULL AND p.last_name_filter IS NULL
+      AND t.tbraccd_detail_code = 'TPPY'
+      AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
+      AND t.tbraccd_amount > 0
+      AND t.tbraccd_effective_date >= p.run_date - INTERVAL '32 days'
+      AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
 
     UNION
 
@@ -400,6 +414,29 @@ housing_rows AS (
 housing_review AS MATERIALIZED (
     SELECT x.pidm
     FROM housing_rows x
+    CROSS JOIN params p
+    WHERE LEAST(x.raw_amount, GREATEST(x.group_net - x.prior_positive, 0)) > 0
+      AND (x.term_code = p.target_term OR p.run_date - x.effective_date BETWEEN 0 AND 32)
+    GROUP BY x.pidm
+),
+
+/* TPPY review uses surviving payments, including fully applied/settled history. */
+tppy_payment_rows AS (
+    SELECT x.*,
+        SUM(raw_amount) OVER (
+            PARTITION BY pidm, term_code, aidy_code, detail_code
+        ) AS group_net,
+        COALESCE(SUM(GREATEST(raw_amount, 0)) OVER (
+            PARTITION BY pidm, term_code, aidy_code, detail_code
+            ORDER BY tran_number
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ), 0) AS prior_positive
+    FROM candidate_transactions x
+    WHERE is_payment AND detail_code = 'TPPY'
+),
+recent_tppy_review AS MATERIALIZED (
+    SELECT x.pidm
+    FROM tppy_payment_rows x
     CROSS JOIN params p
     WHERE LEAST(x.raw_amount, GREATEST(x.group_net - x.prior_positive, 0)) > 0
       AND (x.term_code = p.target_term OR p.run_date - x.effective_date BETWEEN 0 AND 32)
@@ -972,12 +1009,21 @@ plus_authorization AS MATERIALIZED (
     GROUP BY a.pidm
 ),
 
-third_party_sources AS MATERIALIZED (
-    SELECT s.pidm, STRING_AGG(DISTINCT s.detail_code, ', ' ORDER BY s.detail_code) AS detail_codes
+third_party_source_codes AS (
+    SELECT s.pidm, s.detail_code
     FROM selected_balance_sources s
     CROSS JOIN params p
     WHERE s.term_code = p.target_term AND s.detail_code IN ('C529', 'Z0LE', 'TPPY')
-    GROUP BY s.pidm
+
+    UNION
+
+    SELECT r.pidm, 'TPPY' AS detail_code
+    FROM recent_tppy_review r
+),
+third_party_sources AS MATERIALIZED (
+    SELECT pidm, STRING_AGG(DISTINCT detail_code, ', ' ORDER BY detail_code) AS detail_codes
+    FROM third_party_source_codes
+    GROUP BY pidm
 ),
 
 original_payment_summary AS MATERIALIZED (

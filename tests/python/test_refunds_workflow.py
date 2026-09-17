@@ -376,9 +376,8 @@ class RefundAllocationTests(unittest.TestCase):
         ready = self.report([Transaction("ACHK", "P", "000", 50, -50, effective_date="2099-08-15")])
         self.assertEqual(ready["proposed_student_delivery"], "AFRD (Transact)")
 
-    def test_third_party_requires_current_term_unused_payment(self) -> None:
-        for code in ("C529", "Z0LE", "TPPY"):
-            priority = "800" if code == "TPPY" else "000"
+    def test_c529_and_z0le_require_current_term_unused_payment(self) -> None:
+        for code in ("C529", "Z0LE"):
             for term, charge, reversal, flag in (
                 ("209980", 80, 0, True),
                 ("209980", 100, 0, False),
@@ -388,8 +387,8 @@ class RefundAllocationTests(unittest.TestCase):
                 with self.subTest(code=code, term=term, charge=charge, reversal=reversal):
                     row = self.report([
                         Transaction("CHG8", "C", "899", charge, term=term),
-                        Transaction(code, "P", priority, 100, term=term),
-                        Transaction(code, "P", priority, reversal, term=term),
+                        Transaction(code, "P", "000", 100, term=term),
+                        Transaction(code, "P", "000", reversal, term=term),
                         Transaction("FREE", "P", "000", 50, -50),
                     ])
                     self.assertEqual(row["third_party_review_required_ind"], "Y" if flag else "N")
@@ -399,6 +398,45 @@ class RefundAllocationTests(unittest.TestCase):
                         self.assertEqual(row["proposed_student_delivery"], "THIRD_PARTY_REVIEW")
                         self.assertEqual(row["review_status"], "MANUAL_REVIEW")
                         self.assertIsNotNone(row["student_refund_amount"])
+
+    def test_tppy_review_uses_surviving_payment_age_even_when_applied(self) -> None:
+        run_date = date(2099, 8, 31)
+        for term, age, reversal, flag in (
+            ("209980", 90, 0, True),
+            ("209955", 0, 0, True),
+            ("209955", 32, 0, True),
+            ("209955", 33, 0, False),
+            ("209955", -1, 0, False),
+            ("209955", None, 0, False),
+            ("209980", None, 0, True),
+            ("209980", 0, -100, False),
+            ("209955", 32, -50, True),
+        ):
+            with self.subTest(term=term, age=age, reversal=reversal):
+                effective = (run_date - timedelta(days=age)).isoformat() if age is not None else None
+                row = self.report([
+                    Transaction("CHG8", "C", "899", 100 + reversal, term=term),
+                    Transaction("TPPY", "P", "800", 100, 0, term=term,
+                                effective_date=effective),
+                    Transaction("TPPY", "P", "800", reversal, 0, term=term),
+                    Transaction("FREE", "P", "000", 50, -50),
+                ])
+                self.assert_split(row, "0.00", "50.00")
+                self.assertEqual(row["third_party_review_required_ind"], "Y" if flag else "N")
+                self.assertEqual("Possible Third Party refund" in (row["review_reasons"] or ""), flag)
+                if flag:
+                    self.assertEqual(row["third_party_match_source"], "TPPY")
+                    self.assertEqual(row["proposed_student_delivery"], "THIRD_PARTY_REVIEW")
+                    self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+                else:
+                    self.assertEqual(row["proposed_student_delivery"], "ARFD (System)")
+
+        held = self.report([
+            Transaction("TPPY", "P", "800", 50, -50),
+        ], refund_hold=True)
+        self.assertEqual(held["third_party_review_required_ind"], "Y")
+        self.assertEqual(held["proposed_student_delivery"], "Refund Hold - Student")
+        self.assertEqual(held["review_status"], "HOLD")
 
     def test_homp_review_uses_surviving_charge_age_even_in_settled_history(self) -> None:
         run_date = date(2099, 8, 31)
