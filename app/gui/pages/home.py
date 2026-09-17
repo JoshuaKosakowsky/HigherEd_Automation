@@ -20,6 +20,7 @@ class HomePage(ttk.Frame):
         *,
         user_first_name: str,
         profile_description: str | None = None,
+        manage_access: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent, style="App.TFrame")
 
@@ -67,6 +68,14 @@ class HomePage(ttk.Frame):
                 text=profile_description,
                 style="Muted.TLabel",
             ).grid(row=2, column=0, sticky="w", pady=(0, 18))
+
+        if manage_access is not None:
+            ttk.Button(
+                self.body,
+                text="Manage staff access",
+                style="Secondary.TButton",
+                command=manage_access,
+            ).grid(row=2, column=0, sticky="e", pady=(0, 18))
 
         by_category: dict[str, list[WorkflowDefinition]] = defaultdict(list)
         for workflow in workflows:

@@ -47,10 +47,12 @@ The integrated workflows are:
 ## Workflow visibility
 
 The GUI reads the signed-in Windows account name and matches it
-case-insensitively to `config/gui_access.json`. Each user profile contains a
-display name, informational job title, and an explicitly assigned view. Job
-titles never grant access. The central `views` map is the only place that lists
-which workflow IDs each view may display.
+case-insensitively to the shared policy under the Mines OneDrive root at
+`GRP-Bursar Office - General\Y-Brswork\Staff Folders\.highered_automation\gui_access.json`.
+Each user profile contains a display name, informational job title,
+active/revoked status, and an explicitly assigned view. Job titles never grant
+access. The central `views` map is the only place that lists which workflow IDs
+each view may display.
 
 Administrator uses the `"*"` workflow allow-list and sees every registered
 workflow. The current analyst and cashier allow-lists are deliberately empty;
@@ -58,10 +60,29 @@ those staff members receive no workflow cards until the application owner adds
 specific workflow IDs. An unassigned login also sees no cards and receives a
 contact-the-administrator message.
 
-The live `config/gui_access.json` contains staff account identifiers and is
-ignored by Git. `config/gui_access.example.json` documents the public-safe
-schema. A private deployment can distribute the live file through an approved
-internal channel. Do not commit the live staff mapping to a public repository.
+Active administrators see **Manage staff access** on the home page. They can
+add or edit profiles, revoke or restore access, and choose the workflows shown
+to Analyst and Cashier views. Updates are validated, written atomically, and
+back up the previous policy beside the live file. A file-change check prevents
+one administrator from silently overwriting another administrator's update.
+
+The designated owner profile is protected separately. On first use, the owner
+must choose a password of at least 12 characters. Only a salted password
+verifier is stored; the password cannot be recovered. Subsequent owner-profile
+or owner-password changes require that password. Other active administrators
+can maintain all non-owner profiles without it.
+
+The application creates `.highered_automation` and applies the Windows Hidden
+attribute. That keeps it out of the normal File Explorer view, but it is only a
+convenience and not an authorization boundary. The Bursar-only parent location
+and OneDrive access remain the actual outer access scope.
+
+The ignored `config/gui_access.json` is retained only as a private bootstrap
+and Mac review policy. On the first Windows launch where the shared policy does
+not exist, a configured administrator's local policy is upgraded and copied to
+the shared location. The intended protected owner should perform this first
+launch. `config/gui_access.example.json` documents the public-safe schema. Do
+not commit the live staff mapping or shared policy to the repository.
 
 This is staff-interface scoping, not a security boundary: employees with direct
 repository and PowerShell access can still run launchers permitted by their
@@ -91,6 +112,13 @@ from the local setup profile and defaults to `User` when it is unavailable:
 python3 -m app.gui.main --review-as EXAMPLE-ADMIN-LOGIN
 ```
 
+That command uses the ignored local `config/gui_access.json`. A different local
+test policy can be selected explicitly on macOS/Linux:
+
+```bash
+python3 -m app.gui.main --review-as EXAMPLE-ADMIN-LOGIN --access-config /path/to/gui_access.json
+```
+
 Path entry and Browse work even when the optional drag/drop package has not yet
 been installed in that Mac Python environment. To enable Finder file drop:
 
@@ -98,7 +126,8 @@ been installed in that Mac Python environment. To enable Finder file drop:
 python3 -m pip install tkinterdnd2==0.6.1
 ```
 
-The `--review-as` identity override is rejected on Windows staff installations.
+The `--review-as` identity and `--access-config` overrides are rejected on
+Windows staff installations.
 Windows setup installs the drag/drop package and creates and destroys a real
 TkinterDnD window during verification. A missing or incorrectly resolved
 `init.tcl` therefore fails setup with a Tcl/Tk repair message instead of failing

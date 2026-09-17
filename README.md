@@ -75,8 +75,8 @@ Double-click **Mines Bursar Automation** on the Windows desktop. The app starts
 with the repository's private Python environment; staff do not need to activate
 Python or keep a PowerShell window open.
 
-Available workflows are based on the signed-in Windows login and the private
-GUI access policy provisioned by the automation administrator. The name saved
+Available workflows are based on the signed-in Windows login and the shared
+GUI access policy maintained by administrators from inside the app. The name saved
 during setup is used only for the welcome message. The initial GUI integrations
 are **Student Testing Population**, the manual-download **Refund Review**, and
 the local **Textbook Brokers** CSV-to-TSPLOAD transformation. File inputs accept

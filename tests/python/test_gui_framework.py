@@ -4,6 +4,7 @@ import json
 import logging
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,12 +16,19 @@ from app.gui.models import (
     WorkflowMode,
     WorkflowResult,
 )
-from app.gui.main import build_review_login
+from app.gui.main import build_review_login, resolve_access_config_path
 from app.gui.services.execution import WorkflowExecutor, friendly_error_message
 from app.gui.services.access import (
+    AccessConfigurationConflictError,
+    OwnerProtectionError,
+    UserAccessProfile,
+    create_owner_protection,
+    create_shared_access_configuration,
     filter_workflows_for_view,
     get_current_login,
     load_access_configuration,
+    save_access_configuration,
+    upgrade_legacy_configuration,
 )
 from app.gui.services.drag_drop import parse_dropped_files, register_file_drop
 from app.gui.services.population_testing import run_population_testing
@@ -33,6 +41,7 @@ from shared.user_settings import (
     get_automation_user_first_name,
     get_user_settings_path,
 )
+from shared.mines_paths import ensure_hidden_directory, get_shared_gui_access_path
 
 
 class WorkflowRegistryTests(unittest.TestCase):
@@ -182,6 +191,76 @@ class WorkflowAccessTests(unittest.TestCase):
             "M00000001",
         )
 
+    def _create_shared_policy(self):
+        legacy = load_access_configuration(self.config_path)
+        shared_path = self.config_path.with_name("shared_access.json")
+        upgraded = upgrade_legacy_configuration(legacy, owner_login="M00000001")
+        return shared_path, create_shared_access_configuration(
+            shared_path, upgraded, actor_login="M00000001"
+        )
+
+    def test_shared_policy_can_add_and_revoke_a_user(self) -> None:
+        shared_path, configuration = self._create_shared_policy()
+        users = dict(configuration.users)
+        users["newuser"] = UserAccessProfile(
+            "NEWUSER", "New User", "Accountant", "analyst"
+        )
+
+        saved = save_access_configuration(
+            shared_path,
+            replace(configuration, users=users),
+            actor_login="M00000001",
+        )
+        self.assertEqual(saved.profile_for_login("newuser").display_name, "New User")
+        self.assertTrue(shared_path.with_name(".shared_access.backup.json").exists())
+
+        users = dict(saved.users)
+        users["newuser"] = replace(users["newuser"], active=False)
+        revoked = save_access_configuration(
+            shared_path, replace(saved, users=users), actor_login="M00000001"
+        )
+        self.assertIsNone(revoked.profile_for_login("NEWUSER"))
+        self.assertIsNotNone(revoked.raw_profile_for_login("NEWUSER"))
+
+    def test_stale_administrator_update_is_rejected(self) -> None:
+        shared_path, original = self._create_shared_policy()
+        first_users = dict(original.users)
+        first_users["new1"] = UserAccessProfile("NEW1", "One", "Title", "analyst")
+        save_access_configuration(
+            shared_path, replace(original, users=first_users), actor_login="M00000001"
+        )
+        stale_users = dict(original.users)
+        stale_users["new2"] = UserAccessProfile("NEW2", "Two", "Title", "cashier")
+        with self.assertRaises(AccessConfigurationConflictError):
+            save_access_configuration(
+                shared_path, replace(original, users=stale_users), actor_login="M00000001"
+            )
+
+    def test_owner_changes_require_the_established_password(self) -> None:
+        shared_path, original = self._create_shared_policy()
+        protection = create_owner_protection("synthetic-owner-password")
+        protected = save_access_configuration(
+            shared_path,
+            replace(original, owner_protection=protection),
+            actor_login="M00000001",
+        )
+        owner_key = protected.owner_login.casefold()
+        users = dict(protected.users)
+        users[owner_key] = replace(users[owner_key], job_title="Updated title")
+        update = replace(protected, users=users)
+
+        with self.assertRaises(OwnerProtectionError):
+            save_access_configuration(
+                shared_path, update, actor_login="M00000001", owner_password="wrong"
+            )
+        saved = save_access_configuration(
+            shared_path,
+            update,
+            actor_login="M00000001",
+            owner_password="synthetic-owner-password",
+        )
+        self.assertEqual(saved.raw_profile_for_login("M00000001").job_title, "Updated title")
+
 
 class FileDropTests(unittest.TestCase):
     def test_drop_parser_preserves_multiple_paths_with_spaces(self) -> None:
@@ -221,6 +300,30 @@ class MacReviewIdentityTests(unittest.TestCase):
     def test_windows_staff_launch_cannot_override_identity(self) -> None:
         with self.assertRaisesRegex(ValueError, "not available on Windows"):
             build_review_login("M00000001", platform="win32")
+
+    def test_windows_staff_launch_uses_shared_onedrive_policy(self) -> None:
+        expected = Path("C:/Mines") / "shared.json"
+        with patch("app.gui.main.get_shared_gui_access_path", return_value=expected):
+            actual = resolve_access_config_path(None, None, platform="win32")
+        self.assertEqual(actual, expected)
+
+    def test_windows_staff_cannot_override_policy_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not available on Windows"):
+            resolve_access_config_path(None, Path("local.json"), platform="win32")
+
+    def test_mines_shared_policy_path_reuses_onedrive_environment(self) -> None:
+        path = get_shared_gui_access_path({"OneDriveCommercial": "C:/Mines"})
+        self.assertEqual(
+            path,
+            Path("C:/Mines") / "GRP-Bursar Office - General" / "Y-Brswork"
+            / "Staff Folders" / ".highered_automation" / "gui_access.json",
+        )
+
+    def test_hidden_policy_directory_is_created_on_non_windows_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / ".highered_automation"
+            ensure_hidden_directory(target, platform="darwin")
+            self.assertTrue(target.is_dir())
 
 
 class BannerTermTests(unittest.TestCase):

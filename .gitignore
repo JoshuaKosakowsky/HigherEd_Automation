@@ -45,7 +45,8 @@ detail_codes.json
 config/gui_access.json
 
 # Allow public examples that belong to the application. The live GUI access
-# file contains staff identifiers and remains local/private.
+# file is a private bootstrap/Mac-review copy. The live policy is stored in the
+# hidden Bursar OneDrive folder and is never part of this repository.
 # Add exceptions here as needed:
 # !config/example.json
 !config/gui_access.example.json

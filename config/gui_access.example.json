@@ -1,10 +1,17 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
+  "metadata": {
+    "ownerLogin": "EXAMPLE-ADMIN-LOGIN",
+    "updatedAt": null,
+    "updatedBy": null
+  },
+  "ownerProtection": null,
   "users": {
     "EXAMPLE-ADMIN-LOGIN": {
       "displayName": "Example Admin",
       "jobTitle": "Bursar Office Administrator",
-      "view": "administrator"
+      "view": "administrator",
+      "active": true
     }
   },
   "views": {
