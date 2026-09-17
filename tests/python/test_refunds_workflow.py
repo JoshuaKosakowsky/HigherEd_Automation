@@ -550,6 +550,45 @@ class RefundAllocationTests(unittest.TestCase):
         hold = self.report([Transaction("PAY0", "P", "000", 50, -50)], refund_hold=True)
         self.assertEqual(hold["proposed_student_delivery"], "Refund Hold - Student")
 
+    def test_chck_waits_through_day_15_without_changing_delivery_route(self) -> None:
+        ready = self.report([
+            Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-15")
+        ])
+        self.assertEqual(ready["proposed_student_delivery"], "ARFD (System)")
+        self.assertEqual(ready["review_status"], "READY_FOR_STAFF_REVIEW")
+        self.assertNotIn("CHCK_CLEARING_WAIT", ready["review_reasons"] or "")
+
+        waiting = self.report([
+            Transaction("CHCK", "P", "000", 30, -30, effective_date="2099-08-16"),
+            Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-20"),
+        ])
+        self.assertEqual(waiting["proposed_student_delivery"], "ARFD (System)")
+        self.assertEqual(waiting["review_status"], "WAIT_CHECK_CLEARING")
+        self.assertIn(
+            "CHCK_CLEARING_WAIT_UNTIL_09/05/2099_AMOUNT_80.00",
+            waiting["review_reasons"],
+        )
+
+        check = self.report([
+            Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-16")
+        ], active_ed=False)
+        self.assertEqual(check["proposed_student_delivery"], "RFND (CHECK)")
+        self.assertEqual(check["review_status"], "WAIT_CHECK_CLEARING")
+
+        held = self.report([
+            Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-16")
+        ], refund_hold=True)
+        self.assertEqual(held["proposed_student_delivery"], "Refund Hold - Student")
+        self.assertEqual(held["review_status"], "HOLD")
+        self.assertIn("CHCK_CLEARING_WAIT_UNTIL_09/01/2099", held["review_reasons"])
+
+        invalid_date = self.report([
+            Transaction("CHCK", "P", "000", 50, -50, effective_date=None)
+        ])
+        self.assertEqual(invalid_date["proposed_student_delivery"], "ARFD (System)")
+        self.assertEqual(invalid_date["review_status"], "MANUAL_REVIEW")
+        self.assertIn("CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE", invalid_date["review_reasons"])
+
     def test_rh_hold_overrides_mines_park_and_parent_delivery(self) -> None:
         row = self.report([
             Transaction("HOMP", "C", "889", 100),
@@ -699,12 +738,18 @@ class RefundExtractTests(unittest.TestCase):
         rows = [
             account("TEST-MIX", 150, 75,
                     "AFRD (Transact) 20.00; CRVC (Transact) 30.00; RFND (CHECK) 100.00"),
-            account("TEST-SYS", 90, delivery="ARFD (System)", review_status="MANUAL_REVIEW"),
+            account("TEST-SYS", 90, delivery="ARFD (System)",
+                    review_status="WAIT_CHECK_CLEARING",
+                    review_reasons="CHCK_CLEARING_WAIT_UNTIL_09/17/2099_AMOUNT_40.00"),
+            account("TEST-CHCK", 25, delivery="RFND (CHECK)",
+                    review_status="WAIT_CHECK_CLEARING",
+                    review_reasons="CHCK_CLEARING_WAIT_UNTIL_09/18/2099_AMOUNT_25.00"),
             account("TEST-WAIT", 100, delivery="ACHK Clearing Wait until 09/16/2099 / 40.00; ARFD (System) 60.00"),
             account("TEST-HOLD", 45, 5, "Refund Hold - Student",
                     proposed_parent_delivery="Refund Hold - Parent", refund_hold_ind="Y",
                     review_status="HOLD",
-                    review_reasons="REFUND_HOLD_RH; Mines Park Charge - Review"),
+                    review_reasons=("REFUND_HOLD_RH; Mines Park Charge - Review; "
+                                    "CHCK_CLEARING_WAIT_UNTIL_09/19/2099_AMOUNT_20.00")),
             account("TEST-OLD", 15, delivery="AFRD (Transact) - May Be Too Old"),
             account("TEST-DATE", 10, delivery="ACHK Date Review"),
             account("TEST-THIRD", 10, 20, "THIRD_PARTY_REVIEW",
@@ -716,7 +761,7 @@ class RefundExtractTests(unittest.TestCase):
         ]
         expected = {
             "Transact Refunds": {"TEST-MIX": 50},
-            "Check Refunds": {"TEST-MIX": 100},
+            "Check Refunds": {"TEST-MIX": 100, "TEST-CHCK": 25},
             "Parent Refunds": {"TEST-MIX": 75},
             "System Refunds": {"TEST-SYS": 90, "TEST-WAIT": 60},
             "Refund Holds": {"TEST-HOLD": 50},
@@ -737,10 +782,19 @@ class RefundExtractTests(unittest.TestCase):
             self.assertEqual(sum(frame.tab_refund_amount.sum() for frame in sheets.values()),
                              sum(row["total_refund_amount"] for row in rows))
             self.assertEqual(sheets["Transact Refunds"].iloc[0].total_refund_amount, 225)
-            self.assertEqual(sheets["System Refunds"].iloc[0].review_status, "MANUAL_REVIEW")
+            self.assertEqual(sheets["System Refunds"].iloc[0].review_status,
+                             "WAIT_CHECK_CLEARING")
+            self.assertEqual(sheets["System Refunds"].iloc[0].tab_review_note,
+                             "CHCK clearing wait: 40.00 becomes eligible on 09/17/2099.")
+            self.assertEqual(sheets["Check Refunds"].loc[
+                sheets["Check Refunds"].cwid == "TEST-CHCK", "tab_review_note"
+            ].iloc[0], "CHCK clearing wait: 25.00 becomes eligible on 09/18/2099.")
             self.assertNotIn("TEST-HOLD", set(sheets["Mines Park Reviews"].cwid))
-            self.assertEqual(sheets["Refund Holds"].iloc[0].tab_review_note,
-                             "RH account hold: do not issue any refund.")
+            self.assertEqual(
+                sheets["Refund Holds"].iloc[0].tab_review_note,
+                "RH account hold: do not issue any refund. "
+                "CHCK clearing wait: 20.00 becomes eligible on 09/19/2099.",
+            )
             self.assertTrue(sheets["Manual Reviews"].tab_review_note.notna().all())
             workbook = load_workbook(output)
             for sheet in workbook:

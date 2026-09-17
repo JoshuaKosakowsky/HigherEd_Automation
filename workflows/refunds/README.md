@@ -77,7 +77,11 @@ with no clearing wait. ACHK uses its effective date: available on day 16
 (August 1 becomes August 17), through day 180. Younger funds show the eligibility
 date; older funds show `AFRD (Transact) - May Be Too Old`. Reversals are netted
 before identifying the surviving source and its refund amount. Holds continue
-to override student delivery.
+to override student delivery. Unused CHCK remains on the student's normal System
+or Check tab, but cannot be initiated until effective date +16 days. While it is
+waiting, the tab note shows the CHCK amount and exact eligibility date. Missing
+or future CHCK effective dates require manual review. RH still sends the entire
+account to Refund Holds and retains the CHCK clearing note.
 
 - Surviving target-term refund sources `C529`, `Z0LE`, or `TPPY` add
   `Possible Third Party refund`, identify the code in `third_party_match_source`,

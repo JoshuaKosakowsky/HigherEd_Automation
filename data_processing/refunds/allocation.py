@@ -534,13 +534,23 @@ def _student_delivery(
         "ach_wait": ZERO,
         "ach_old": ZERO,
         "ach_date_review": ZERO,
+        "check_wait": ZERO,
+        "check_date_review": ZERO,
         **{code: ZERO for code in CARD_PAYMENT_CODES},
     }
     next_eligible: list[date] = []
+    check_next_eligible: list[date] = []
     for source in sources:
         amount = source["source_credit_amount"]
         if source["detail_code"] in CARD_PAYMENT_CODES:
             amounts[source["detail_code"]] += amount
+        if source["detail_code"] == "CHCK":
+            effective = source["effective_date"]
+            if effective is None or effective > run_date:
+                amounts["check_date_review"] += amount
+            elif run_date < effective + timedelta(days=16):
+                amounts["check_wait"] += amount
+                check_next_eligible.append(effective + timedelta(days=16))
         if source["detail_code"] != "ACHK":
             continue
         effective = source["effective_date"]
@@ -555,7 +565,9 @@ def _student_delivery(
             amounts["ach_old"] += amount
 
     student = student_amount or ZERO
-    special_total = sum(amounts.values(), ZERO)
+    special_total = sum((amounts[key] for key in (
+        "ach_eligible", "ach_wait", "ach_old", "ach_date_review", *CARD_PAYMENT_CODES
+    )), ZERO)
     standard = _money(max(student - special_total, ZERO))
     components: list[tuple[str, Decimal]] = [
         ("AFRD (Transact)", amounts["ach_eligible"]),
@@ -593,6 +605,9 @@ def _student_delivery(
     return delivery, {
         **amounts,
         "next_eligible": min(next_eligible) if next_eligible else None,
+        # CHCK remains one normal-delivery amount, so wait until every surviving
+        # CHCK source represented by that amount has cleared.
+        "check_next_eligible": max(check_next_eligible) if check_next_eligible else None,
         "standard": standard,
     }
 
@@ -879,6 +894,12 @@ def _allocate_account(
         "ACHK_CLEARING_PERIOD_NOT_MET" if delivery_values["ach_wait"] > 0 else None,
         "ACHK_OVER_180_DAYS_MAY_BE_TOO_OLD_FOR_ORIGINAL_METHOD" if delivery_values["ach_old"] > 0 else None,
         "ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE" if delivery_values["ach_date_review"] > 0 else None,
+        (
+            f"CHCK_CLEARING_WAIT_UNTIL_{delivery_values['check_next_eligible']:%m/%d/%Y}"
+            f"_AMOUNT_{_format_money(delivery_values['check_wait'])}"
+        ) if delivery_values["check_wait"] > 0 else None,
+        "CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE"
+        if delivery_values["check_date_review"] > 0 else None,
     ])
 
     if refund_hold:
@@ -889,10 +910,14 @@ def _allocate_account(
         review_status = "MANUAL_REVIEW"
     elif account["account_control_row_count"] != 1 or account["active_ed_row_count"] > 1:
         review_status = "MANUAL_REVIEW"
-    elif plus_status in {"MISSING", "CONFLICT"} or delivery_values["ach_date_review"] > 0:
+    elif (plus_status in {"MISSING", "CONFLICT"}
+          or delivery_values["ach_date_review"] > 0
+          or delivery_values["check_date_review"] > 0):
         review_status = "MANUAL_REVIEW"
     elif delivery_values["ach_wait"] > 0:
         review_status = "WAIT_ACH_CLEARING"
+    elif delivery_values["check_wait"] > 0:
+        review_status = "WAIT_CHECK_CLEARING"
     elif original_sources:
         review_status = "TRANSACT_REVIEW"
     else:

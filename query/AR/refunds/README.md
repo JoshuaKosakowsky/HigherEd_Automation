@@ -202,6 +202,14 @@ a clearing delay. ACHK becomes eligible on effective date +16 days; day 180 is
 included, and older funds carry the May Be Too Old note. Waiting funds show the
 eligibility date. Multiple methods show their individual amounts.
 
+Unused CHCK remains part of the student's ordinary `ARFD (System)` or
+`RFND (CHECK)` amount. It becomes eligible on effective date +16 days, matching
+the ACH clearing boundary. Before then, `review_status` is
+`WAIT_CHECK_CLEARING` and `review_reasons` records the waiting CHCK amount and
+exact eligibility date. A missing or future effective date requires manual
+review. RH still overrides the status and workbook route, while retaining the
+CHCK clearing information.
+
 Unused target-term C529/Z0LE/TPPY sources add `Possible Third Party refund`
 and suppress delivery with `THIRD_PARTY_REVIEW`. Existing TPS-prefix and legacy
 account flags remain effective. A surviving HOMP charge in the target term, or

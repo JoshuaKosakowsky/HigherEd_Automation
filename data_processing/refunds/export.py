@@ -38,6 +38,9 @@ DELIVERY_SHEETS = {
 }
 COMPONENT_AMOUNT = re.compile(r"^(.*?)\s+(\d+\.\d{2})$")
 ACH_WAIT = re.compile(r"^ACHK Clearing Wait until \d{2}/\d{2}/\d{4}$")
+CHECK_WAIT_REASON = re.compile(
+    r"(?:^|; )CHCK_CLEARING_WAIT_UNTIL_(\d{2}/\d{2}/\d{4})_AMOUNT_(\d+\.\d{2})(?:;|$)"
+)
 
 
 @dataclass(frozen=True)
@@ -87,8 +90,16 @@ def _student_portions(delivery: str, amount: Decimal) -> list[RefundPortion]:
 def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
     """Partition one account's refund without changing any allocation fields."""
     total = _amount(row["total_refund_amount"])
+    check_wait = CHECK_WAIT_REASON.search(str(row["review_reasons"] or ""))
+    check_wait_note = (
+        f"CHCK clearing wait: {check_wait.group(2)} becomes eligible "
+        f"on {check_wait.group(1)}."
+        if check_wait else None
+    )
 
     def review(sheet: str, note: str) -> list[tuple[str, dict[str, object]]]:
+        if check_wait_note:
+            note = f"{note} {check_wait_note}"
         return [(sheet, {**row, "tab_delivery": "REVIEW REQUIRED",
                          "tab_refund_amount": total, "tab_review_note": note})]
 
@@ -127,7 +138,7 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
         (sheet, {**row,
                  "tab_delivery": "; ".join(f"{part.delivery} {part.amount:.2f}" for part in parts),
                  "tab_refund_amount": sum((part.amount for part in parts), Decimal(0)),
-                 "tab_review_note": None})
+                 "tab_review_note": check_wait_note if sheet != "Parent Refunds" else None})
         for sheet, parts in by_sheet.items()
     ]
 

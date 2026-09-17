@@ -31,6 +31,8 @@ CURRENT POLICY
   ARFD (System) with ED, otherwise RFND (CHECK).
   ACHK clears on effective date +16 days; after 180 days it carries an age warning.
   CRAM, CRDS, CRMC, CRVC are immediately available via their respective codes.
+- Unused CHCK remains on its normal student-delivery route but cannot be initiated
+  until effective date +16 days. Its amount and eligibility date remain visible.
 - RH is an account-level hold and overrides every student/parent delivery and
   workbook review route. Other review reasons remain visible for later handling.
 - Unused target-term C529/Z0LE/TPPY sources flag Possible Third Party refund,
@@ -1034,6 +1036,25 @@ student_delivery_sources AS MATERIALIZED (
                OR CAST(s.effective_date AS date) > p.run_date)
                 THEN s.source_credit_amount ELSE 0
         END), 2) AS achk_date_review_amount,
+        ROUND(SUM(CASE
+            WHEN s.detail_code = 'CHCK'
+             AND s.effective_date IS NOT NULL
+             AND s.effective_date <= p.run_date
+             AND p.run_date < CAST(s.effective_date AS date) + 16
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS chck_clearing_wait_amount,
+        MAX(CAST(s.effective_date AS date) + 16) FILTER (
+            WHERE s.detail_code = 'CHCK'
+              AND s.effective_date IS NOT NULL
+              AND s.effective_date <= p.run_date
+              AND p.run_date < CAST(s.effective_date AS date) + 16
+        ) AS chck_next_eligible_date,
+        ROUND(SUM(CASE
+            WHEN s.detail_code = 'CHCK'
+             AND (s.effective_date IS NULL
+               OR CAST(s.effective_date AS date) > p.run_date)
+                THEN s.source_credit_amount ELSE 0
+        END), 2) AS chck_date_review_amount,
         ROUND(SUM(CASE WHEN s.detail_code = 'CRVC'
             THEN s.source_credit_amount ELSE 0 END), 2) AS crvc_transact_amount,
         ROUND(SUM(CASE WHEN s.detail_code = 'CRAM'
@@ -1160,6 +1181,9 @@ joined AS (
         ds.achk_next_eligible_date,
         COALESCE(ds.achk_too_old_amount, 0) AS achk_too_old_amount,
         COALESCE(ds.achk_date_review_amount, 0) AS achk_date_review_amount,
+        COALESCE(ds.chck_clearing_wait_amount, 0) AS chck_clearing_wait_amount,
+        ds.chck_next_eligible_date,
+        COALESCE(ds.chck_date_review_amount, 0) AS chck_date_review_amount,
         COALESCE(ds.crvc_transact_amount, 0) AS crvc_transact_amount,
         COALESCE(ds.cram_transact_amount, 0) AS cram_transact_amount,
         COALESCE(ds.crds_transact_amount, 0) AS crds_transact_amount,
@@ -1401,7 +1425,14 @@ final_review AS (
             CASE WHEN d.achk_too_old_amount > 0
                 THEN 'ACHK_OVER_180_DAYS_MAY_BE_TOO_OLD_FOR_ORIGINAL_METHOD' END,
             CASE WHEN d.achk_date_review_amount > 0
-                THEN 'ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END
+                THEN 'ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END,
+            CASE WHEN d.chck_clearing_wait_amount > 0 THEN CONCAT(
+                'CHCK_CLEARING_WAIT_UNTIL_',
+                TO_CHAR(d.chck_next_eligible_date, 'MM/DD/YYYY'),
+                '_AMOUNT_', TO_CHAR(d.chck_clearing_wait_amount, 'FM999999990.00')
+            ) END,
+            CASE WHEN d.chck_date_review_amount > 0
+                THEN 'CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END
         ), '') AS review_reasons
     FROM delivery d
 )
@@ -1466,8 +1497,10 @@ SELECT
         WHEN f.active_ed_row_count > 1 THEN 'MANUAL_REVIEW'
         WHEN f.plus_to_student_status IN ('MISSING', 'CONFLICT')
             THEN 'MANUAL_REVIEW'
-        WHEN f.achk_date_review_amount > 0 THEN 'MANUAL_REVIEW'
+        WHEN f.achk_date_review_amount > 0
+          OR f.chck_date_review_amount > 0 THEN 'MANUAL_REVIEW'
         WHEN f.achk_clearing_wait_amount > 0 THEN 'WAIT_ACH_CLEARING'
+        WHEN f.chck_clearing_wait_amount > 0 THEN 'WAIT_CHECK_CLEARING'
         WHEN f.original_payment_row_count > 0 THEN 'TRANSACT_REVIEW'
         ELSE 'READY_FOR_STAFF_REVIEW'
     END AS review_status,
