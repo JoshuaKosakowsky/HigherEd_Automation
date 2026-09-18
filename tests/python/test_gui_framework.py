@@ -7,8 +7,7 @@ import unittest
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from app.gui.models import (
     WorkflowContext,
@@ -30,7 +29,8 @@ from app.gui.services.access import (
     save_access_configuration,
     upgrade_legacy_configuration,
 )
-from app.gui.services.drag_drop import parse_dropped_files, register_file_drop
+from app.gui.services.drag_drop import dropped_local_paths
+from PySide6.QtCore import QMimeData, QUrl
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
 from app.gui.services.textbook_brokers import run_textbook_brokers
@@ -263,32 +263,16 @@ class WorkflowAccessTests(unittest.TestCase):
 
 
 class FileDropTests(unittest.TestCase):
-    def test_drop_parser_preserves_multiple_paths_with_spaces(self) -> None:
-        widget = SimpleNamespace(tk=Mock())
-        widget.tk.splitlist.return_value = (
-            "C:/Input Files/finaid_one.csv",
-            "C:/Input Files/ia_two.csv",
-        )
-
-        paths = parse_dropped_files(widget, "tcl encoded file list")
-
-        self.assertEqual(
-            paths,
-            (
-                Path("C:/Input Files/finaid_one.csv"),
-                Path("C:/Input Files/ia_two.csv"),
-            ),
-        )
-        widget.tk.splitlist.assert_called_once_with("tcl encoded file list")
-
-    def test_missing_optional_dependency_preserves_path_and_browse_mode(self) -> None:
-        widget = Mock()
-
-        with patch("app.gui.services.drag_drop.DND_FILES", None):
-            registered = register_file_drop(widget, Mock())
-
-        self.assertFalse(registered)
-        widget.drop_target_register.assert_not_called()
+    def test_drop_parser_preserves_spaces_and_ignores_remote_urls(self) -> None:
+        mime = QMimeData()
+        mime.setUrls([
+            QUrl.fromLocalFile("/Input Files/finaid_one.csv"),
+            QUrl.fromLocalFile("/Input Files/ia_two.csv"),
+            QUrl("https://example.com/remote.csv"),
+        ])
+        self.assertEqual(dropped_local_paths(mime), (
+            Path("/Input Files/finaid_one.csv"), Path("/Input Files/ia_two.csv"),
+        ))
 
 
 class MacReviewIdentityTests(unittest.TestCase):
@@ -539,9 +523,6 @@ class GuiPowerShellContractTests(unittest.TestCase):
         cls.shortcut = (
             project_root / "powershell" / "gui" / "install_desktop_shortcut.ps1"
         ).read_text(encoding="utf-8")
-        cls.tk_runtime = (
-            project_root / "powershell" / "gui" / "tk_runtime.ps1"
-        ).read_text(encoding="utf-8")
 
     def test_launcher_uses_repository_windowed_python(self) -> None:
         self.assertIn('.venv\\Scripts\\pythonw.exe', self.launcher)
@@ -553,33 +534,22 @@ class GuiPowerShellContractTests(unittest.TestCase):
         self.assertIn("-WindowStyle Hidden", self.shortcut)
         self.assertIn("launcher\\run_gui.ps1", self.shortcut)
 
-    def test_setup_verifies_native_file_drop_dependency(self) -> None:
+    def test_setup_verifies_qt_widgets_dependency(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         setup = (project_root / "setup.ps1").read_text(encoding="utf-8")
         requirements = (project_root / "requirements.txt").read_text(encoding="utf-8")
 
-        self.assertIn("root = TkinterDnD.Tk()", setup)
-        self.assertIn("root.destroy()", setup)
-        self.assertIn("tkinterdnd2==0.6.1", requirements)
+        self.assertIn("app = QApplication([])", setup)
+        self.assertIn("app.processEvents()", setup)
+        self.assertIn("PySide6-Essentials==6.10.2", requirements)
+        self.assertNotIn("tkinterdnd2", requirements)
 
-    def test_launcher_sets_process_scoped_tcl_tk_paths_before_launch(self) -> None:
-        runtime_call = self.launcher.index("Set-GuiTkRuntimeEnvironment")
+    def test_launcher_checks_qt_before_launch(self) -> None:
+        runtime_call = self.launcher.index("from PySide6.QtWidgets import QApplication")
         gui_launch = self.launcher.index("-m app.gui.main")
 
         self.assertLess(runtime_call, gui_launch)
-        self.assertIn(". $tkRuntimeScript", self.launcher)
-        self.assertIn("$env:TCL_LIBRARY = $tclLibrary", self.tk_runtime)
-        self.assertIn("$env:TK_LIBRARY = $tkLibrary", self.tk_runtime)
-
-    def test_tk_runtime_discovers_and_validates_base_python_libraries(self) -> None:
-        self.assertIn("print(sys.base_prefix)", self.tk_runtime)
-        self.assertIn("print(_tkinter.TCL_VERSION)", self.tk_runtime)
-        self.assertIn("print(_tkinter.TK_VERSION)", self.tk_runtime)
-        self.assertNotIn('"base_prefix"', self.tk_runtime)
-        self.assertNotIn("ConvertFrom-Json", self.tk_runtime)
-        self.assertIn('-RequiredFile "init.tcl"', self.tk_runtime)
-        self.assertIn('-RequiredFile "tk.tcl"', self.tk_runtime)
-        self.assertNotIn("Python313", self.tk_runtime)
+        self.assertNotIn("Set-GuiTkRuntimeEnvironment", self.launcher)
 
 
 if __name__ == "__main__":

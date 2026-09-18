@@ -1,164 +1,79 @@
-"""Registry-driven home page."""
-
-from __future__ import annotations
+"""Searchable, access-filtered workflow landing page."""
 
 from collections import defaultdict
-import tkinter as tk
-from tkinter import ttk
 from typing import Callable, Iterable
 
+from PySide6.QtWidgets import QLineEdit, QScrollArea, QWidget, QVBoxLayout, QHBoxLayout
+
 from app.gui.models import WorkflowDefinition
-from app.gui.theme import PAGE
+from app.gui.theme import button, card, label
 
 
-class HomePage(ttk.Frame):
+class HomePage(QScrollArea):
     def __init__(
-        self,
-        parent,
-        workflows: Iterable[WorkflowDefinition],
-        open_workflow: Callable[[WorkflowDefinition], None],
-        *,
-        user_first_name: str,
-        profile_description: str | None = None,
+        self, parent, workflows: Iterable[WorkflowDefinition],
+        open_workflow: Callable[[WorkflowDefinition], None], *,
+        user_first_name: str, profile_description: str | None = None,
         manage_access: Callable[[], None] | None = None,
+        access_error: str | None = None,
     ) -> None:
-        super().__init__(parent, style="App.TFrame")
-
-        self.canvas = tk.Canvas(
-            self,
-            background=PAGE,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-
-        self.body = ttk.Frame(
-            self.canvas,
-            style="App.TFrame",
-            padding=(36, 28),
-        )
-        self.body.columnconfigure(0, weight=1)
-        self.body_window = self.canvas.create_window(
-            (0, 0),
-            window=self.body,
-            anchor="nw",
-        )
-        self.body.bind("<Configure>", self._update_scroll_region)
-        self.canvas.bind("<Configure>", self._resize_body)
-
-        ttk.Label(
-            self.body,
-            text=f"Welcome {user_first_name}",
-            style="PageTitle.TLabel",
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            self.body,
-            text=(
-                "Choose an automation to review its inputs before anything runs."
-            ),
-            style="Body.TLabel",
-        ).grid(row=1, column=0, sticky="w", pady=(4, 22))
-
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        body = QWidget()
+        body.setObjectName("page")
+        self.setWidget(body)
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(36, 30, 36, 30)
+        layout.setSpacing(18)
+        layout.addWidget(label("YOUR WORKSPACE", "eyebrow"))
+        layout.addWidget(label(f"Welcome {user_first_name}", "title"))
+        layout.addWidget(label("Choose a workflow. Review the details. Get back to your day.", "muted"))
         if profile_description:
-            ttk.Label(
-                self.body,
-                text=profile_description,
-                style="Muted.TLabel",
-            ).grid(row=2, column=0, sticky="w", pady=(0, 18))
-
-        if manage_access is not None:
-            ttk.Button(
-                self.body,
-                text="Manage staff access",
-                style="Secondary.TButton",
-                command=manage_access,
-            ).grid(row=2, column=0, sticky="e", pady=(0, 18))
-
-        by_category: dict[str, list[WorkflowDefinition]] = defaultdict(list)
-        for workflow in workflows:
-            by_category[workflow.category].append(workflow)
-
-        if not by_category:
-            ttk.Label(
-                self.body,
-                text=(
-                    "No automations are assigned to this user profile. "
-                    "Contact the automation administrator if access is needed."
-                ),
-                style="Muted.TLabel",
-                wraplength=650,
-                justify="left",
-            ).grid(row=3, column=0, sticky="w", pady=(4, 0))
-            return
-
-        row = 3
-        for category, definitions in by_category.items():
-            ttk.Label(self.body, text=category, style="Section.TLabel").grid(
-                row=row,
-                column=0,
-                sticky="w",
-                pady=(0, 9),
-            )
-            row += 1
-
-            card_area = ttk.Frame(self.body, style="App.TFrame")
-            card_area.grid(row=row, column=0, sticky="ew", pady=(0, 22))
-            card_area.columnconfigure(0, weight=1)
-            card_area.columnconfigure(1, weight=1)
-
-            for index, definition in enumerate(definitions):
-                self._add_card(
-                    card_area,
-                    definition,
-                    open_workflow,
-                    row=index // 2,
-                    column=index % 2,
-                )
-            row += 1
-
-    def _update_scroll_region(self, _event=None) -> None:
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def _resize_body(self, event) -> None:
-        self.canvas.itemconfigure(self.body_window, width=event.width)
-
-    @staticmethod
-    def _add_card(
-        parent,
-        definition: WorkflowDefinition,
-        open_workflow: Callable[[WorkflowDefinition], None],
-        *,
-        row: int,
-        column: int,
-    ) -> None:
-        card = ttk.Frame(parent, style="Card.TFrame", padding=18)
-        card.grid(
-            row=row,
-            column=column,
-            sticky="nsew",
-            padx=(0, 10) if column == 0 else (10, 0),
-            pady=(0, 12),
+            layout.addWidget(label(profile_description, "muted"))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search your workflows…")
+        self.search.setAccessibleName("Search workflows")
+        self.search.setClearButtonEnabled(True)
+        layout.addWidget(self.search)
+        self.cards = []
+        self.categories = []
+        groups = defaultdict(list)
+        for definition in workflows:
+            groups[definition.category].append(definition)
+        for category, definitions in groups.items():
+            heading = label(category, "section")
+            layout.addWidget(heading)
+            group_cards = []
+            for definition in definitions:
+                frame, content = card()
+                row = QHBoxLayout()
+                row.addWidget(label(definition.name, "section"), 1)
+                launch = button("Review workflow  →", lambda checked=False, item=definition: open_workflow(item), "primary")
+                row.addWidget(launch)
+                content.addLayout(row)
+                content.addWidget(label(definition.description, "muted"))
+                layout.addWidget(frame)
+                self.cards.append((frame, f"{definition.name} {definition.description} {category}".casefold()))
+                group_cards.append(frame)
+            self.categories.append((heading, group_cards))
+        self.empty = label(
+            access_error or (
+                "No workflows are assigned to your account yet. Contact your automation administrator."
+                if not self.cards else "No workflows match your search."
+            ), "status",
         )
-        card.columnconfigure(0, weight=1)
+        self.empty.setVisible(not self.cards)
+        layout.addWidget(self.empty)
+        layout.addStretch()
+        self.search.textChanged.connect(self._filter)
 
-        ttk.Label(card, text=definition.name, style="CardTitle.TLabel").grid(
-            row=0,
-            column=0,
-            sticky="w",
-        )
-        ttk.Label(
-            card,
-            text=definition.description,
-            style="CardBody.TLabel",
-            wraplength=330,
-            justify="left",
-        ).grid(row=1, column=0, sticky="w", pady=(7, 15))
-        ttk.Button(
-            card,
-            text="Review and run",
-            style="Secondary.TButton",
-            command=lambda item=definition: open_workflow(item),
-        ).grid(row=2, column=0, sticky="w")
+    def _filter(self, query: str) -> None:
+        query = query.strip().casefold()
+        count = 0
+        for frame, text in self.cards:
+            visible = query in text
+            frame.setVisible(visible)
+            count += visible
+        for heading, frames in self.categories:
+            heading.setVisible(any(not frame.isHidden() for frame in frames))
+        self.empty.setVisible(count == 0)

@@ -1,6 +1,6 @@
 # Mines Bursar Automation desktop app
 
-This Tkinter/ttk application is the staff-facing front end for supported
+This PySide6 / Qt Widgets desktop application is the staff-facing front end for supported
 HigherEd Automation workflows. It calls existing Python workflow logic through
 small adapters; business rules remain in `data_processing` and workflow entry
 points remain independently runnable.
@@ -14,16 +14,22 @@ layout; accent colors remain limited.
 
 - `workflow_registry.py` holds typed, staff-facing workflow metadata.
 - `models.py` defines workflow inputs, execution context, and results.
-- `pages/` renders the home and generic workflow-detail views from metadata.
+- `pages/` renders searchable workflow cards, registry-driven forms, and staff administration.
+- `theme.py` provides the Mines palette, a navy navigation sidebar, and light workspace.
+- Staff profiles use a single editable form with a view dropdown; permissions use checkboxes.
 - file inputs accept direct paths, Browse selection, and native Explorer/Finder
-  drops. `tkinterdnd2` is the single dependency used for external file drops.
+  drops, using Qt's native local-file URL support. No separate drop package is required.
+- `services/parameters.py` preserves input parsing independently of the toolkit.
+- Each run has a review dialog. TEST is preferred where modes exist; production
+  displays the workflow warning and requires an explicit Run in production action.
 - `services/execution.py` runs one task at a time on a worker thread and converts
   exceptions into staff-safe messages while preserving tracebacks in the log.
 - workflow-specific service adapters translate form values into existing
   pipeline configuration. They do not reimplement processing rules.
 - `launcher/run_gui.ps1` starts the app with the repository virtual environment.
-- `powershell/gui/tk_runtime.ps1` discovers and validates the base Python Tcl/Tk
-  libraries and supplies process-scoped paths to setup and the GUI launcher.
+- Setup installs pinned `PySide6-Essentials` and verifies a real Qt window.
+  The GUI launcher checks Qt availability; the obsolete Tcl/Tk helper and its
+  dedicated tests have been removed.
 - `shared/user_settings.py` reads the same per-user JSON written by `setup.ps1`.
   The home page greets the employee by first name and uses `User` when settings
   are unavailable or invalid.
@@ -60,11 +66,12 @@ those staff members receive no workflow cards until the application owner adds
 specific workflow IDs. An unassigned login also sees no cards and receives a
 contact-the-administrator message.
 
-Active administrators see **Manage staff access** on the home page. They can
+Active administrators see **Staff access** in the sidebar. They can
 add or edit profiles, revoke or restore access, and choose the workflows shown
 to Analyst and Cashier views. Updates are validated, written atomically, and
-back up the previous policy beside the live file. A file-change check prevents
-one administrator from silently overwriting another administrator's update.
+back up the previous policy beside the live file. A file-change check detects locally visible changes since the policy was loaded.
+Use Reload after a conflict. OneDrive synchronization is asynchronous, so this
+is not a distributed lock across offline or simultaneously editing computers.
 
 The designated owner profile is protected separately. On first use, the owner
 must choose a password of at least 12 characters. Only a salted password
@@ -80,8 +87,8 @@ and OneDrive access remain the actual outer access scope.
 The ignored `config/gui_access.json` is retained only as a private bootstrap
 and Mac review policy. On the first Windows launch where the shared policy does
 not exist, a configured administrator's local policy is upgraded and copied to
-the shared location. The intended protected owner should perform this first
-launch. `config/gui_access.example.json` documents the public-safe schema. Do
+the shared location. For a legacy policy without an owner, the intended protected owner should
+perform this first launch. Existing schema-3 owner and password data are preserved. `config/gui_access.example.json` documents the public-safe schema. Do
 not commit the live staff mapping or shared policy to the repository.
 
 This is staff-interface scoping, not a security boundary: employees with direct
@@ -119,25 +126,40 @@ test policy can be selected explicitly on macOS/Linux:
 python3 -m app.gui.main --review-as EXAMPLE-ADMIN-LOGIN --access-config /path/to/gui_access.json
 ```
 
-Path entry and Browse work even when the optional drag/drop package has not yet
-been installed in that Mac Python environment. To enable Finder file drop:
+Install the interface dependency in the Python environment used for review:
 
 ```bash
-python3 -m pip install tkinterdnd2==0.6.1
+python3 -m pip install PySide6-Essentials==6.10.2
 ```
+
+For a fresh full development environment, use Python 3.11 or later and install
+`requirements.txt`. PySide6 6.10.2 requires macOS 13 or later; Windows deployment
+should be checked on the institution's supported Windows build.
 
 The `--review-as` identity and `--access-config` overrides are rejected on
 Windows staff installations.
-Windows setup installs the drag/drop package and creates and destroys a real
-TkinterDnD window during verification. A missing or incorrectly resolved
-`init.tcl` therefore fails setup with a Tcl/Tk repair message instead of failing
-later from the desktop shortcut.
+After installing this update on Windows, run `.\setup.ps1` once, then use the
+existing shortcut or `.\launcher\run_gui.ps1 -Console`. No policy migration is
+needed for an existing shared schema-3 policy.
+
+The interface refreshes access when opening pages and before starting a run.
+While a workflow runs, navigation and window closing are blocked. Completion
+provides Open result and Open output folder actions; failures retain log access.
 
 Run the automated suite with:
 
 ```powershell
 .\tests\run_tests.ps1
 ```
+
+For headless Qt interaction tests on macOS/Linux:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests/python -q
+```
+
+Qt licensing notices and source information are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), also referenced by About this app.
 
 The GUI writes technical details to `logs/gui/gui_YYYYMMDD.log`. Staff-facing
 dialogs intentionally omit tracebacks and secrets.

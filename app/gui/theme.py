@@ -1,11 +1,11 @@
-"""Central visual theme for the staff desktop application."""
+"""Mines digital palette and shared Qt presentation primitives."""
 
-from __future__ import annotations
+import sys
 
-from tkinter import ttk
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QFrame, QVBoxLayout
 
-
-# Official Mines Communications and Marketing digital palette.
 DARK_BLUE = "#21314D"
 BLASTER_BLUE = "#09396C"
 LIGHT_BLUE = "#879EC3"
@@ -21,113 +21,113 @@ ENERGY_YELLOW = "#F0F600"
 GOLDEN_TECH = "#F1B91A"
 ENVIRONMENT_GREEN = "#80C342"
 RED_FLANNEL = "#B42024"
-
-# Semantic choices keep the interface mostly within the primary/neutral palette.
-PAGE = WHITE
-CARD = PALE_BLUE
+PAGE = "#F4F6F9"
+CARD = WHITE
 TEXT = DARK_BLUE
-MUTED = DARK_GRAY
-SUCCESS = ENVIRONMENT_GREEN
-WARNING = GOLDEN_TECH
+MUTED = "#526078"
+SUCCESS = BLASTER_BLUE
+WARNING = COLORADO_RED
 ERROR = RED_FLANNEL
 
 
-def apply_theme(style: ttk.Style) -> None:
-    """Apply restrained Mines-inspired styles in one place."""
-    if "clam" in style.theme_names():
-        style.theme_use("clam")
+def label(text: str, role: str = "", *, wrap: bool = True) -> QLabel:
+    widget = QLabel(text)
+    widget.setTextFormat(Qt.TextFormat.PlainText)
+    widget.setWordWrap(wrap)
+    if role:
+        widget.setObjectName(role)
+    return widget
 
-    style.configure("App.TFrame", background=PAGE)
-    style.configure("Header.TFrame", background=DARK_BLUE)
-    style.configure(
-        "HeaderTitle.TLabel",
-        background=DARK_BLUE,
-        foreground=WHITE,
-        font=("Segoe UI", 20, "bold"),
-    )
-    style.configure(
-        "HeaderMeta.TLabel",
-        background=DARK_BLUE,
-        foreground=PALE_BLUE,
-        font=("Segoe UI", 9),
-    )
-    style.configure(
-        "PageTitle.TLabel",
-        background=PAGE,
-        foreground=TEXT,
-        font=("Segoe UI", 18, "bold"),
-    )
-    style.configure(
-        "Section.TLabel",
-        background=PAGE,
-        foreground=DARK_BLUE,
-        font=("Segoe UI", 12, "bold"),
-    )
-    style.configure(
-        "Body.TLabel",
-        background=PAGE,
-        foreground=TEXT,
-        font=("Segoe UI", 10),
-    )
-    style.configure(
-        "Muted.TLabel",
-        background=PAGE,
-        foreground=MUTED,
-        font=("Segoe UI", 9),
-    )
-    style.configure("Card.TFrame", background=CARD, relief="solid", borderwidth=1)
-    style.configure(
-        "CardTitle.TLabel",
-        background=CARD,
-        foreground=TEXT,
-        font=("Segoe UI", 12, "bold"),
-    )
-    style.configure(
-        "CardBody.TLabel",
-        background=CARD,
-        foreground=MUTED,
-        font=("Segoe UI", 9),
-    )
-    style.configure(
-        "Field.TLabel",
-        background=PAGE,
-        foreground=TEXT,
-        font=("Segoe UI", 10, "bold"),
-    )
-    style.configure(
-        "Primary.TButton",
-        background=BLASTER_BLUE,
-        foreground=WHITE,
-        font=("Segoe UI", 10, "bold"),
-        padding=(18, 9),
-    )
-    style.map(
-        "Primary.TButton",
-        background=[("active", DARK_BLUE), ("disabled", LIGHT_GRAY)],
-    )
-    style.configure("Secondary.TButton", padding=(12, 7))
-    style.configure(
-        "Production.TLabel",
-        background=PALE_BLUE,
-        foreground=COLORADO_RED,
-        font=("Segoe UI", 10, "bold"),
-        padding=10,
-    )
-    style.configure(
-        "Status.Running.TLabel",
-        background=PAGE,
-        foreground=BLASTER_BLUE,
-        font=("Segoe UI", 10, "bold"),
-    )
-    style.configure(
-        "Status.Success.TLabel",
-        background=PAGE,
-        foreground=SUCCESS,
-        font=("Segoe UI", 10, "bold"),
-    )
-    style.configure(
-        "Status.Failure.TLabel",
-        background=PAGE,
-        foreground=ERROR,
-        font=("Segoe UI", 10, "bold"),
-    )
+
+def button(text: str, callback, role: str = "") -> QPushButton:
+    widget = QPushButton(text)
+    widget.setCursor(Qt.CursorShape.PointingHandCursor)
+    widget.setMinimumHeight(38)
+    if role:
+        widget.setObjectName(role)
+    widget.clicked.connect(callback)
+    return widget
+
+
+def card() -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame()
+    frame.setObjectName("card")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(24, 22, 24, 22)
+    layout.setSpacing(12)
+    return frame, layout
+
+
+def apply_theme(application: QApplication) -> None:
+    """Use a consistent light workspace, including on dark-mode desktops."""
+    application.setStyle("Fusion")
+    application.setFont(QFont("Segoe UI" if sys.platform == "win32" else "Arial", 11))
+    palette = QPalette()
+    for role, color in (
+        (QPalette.ColorRole.Window, PAGE),
+        (QPalette.ColorRole.WindowText, TEXT),
+        (QPalette.ColorRole.Base, WHITE),
+        (QPalette.ColorRole.AlternateBase, PAGE),
+        (QPalette.ColorRole.Text, TEXT),
+        (QPalette.ColorRole.Button, WHITE),
+        (QPalette.ColorRole.ButtonText, TEXT),
+        (QPalette.ColorRole.Highlight, BLASTER_BLUE),
+        (QPalette.ColorRole.HighlightedText, WHITE),
+        (QPalette.ColorRole.ToolTipBase, WHITE),
+        (QPalette.ColorRole.ToolTipText, TEXT),
+    ):
+        palette.setColor(role, QColor(color))
+    application.setPalette(palette)
+    application.setStyleSheet(f"""
+        QWidget {{ color: {TEXT}; }}
+        QMainWindow, QScrollArea, QWidget#page {{ background: {PAGE}; }}
+        QScrollArea {{ border: none; }}
+        QLabel {{ background: transparent; }}
+        QLabel#title {{ font-size: 28px; font-weight: 700; }}
+        QLabel#section {{ font-size: 18px; font-weight: 700; }}
+        QLabel#eyebrow {{ color: {BLASTER_BLUE}; font-size: 11px; font-weight: 700; }}
+        QLabel#muted {{ color: {MUTED}; }}
+        QLabel#field {{ font-weight: 600; }}
+        QLabel#warning {{ color: {COLORADO_RED}; background: {WHITE};
+            border-left: 3px solid {COLORADO_RED}; padding: 12px; }}
+        QLabel#error {{ color: {RED_FLANNEL}; padding: 4px 0; }}
+        QLabel#status {{ background: {PALE_BLUE}; border-radius: 8px; padding: 14px; }}
+        QFrame#card {{ background: {WHITE}; border: 1px solid {PALE_BLUE}; border-radius: 12px; }}
+        QFrame#sidebar {{ background: {DARK_BLUE}; }}
+        QFrame#sidebar QLabel {{ color: {PALE_BLUE}; }}
+        QFrame#sidebar QLabel#brand {{ color: {WHITE}; font-size: 25px; font-weight: 800; }}
+        QFrame#sidebar QLabel#sideTitle {{ color: {WHITE}; font-size: 16px; font-weight: 600; }}
+        QFrame#sidebar QLabel#institution {{ font-size: 10px; }}
+        QPushButton {{ background: {WHITE}; border: 1px solid {LIGHT_BLUE};
+            border-radius: 7px; padding: 8px 14px; font-weight: 600; }}
+        QPushButton:hover {{ background: {PALE_BLUE}; border-color: {BLASTER_BLUE}; }}
+        QPushButton:focus {{ border: 2px solid {EARTH_BLUE}; }}
+        QPushButton:disabled {{ color: {DARK_GRAY}; background: {PAGE}; border-color: {PALE_BLUE}; }}
+        QPushButton#primary {{ background: {BLASTER_BLUE}; color: {WHITE}; border: 1px solid {BLASTER_BLUE}; }}
+        QPushButton#primary:hover {{ background: {DARK_BLUE}; }}
+        QPushButton#primary:disabled {{ background: {LIGHT_GRAY}; border-color: {LIGHT_GRAY}; }}
+        QPushButton#nav {{ background: transparent; color: {PALE_BLUE}; border: none;
+            text-align: left; padding: 12px; }}
+        QPushButton#nav:hover, QPushButton#nav:checked {{ background: {BLASTER_BLUE}; color: {WHITE}; }}
+        QPushButton#nav:focus {{ border: 1px solid {LIGHT_BLUE}; }}
+        QLineEdit, QPlainTextEdit, QComboBox {{
+            background: {WHITE}; color: {TEXT}; border: 1px solid {LIGHT_BLUE};
+            border-radius: 6px; padding: 9px; selection-background-color: {BLASTER_BLUE};
+            selection-color: {WHITE}; }}
+        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{ border: 2px solid {BLASTER_BLUE}; }}
+        QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"] {{ border: 2px solid {RED_FLANNEL}; }}
+        QFrame#fileInput {{ border: 1px dashed {LIGHT_BLUE}; border-radius: 8px; background: {PAGE}; }}
+        QFrame#fileInput[dragging="true"] {{ border: 2px solid {BLASTER_BLUE}; background: {PALE_BLUE}; }}
+        QTableWidget {{ background: {WHITE}; alternate-background-color: {PAGE};
+            border: 1px solid {PALE_BLUE}; border-radius: 8px; gridline-color: {PALE_BLUE};
+            selection-background-color: {PALE_BLUE}; selection-color: {DARK_BLUE}; }}
+        QHeaderView::section {{ background: {PALE_BLUE}; color: {DARK_BLUE};
+            padding: 12px 8px; border: none; font-weight: 600; }}
+        QTableWidget::item {{ padding: 8px; }}
+        QProgressBar {{ background: {PALE_BLUE}; border: none; border-radius: 4px; max-height: 7px; }}
+        QProgressBar::chunk {{ background: {BLASTER_BLUE}; border-radius: 4px; }}
+        QCheckBox {{ spacing: 9px; padding: 7px 0; }}
+        QScrollBar:vertical {{ width: 12px; background: {PAGE}; }}
+        QScrollBar::handle:vertical {{ background: {LIGHT_BLUE}; min-height: 30px; border-radius: 5px; }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+    """)

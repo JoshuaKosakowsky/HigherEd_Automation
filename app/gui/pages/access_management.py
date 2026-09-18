@@ -1,171 +1,238 @@
-"""Administrator page for maintaining GUI users and view assignments."""
+"""Qt staff management: editable profiles, role permissions, and owner protection."""
 
 from __future__ import annotations
 
-import tkinter as tk
 from dataclasses import replace
-from tkinter import messagebox, simpledialog, ttk
+from pathlib import Path
 from typing import Callable
 
-from app.gui.services.access import (
-    AccessConfiguration,
-    AccessConfigurationError,
-    UserAccessProfile,
-    create_owner_protection,
-    save_access_configuration,
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLineEdit,
+    QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from app.gui.services.access import (
+    AccessConfiguration, AccessConfigurationError, UserAccessProfile,
+    create_owner_protection, load_access_configuration, save_access_configuration,
+)
+from app.gui.theme import button, label
+from app.gui.workflow_registry import get_workflows
+from shared.mines_paths import MinesPathError
 
-class AccessManagementPage(ttk.Frame):
+
+class ProfileDialog(QDialog):
+    """Keep every editable profile field in one form, with an explicit save."""
+
+    def __init__(self, parent, configuration: AccessConfiguration, profile=None) -> None:
+        super().__init__(parent)
+        self.configuration = configuration
+        self.profile = profile
+        self.result_profile = None
+        self.setWindowTitle("Edit staff access" if profile else "Add staff access")
+        self.setMinimumWidth(460)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+        layout.addWidget(label(self.windowTitle(), "section"))
+        layout.addWidget(label("The view controls available workflows. Job title is descriptive.", "muted"))
+        form = QFormLayout()
+        form.setSpacing(12)
+        self.login = QLineEdit(profile.login if profile else "")
+        self.login.setReadOnly(profile is not None)
+        self.name = QLineEdit(profile.display_name if profile else "")
+        self.title = QLineEdit(profile.job_title if profile else "")
+        self.view = QComboBox()
+        for view in sorted(configuration.workflows_by_view):
+            self.view.addItem(view.title(), view)
+        if profile:
+            self.view.setCurrentIndex(self.view.findData(profile.view))
+        else:
+            self.view.setCurrentIndex(-1)
+            self.view.setPlaceholderText("Choose a view")
+        for caption, control in (
+            ("Windows login", self.login), ("Display name", self.name),
+            ("Job title", self.title), ("View", self.view),
+        ):
+            form.addRow(caption, control)
+            control.setAccessibleName(caption)
+        layout.addLayout(form)
+        self.error = label("", "error")
+        layout.addWidget(self.error)
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        controls.accepted.connect(self._validate)
+        controls.rejected.connect(self.reject)
+        layout.addWidget(controls)
+
+    def _validate(self) -> None:
+        login, name, title = (widget.text().strip() for widget in (self.login, self.name, self.title))
+        view = self.view.currentData()
+        if not all((login, name, title, view)):
+            self.error.setText("Complete every field and choose a view.")
+            return
+        if self.profile is None and login.casefold() in self.configuration.users:
+            self.error.setText("This login already exists. Edit or restore its existing profile.")
+            return
+        if any(len(text) > 150 or "\n" in text or "\r" in text for text in (login, name, title)):
+            self.error.setText("Use a single line of no more than 150 characters per field.")
+            return
+        self.result_profile = UserAccessProfile(
+            login, name, title, view, self.profile.active if self.profile else True
+        )
+        self.accept()
+
+
+class AccessManagementPage(QWidget):
     def __init__(
-        self,
-        parent,
-        *,
-        configuration: AccessConfiguration,
-        config_path,
-        current_login: str,
-        go_home: Callable[[], None],
+        self, parent, *, configuration: AccessConfiguration, config_path: Path,
+        current_login: str, go_home: Callable[[], None],
         policy_saved: Callable[[AccessConfiguration], None],
     ) -> None:
-        super().__init__(parent, style="App.TFrame", padding=(36, 28))
+        super().__init__(parent)
+        self.setObjectName("page")
         self.configuration = configuration
         self.config_path = config_path
         self.current_login = current_login
-        self.go_home = go_home
         self.policy_saved = policy_saved
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
-
-        ttk.Label(self, text="Manage staff access", style="PageTitle.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        ttk.Label(
-            self,
-            text=(
-                "Assign each Windows login to a view. Job titles are descriptive "
-                "and never grant access. Revoked users remain in the history but cannot sign in."
-            ),
-            style="Body.TLabel",
-            wraplength=780,
-            justify="left",
-        ).grid(row=1, column=0, sticky="w", pady=(4, 18))
-
-        toolbar = ttk.Frame(self, style="App.TFrame")
-        toolbar.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        ttk.Button(toolbar, text="Add user", style="Primary.TButton", command=self._add).pack(side="left")
-        ttk.Button(toolbar, text="Edit selected", command=self._edit).pack(side="left", padx=(8, 0))
-        ttk.Button(toolbar, text="Revoke / restore", command=self._toggle_active).pack(side="left", padx=(8, 0))
-        ttk.Button(toolbar, text="View permissions", command=self._edit_view).pack(side="left", padx=(8, 0))
-        ttk.Button(toolbar, text="Owner password", command=self._set_owner_password).pack(side="left", padx=(8, 0))
-
-        columns = ("login", "name", "title", "view", "status", "owner")
-        self.table = ttk.Treeview(self, columns=columns, show="headings", selectmode="browse")
-        headings = {
-            "login": "Windows login", "name": "Name", "title": "Job title",
-            "view": "View", "status": "Status", "owner": "Owner",
-        }
-        widths = {"login": 120, "name": 130, "title": 170, "view": 110, "status": 80, "owner": 60}
-        for column in columns:
-            self.table.heading(column, text=headings[column])
-            self.table.column(column, width=widths[column], minwidth=55)
-        self.table.grid(row=3, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.table.yview)
-        scrollbar.grid(row=3, column=1, sticky="ns")
-        self.table.configure(yscrollcommand=scrollbar.set)
-        self.table.bind("<Double-1>", lambda _event: self._edit())
-
-        footer = ttk.Frame(self, style="App.TFrame")
-        footer.grid(row=4, column=0, sticky="ew", pady=(16, 0))
-        ttk.Button(footer, text="Back", command=go_home).pack(side="left")
-        self.status = ttk.Label(footer, text="", style="Muted.TLabel")
-        self.status.pack(side="right")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(36, 30, 36, 30)
+        layout.setSpacing(16)
+        layout.addWidget(label("ADMINISTRATION", "eyebrow"))
+        layout.addWidget(label("Staff access", "title"))
+        layout.addWidget(label(
+            "Give each person a focused workspace. Revoking access keeps their profile for future restoration.",
+            "muted",
+        ))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Find a person, login, or job title…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setAccessibleName("Search staff")
+        self.search.textChanged.connect(self._filter)
+        layout.addWidget(self.search)
+        toolbar = QHBoxLayout()
+        self.add_button = button("Add user", self._add, "primary")
+        self.edit_button = button("Edit profile", self._edit)
+        self.toggle_button = button("Revoke / restore", self._toggle_active)
+        for control in (self.add_button, self.edit_button, self.toggle_button):
+            toolbar.addWidget(control)
+        toolbar.addStretch()
+        toolbar.addWidget(button("Reload", self._reload))
+        layout.addLayout(toolbar)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(("Name", "Windows login", "Job title", "View", "Status", "Owner"))
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(48)
+        self.table.horizontalHeader().setMinimumSectionSize(65)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for column, width in enumerate((115, 125, 150, 110, 80, 90)):
+            self.table.setColumnWidth(column, width)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setAccessibleName("Staff profiles")
+        self.table.itemDoubleClicked.connect(lambda _: self._edit())
+        self.table.itemSelectionChanged.connect(self._selection_changed)
+        layout.addWidget(self.table, 1)
+        actions = QHBoxLayout()
+        self.permissions_button = button("View permissions", self._edit_view)
+        self.owner_button = button("Owner password", self._set_owner_password)
+        actions.addWidget(self.permissions_button)
+        actions.addWidget(self.owner_button)
+        actions.addStretch()
+        layout.addLayout(actions)
+        self.status = label("", "muted")
+        layout.addWidget(self.status)
         self._refresh()
 
+    @property
+    def owner_key(self) -> str:
+        return (self.configuration.owner_login or "").casefold()
+
     def _refresh(self) -> None:
-        selected = self.table.selection()
-        selected_key = selected[0] if selected else None
-        self.table.delete(*self.table.get_children())
-        owner_key = self.configuration.owner_login.casefold() if self.configuration.owner_login else None
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
         for key, profile in sorted(self.configuration.users.items()):
-            self.table.insert(
-                "", "end", iid=key,
-                values=(
-                    profile.login, profile.display_name, profile.job_title,
-                    profile.view.title(), "Active" if profile.active else "Revoked",
-                    "Yes" if key == owner_key else "",
-                ),
-            )
-        if selected_key in self.configuration.users:
-            self.table.selection_set(selected_key)
-        self.status.configure(
-            text=(
-                f"Last updated by {self.configuration.updated_by}"
-                if self.configuration.updated_by else "Owner password not established yet"
-            )
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            values = (profile.display_name, profile.login, profile.job_title,
+                      profile.view.title(), "Active" if profile.active else "Revoked",
+                      "Protected" if key == self.owner_key else "")
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                self.table.setItem(row, column, item)
+        self.table.setSortingEnabled(True)
+        self._filter(self.search.text())
+        active_admin = self.configuration.is_administrator(self.current_login)
+        self.add_button.setEnabled(active_admin)
+        self.permissions_button.setEnabled(active_admin)
+        self.owner_button.setEnabled(active_admin and self.current_login.casefold() == self.owner_key)
+        self._selection_changed()
+        message = (
+            "Owner password is set." if self.configuration.owner_protection
+            else "The owner should set a password before changing their protected profile."
         )
+        if self.configuration.updated_by:
+            message += f"  Last saved by {self.configuration.updated_by}."
+        self.status.setText(message)
+
+    def _filter(self, query: str) -> None:
+        query = query.strip().casefold()
+        for row in range(self.table.rowCount()):
+            text = " ".join(self.table.item(row, col).text() for col in range(6)).casefold()
+            self.table.setRowHidden(row, query not in text)
+        self._selection_changed()
 
     def _selected(self) -> tuple[str, UserAccessProfile] | None:
-        selected = self.table.selection()
-        if not selected:
-            messagebox.showinfo("Select a user", "Select a staff profile first.", parent=self)
+        row = self.table.currentRow()
+        if row < 0 or self.table.isRowHidden(row):
             return None
-        key = selected[0]
+        key = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         return key, self.configuration.users[key]
 
-    def _profile_dialog(self, title: str, profile: UserAccessProfile | None = None) -> UserAccessProfile | None:
-        login = profile.login if profile else simpledialog.askstring(
-            title, "Windows login (M number or account name):", parent=self
-        )
-        if login is None:
-            return None
-        display_name = simpledialog.askstring(
-            title, "Display name:", initialvalue=profile.display_name if profile else "", parent=self
-        )
-        if display_name is None:
-            return None
-        job_title = simpledialog.askstring(
-            title, "Job title:", initialvalue=profile.job_title if profile else "", parent=self
-        )
-        if job_title is None:
-            return None
-        available = ", ".join(sorted(self.configuration.workflows_by_view))
-        view = simpledialog.askstring(
-            title, f"View ({available}):", initialvalue=profile.view if profile else "", parent=self
-        )
-        if view is None:
-            return None
-        login, display_name, job_title, view = (
-            login.strip(), display_name.strip(), job_title.strip(), view.strip().casefold()
-        )
-        if not all((login, display_name, job_title)) or view not in self.configuration.workflows_by_view:
-            messagebox.showerror("Invalid profile", "Complete every field and choose a listed view.", parent=self)
-            return None
-        return UserAccessProfile(login, display_name, job_title, view, profile.active if profile else True)
+    def _selection_changed(self) -> None:
+        selected = self._selected()
+        enabled = selected is not None and self.configuration.is_administrator(self.current_login)
+        self.edit_button.setEnabled(enabled)
+        self.toggle_button.setEnabled(enabled)
+        self.toggle_button.setText("Revoke access" if selected and selected[1].active else "Restore access")
 
     def _save(self, updated: AccessConfiguration, *, owner_password: str | None = None) -> bool:
         try:
             saved = save_access_configuration(
-                self.config_path, updated, actor_login=self.current_login,
-                owner_password=owner_password,
+                self.config_path, updated, actor_login=self.current_login, owner_password=owner_password
             )
-        except AccessConfigurationError as error:
-            messagebox.showerror("Access was not changed", str(error), parent=self)
+        except (AccessConfigurationError, OSError, MinesPathError) as error:
+            QMessageBox.warning(self, "Access was not changed", str(error))
             return False
         self.configuration = saved
         self.policy_saved(saved)
         self._refresh()
+        self.status.setText("Changes saved. " + self.status.text())
         return True
 
+    def _reload(self) -> None:
+        try:
+            configuration = load_access_configuration(self.config_path)
+        except AccessConfigurationError as error:
+            QMessageBox.warning(self, "Could not reload access", str(error))
+            return
+        self.configuration = configuration
+        self.policy_saved(configuration)
+        self._refresh()
+
     def _add(self) -> None:
-        profile = self._profile_dialog("Add staff access")
-        if profile is None:
+        dialog = ProfileDialog(self, self.configuration)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        key = profile.login.casefold()
-        if key in self.configuration.users:
-            messagebox.showerror("Login already exists", "Edit the existing profile instead.", parent=self)
-            return
+        profile = dialog.result_profile
         users = dict(self.configuration.users)
-        users[key] = profile
+        users[profile.login.casefold()] = profile
         self._save(replace(self.configuration, users=users))
 
     def _edit(self) -> None:
@@ -173,117 +240,138 @@ class AccessManagementPage(ttk.Frame):
         if selected is None:
             return
         key, current = selected
-        profile = self._profile_dialog("Edit staff access", current)
-        if profile is None:
+        dialog = ProfileDialog(self, self.configuration, current)
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_profile == current:
             return
         password = self._owner_password_if_needed(key)
         if password is False:
             return
         users = dict(self.configuration.users)
-        users[key] = profile
-        self._save(replace(self.configuration, users=users), owner_password=password or None)
+        users[key] = dialog.result_profile
+        self._save(replace(self.configuration, users=users), owner_password=password)
 
     def _toggle_active(self) -> None:
         selected = self._selected()
         if selected is None:
             return
-        key, current = selected
-        action = "restore" if not current.active else "revoke"
-        if not messagebox.askyesno(
-            f"{action.title()} access", f"{action.title()} GUI access for {current.display_name}?", parent=self
-        ):
+        key, profile = selected
+        action = "Revoke" if profile.active else "Restore"
+        if QMessageBox.question(
+            self, f"{action} access", f"{action} GUI access for {profile.display_name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
             return
         password = self._owner_password_if_needed(key)
         if password is False:
             return
         users = dict(self.configuration.users)
-        users[key] = replace(current, active=not current.active)
-        self._save(replace(self.configuration, users=users), owner_password=password or None)
+        users[key] = replace(profile, active=not profile.active)
+        self._save(replace(self.configuration, users=users), owner_password=password)
 
     def _owner_password_if_needed(self, key: str) -> str | bool | None:
-        owner_key = self.configuration.owner_login.casefold() if self.configuration.owner_login else None
-        if key != owner_key:
+        if key != self.owner_key:
             return None
         if self.configuration.owner_protection is None:
-            messagebox.showerror(
-                "Set owner password first",
-                "Use Owner password before changing the protected owner profile.",
-                parent=self,
-            )
+            QMessageBox.information(self, "Set owner password first",
+                                    "Use Owner password before changing the protected owner profile.")
             return False
-        value = simpledialog.askstring("Protected owner", "Owner password:", show="*", parent=self)
-        return value if value is not None else False
+        value, accepted = QInputDialog.getText(
+            self, "Protected owner", "Owner password:", QLineEdit.EchoMode.Password
+        )
+        return value if accepted else False
 
     def _set_owner_password(self) -> None:
-        owner_key = self.configuration.owner_login.casefold() if self.configuration.owner_login else None
-        if self.current_login.casefold() != owner_key:
-            messagebox.showerror("Owner only", "Only the protected owner can change this password.", parent=self)
+        if self.current_login.casefold() != self.owner_key:
             return
-        current_password = None
-        if self.configuration.owner_protection is not None:
-            current_password = simpledialog.askstring(
-                "Change owner password", "Current owner password:", show="*", parent=self
-            )
-            if current_password is None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Owner password")
+        dialog.setMinimumWidth(460)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label("Protect your owner profile", "section"))
+        layout.addWidget(label("Use a unique password of at least 12 characters.", "muted"))
+        fields = QFormLayout()
+        current, first, second = QLineEdit(), QLineEdit(), QLineEdit()
+        for widget in (current, first, second):
+            widget.setEchoMode(QLineEdit.EchoMode.Password)
+        if self.configuration.owner_protection:
+            fields.addRow("Current password", current)
+        fields.addRow("New password", first)
+        fields.addRow("Confirm password", second)
+        layout.addLayout(fields)
+        error_label = label("", "error")
+        layout.addWidget(error_label)
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(controls)
+        controls.rejected.connect(dialog.reject)
+
+        def save() -> None:
+            if first.text() != second.text():
+                error_label.setText("Passwords do not match.")
                 return
-        first = simpledialog.askstring("Owner password", "New password (12+ characters):", show="*", parent=self)
-        if first is None:
-            return
-        second = simpledialog.askstring("Owner password", "Confirm new password:", show="*", parent=self)
-        if second is None:
-            return
-        if first != second:
-            messagebox.showerror("Passwords do not match", "The owner password was not changed.", parent=self)
-            return
-        try:
-            protection = create_owner_protection(first)
-        except AccessConfigurationError as error:
-            messagebox.showerror("Invalid password", str(error), parent=self)
-            return
-        if self._save(
-            replace(self.configuration, owner_protection=protection),
-            owner_password=current_password,
-        ):
-            messagebox.showinfo("Owner protected", "The owner password verifier was saved.", parent=self)
+            try:
+                protection = create_owner_protection(first.text())
+            except AccessConfigurationError as error:
+                error_label.setText(str(error))
+                return
+            if self._save(replace(self.configuration, owner_protection=protection),
+                          owner_password=current.text() if self.configuration.owner_protection else None):
+                dialog.accept()
+
+        controls.accepted.connect(save)
+        dialog.exec()
 
     def _edit_view(self) -> None:
-        view = simpledialog.askstring(
-            "View permissions",
-            "View to edit (analyst or cashier):",
-            parent=self,
-        )
-        if view is None:
-            return
-        view = view.strip().casefold()
-        if view == "administrator":
-            messagebox.showinfo("Administrator view", "Administrators always see every registered workflow.", parent=self)
-            return
-        if view not in self.configuration.workflows_by_view:
-            messagebox.showerror("Unknown view", "Choose an existing non-administrator view.", parent=self)
-            return
-        from app.gui.workflow_registry import get_workflows
-
-        window = tk.Toplevel(self)
-        window.title(f"{view.title()} permissions")
-        window.transient(self.winfo_toplevel())
-        window.grab_set()
-        body = ttk.Frame(window, style="App.TFrame", padding=24)
-        body.pack(fill="both", expand=True)
-        ttk.Label(body, text=f"{view.title()} workflows", style="PageTitle.TLabel").pack(anchor="w")
-        selected = self.configuration.workflows_by_view[view]
-        variables: dict[str, tk.BooleanVar] = {}
+        dialog = QDialog(self)
+        dialog.setWindowTitle("View permissions")
+        dialog.resize(560, 440)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label("Choose visible workflows", "section"))
+        layout.addWidget(label("Changes apply to every person assigned to this view.", "muted"))
+        view = QComboBox()
+        for key in sorted(self.configuration.workflows_by_view):
+            if key != "administrator":
+                view.addItem(key.title(), key)
+        view.setAccessibleName("View to configure")
+        layout.addWidget(view)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        checks_layout = QVBoxLayout(body)
+        checks = {}
         for workflow in get_workflows():
-            variable = tk.BooleanVar(value=workflow.workflow_id in selected)
-            variables[workflow.workflow_id] = variable
-            ttk.Checkbutton(body, text=workflow.name, variable=variable).pack(anchor="w", pady=(8, 0))
+            check = QCheckBox(workflow.name)
+            check.setToolTip(workflow.description)
+            checks[workflow.workflow_id] = check
+            checks_layout.addWidget(check)
+        checks_layout.addStretch()
+        scroll.setWidget(body)
+        layout.addWidget(scroll)
+        pending = dict(self.configuration.workflows_by_view)
+        selected_view = [None]
 
-        def save_view() -> None:
-            views = dict(self.configuration.workflows_by_view)
-            views[view] = frozenset(key for key, value in variables.items() if value.get())
-            if self._save(replace(self.configuration, workflows_by_view=views)):
-                window.destroy()
+        def remember() -> None:
+            if selected_view[0] is not None:
+                pending[selected_view[0]] = frozenset(key for key, check in checks.items() if check.isChecked())
 
-        buttons = ttk.Frame(body, style="App.TFrame")
-        buttons.pack(fill="x", pady=(20, 0))
-        ttk.Button(buttons, text="Save", style="Primary.TButton", command=save_view).pack(side="left")
-        ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left", padx=(8, 0))
+        def load_view() -> None:
+            remember()
+            selected_view[0] = view.currentData()
+            allowed = pending.get(selected_view[0], frozenset())
+            for key, check in checks.items():
+                check.setChecked("*" in allowed or key in allowed)
+
+        view.currentIndexChanged.connect(load_view)
+        load_view()
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        controls.button(QDialogButtonBox.StandardButton.Save).setEnabled(view.count() > 0)
+        controls.rejected.connect(dialog.reject)
+
+        def save() -> None:
+            remember()
+            if self._save(replace(self.configuration, workflows_by_view=pending)):
+                dialog.accept()
+
+        controls.accepted.connect(save)
+        layout.addWidget(controls)
+        dialog.exec()

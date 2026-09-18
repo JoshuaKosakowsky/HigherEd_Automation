@@ -22,15 +22,13 @@ class SetupPowerShellContractTests(unittest.TestCase):
             'Write-Host "Required Python packages are available."',
             self.setup,
         )
-        self.assertIn("import tkinter", self.setup)
-        self.assertIn("root = TkinterDnD.Tk()", self.setup)
+        self.assertIn("from PySide6.QtWidgets import QApplication, QWidget", self.setup)
+        self.assertIn("window = QWidget()", self.setup)
 
-    def test_setup_configures_tk_runtime_before_gui_verification(self) -> None:
-        runtime_setup = self.setup.index("Set-GuiTkRuntimeEnvironment")
-        tkinter_window = self.setup.index("root = TkinterDnD.Tk()")
-
-        self.assertLess(runtime_setup, tkinter_window)
-        self.assertIn('"powershell\\gui\\tk_runtime.ps1"', self.setup)
+    def test_setup_creates_qt_window_and_processes_events(self) -> None:
+        self.assertLess(self.setup.index("window.show()"), self.setup.index("app.processEvents()"))
+        self.assertIn("window.close()", self.setup)
+        self.assertNotIn("Set-GuiTkRuntimeEnvironment", self.setup)
 
     def test_setup_installs_shortcuts_before_reporting_completion(self) -> None:
         shortcut_step = self.setup.index(

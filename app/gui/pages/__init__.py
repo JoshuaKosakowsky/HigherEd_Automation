@@ -1,1 +1,1 @@
-"""Tkinter pages for the desktop application."""
+"""Qt Widgets pages for the desktop application."""

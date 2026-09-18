@@ -30,7 +30,7 @@ def friendly_error_message(error: Exception) -> str:
 
 
 class WorkflowExecutor:
-    """Run one workflow at a time without touching Tkinter from a worker."""
+    """Run one workflow at a time without touching UI widgets from a worker."""
 
     def __init__(self, logger: logging.Logger, log_path: Path) -> None:
         self._logger = logger

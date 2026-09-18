@@ -45,10 +45,9 @@ shortcut. Your user details are stored only under your Windows account and can
 be changed by running setup again. Setup may take several minutes the first
 time.
 
-On Windows, setup and the GUI launcher automatically locate the Tcl/Tk runtime
-belonging to the base Python installation. The required paths apply only to the
-launched process; setup does not permanently change user-level or machine-level
-environment variables.
+The desktop interface uses PySide6 (Qt). When updating from version 0.4,
+run setup again to install its new dependency. Setup verifies a real Qt window;
+the desktop launcher no longer depends on Tcl/Tk.
 
 Setup is successful when the terminal displays:
 

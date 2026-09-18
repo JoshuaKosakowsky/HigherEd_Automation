@@ -16,7 +16,6 @@ $GuiLauncher = Join-Path $ProjectRoot "launcher\run_gui.ps1"
 $GuiShortcutSetupScript = Join-Path `
     $ProjectRoot `
     "powershell\gui\install_desktop_shortcut.ps1"
-$TkRuntimeScript = Join-Path $ProjectRoot "powershell\gui\tk_runtime.ps1"
 $MinimumPythonVersion = [version]"3.11"
 $StepNumber = 0
 $StepCount = 8
@@ -261,12 +260,7 @@ Download or synchronize the complete HigherEd_Automation folder and try again.
         throw "The repository is incomplete because this file was not found: $GuiShortcutSetupScript"
     }
 
-    if (-not (Test-Path -LiteralPath $TkRuntimeScript -PathType Leaf)) {
-        throw "The repository is incomplete because this file was not found: $TkRuntimeScript"
-    }
-
     . $UserSettingsScript
-    . $TkRuntimeScript
 
     Set-Location $ProjectRoot
 
@@ -336,9 +330,6 @@ then run .\setup.ps1 again.
 
     Write-SetupStep "Verifying the installation"
 
-    $tkRuntime = Set-GuiTkRuntimeEnvironment `
-        -PythonExecutable $VenvPython
-
     $verificationCode = @"
 import dotenv
 import keyring
@@ -346,14 +337,15 @@ import numpy
 import openpyxl
 import pandas
 import requests
-import tkinter
-from tkinterdnd2 import TkinterDnD
+from PySide6.QtWidgets import QApplication, QWidget
 from playwright.sync_api import sync_playwright
 
-root = TkinterDnD.Tk()
-root.withdraw()
-root.update_idletasks()
-root.destroy()
+app = QApplication([])
+window = QWidget()
+window.show()
+app.processEvents()
+window.close()
+app.quit()
 "@
 
     Invoke-CheckedCommand `
@@ -362,8 +354,6 @@ root.destroy()
         -FailureMessage "One or more required Python packages could not be imported."
 
     Write-Host "Required Python packages are available." -ForegroundColor Green
-    Write-Host "Tcl library: $($tkRuntime.TclLibrary)"
-    Write-Host "Tk library: $($tkRuntime.TkLibrary)"
 
     Write-SetupStep "Installing Playwright browser support"
     Invoke-CheckedCommand `
