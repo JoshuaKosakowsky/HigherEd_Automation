@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from getpass import getpass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from shared.insights.auth import exchange_sso_jwt
-from shared.insights.client import InsightsClient
-from shared.insights.config import InsightsSettings
+from shared.insights.auth import InsightsAuthenticationError, exchange_sso_jwt
+from shared.insights.browser_auth import InsightsBrowserAuthenticationError
+from shared.insights.client import InsightsAPIError, InsightsClient
+from shared.insights.config import InsightsConfigurationError, InsightsSettings
+from shared.insights.session_cache import InsightsCredentialError
 from shared.insights.session_auth import (
+    InsightsSessionError,
     build_authenticated_client,
     clear_cached_session,
 )
@@ -48,16 +52,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate the configured Ellucian Insights connection."
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--discover-only",
         action="store_true",
         help="Show safe connection metadata without running the SQL file.",
     )
+    mode.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help="Run SELECT 1 only, without student data or an output file.",
+    )
     parser.add_argument(
         "--browser",
         choices=["edge", "chrome"],
-        default="edge",
-        help="Browser used for an interactive SSO login (default: edge).",
+        default="chrome" if sys.platform == "darwin" else "edge",
+        help="SSO browser (default: Chrome on macOS, Edge on Windows).",
     )
     parser.add_argument(
         "--fresh-login",
@@ -69,7 +79,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Prompt invisibly for a JWT instead of opening the SSO browser.",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--logout",
         action="store_true",
         help="Revoke and delete the cached session without running a query.",
@@ -97,7 +107,7 @@ def print_discovery(client: InsightsClient, settings: InsightsSettings) -> None:
     print(f"Accessible databases: {len(databases)}")
 
     if configured_database is None:
-        raise RuntimeError(
+        raise InsightsAPIError(
             "The configured database ID is not visible to the authenticated "
             "principal."
         )
@@ -145,6 +155,14 @@ def main() -> None:
     with client:
         print()
         print(f"Authentication: {authentication_method}")
+        if arguments.smoke_test:
+            dataframe = client.run_sql_file(
+                SQL_PATH.with_name("connection_check.sql")
+            )
+            if dataframe.shape != (1, 1) or dataframe.iloc[0, 0] != 1:
+                raise InsightsAPIError("The SELECT 1 check returned an unexpected result.")
+            print(f"{settings.environment}: SELECT 1 succeeded; no student data queried or saved.")
+            return
         print_discovery(client, settings)
 
         if arguments.discover_only:
@@ -170,4 +188,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (
+        InsightsAuthenticationError, InsightsBrowserAuthenticationError,
+        InsightsConfigurationError, InsightsCredentialError,
+        InsightsSessionError, InsightsAPIError,
+    ) as error:
+        print(f"Insights: {error}", file=sys.stderr)
+        raise SystemExit(1) from None

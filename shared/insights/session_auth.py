@@ -26,16 +26,7 @@ def build_authenticated_client(
 ) -> tuple[InsightsClient, str]:
     """Build a client using an API key or a validated daily SSO session."""
 
-    session_cache = cache or DailyInsightsSessionCache(settings)
-
     if settings.api_key:
-        cached = session_cache.load()
-
-        if cached is not None:
-            if cached.base_url == settings.base_url:
-                _revoke_cached_session(settings, cached)
-            session_cache.delete()
-
         return (
             InsightsClient(
                 settings.base_url,
@@ -45,6 +36,7 @@ def build_authenticated_client(
             "API key",
         )
 
+    session_cache = cache or DailyInsightsSessionCache(settings)
     cached = session_cache.load()
 
     if cached and not cached.matches(settings):
@@ -169,10 +161,10 @@ def _revoke_cached_session(
     try:
         client.logout()
     except InsightsAPIError as error:
-        if error.status_code != 401:
+        if error.status_code not in {401, 404}:
             raise InsightsSessionError(
                 "The cached Insights session could not be revoked. It was "
-                "not removed from Windows Credential Manager."
+                "not removed from the OS credential vault."
             ) from error
     finally:
         client.close()

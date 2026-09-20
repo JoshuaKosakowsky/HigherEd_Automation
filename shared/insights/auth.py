@@ -31,13 +31,14 @@ def exchange_sso_jwt(
             },
             json={"jwt": jwt_token},
             timeout=timeout,
+            allow_redirects=False,
         )
     except RequestException as error:
         raise InsightsAuthenticationError(
             "Could not connect to the Insights authentication endpoint."
-        ) from error
+        ) from None
 
-    if not response.ok:
+    if not 200 <= response.status_code < 300:
         raise InsightsAuthenticationError(
             "Insights rejected the temporary SSO authentication "
             f"(HTTP {response.status_code})."
@@ -48,7 +49,7 @@ def exchange_sso_jwt(
     except JSONDecodeError as error:
         raise InsightsAuthenticationError(
             "Insights returned a non-JSON authentication response."
-        ) from error
+        ) from None
 
     if not isinstance(result, dict):
         raise InsightsAuthenticationError(

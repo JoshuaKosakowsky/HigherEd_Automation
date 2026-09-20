@@ -18,6 +18,7 @@ class InsightsSettings:
     base_url: str
     database_id: int
     api_key: str | None = field(default=None, repr=False)
+    sso_start_url: str | None = None
 
     @classmethod
     def from_environment(
@@ -64,12 +65,34 @@ class InsightsSettings:
             )
 
         api_key = values.get(f"{prefix}_API_KEY", "").strip() or None
+        sso_start_url = values.get(f"{prefix}_SSO_START_URL", "").strip() or None
+        if sso_start_url:
+            try:
+                start = urlsplit(sso_start_url)
+                valid_start = (
+                    start.scheme == "https"
+                    and bool(start.hostname)
+                    and not start.username
+                    and not start.password
+                    and not start.query
+                    and not start.fragment
+                    and (start.port is None or 1 <= start.port <= 65535)
+                )
+            except ValueError:
+                valid_start = False
+            if not valid_start:
+                raise InsightsConfigurationError(
+                    f"{prefix}_SSO_START_URL must be an HTTPS starting page "
+                    "without credentials, a query string, or a fragment. "
+                    "Do not configure a token-bearing SSO redirect URL."
+                )
 
         return cls(
             environment=environment,
             base_url=base_url,
             database_id=database_id,
             api_key=api_key,
+            sso_start_url=sso_start_url,
         )
 
 

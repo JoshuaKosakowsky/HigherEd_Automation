@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import requests
@@ -15,16 +15,18 @@ from shared.insights.auth import (
     exchange_sso_jwt,
 )
 from shared.insights.client import InsightsAPIError, InsightsClient
-from shared.insights.browser_auth import _extract_sso_jwt
+from shared.insights.browser_auth import _extract_sso_jwt, capture_sso_jwt
 from shared.insights.config import (
     InsightsConfigurationError,
     InsightsSettings,
 )
-from shared.insights.session_auth import build_authenticated_client
+from shared.insights.session_auth import build_authenticated_client, clear_cached_session
 from shared.insights.session_cache import (
     CREDENTIAL_USERNAME,
     CachedInsightsSession,
     DailyInsightsSessionCache,
+    InsightsCredentialError,
+    SystemCredentialStore,
 )
 
 
@@ -90,6 +92,33 @@ class FakeInsightsClient:
 
 
 class InsightsSettingsTests(unittest.TestCase):
+    def test_portal_start_url_is_environment_specific_and_optional(self) -> None:
+        values = {
+            "INSIGHTS_ENV": "TEST",
+            "INSIGHTS_TEST_BASE_URL": "https://test.example.edu",
+            "INSIGHTS_TEST_DATABASE_ID": "2",
+            "INSIGHTS_TEST_SSO_START_URL": "https://portal.example.edu/app/UserHome",
+            "INSIGHTS_PROD_SSO_START_URL": "https://prod-portal.example.edu",
+        }
+        settings = InsightsSettings.from_environment(values)
+        self.assertEqual(settings.sso_start_url, values["INSIGHTS_TEST_SSO_START_URL"])
+        self.assertEqual(settings.base_url, values["INSIGHTS_TEST_BASE_URL"])
+        del values["INSIGHTS_TEST_SSO_START_URL"]
+        self.assertIsNone(InsightsSettings.from_environment(values).sso_start_url)
+
+    def test_portal_start_rejects_credentials_and_redirect_parameters(self) -> None:
+        for url in (
+            "http://portal.example.edu", "https://user:secret@portal.example.edu",
+            "https://portal.example.edu?jwt=synthetic", "https://portal.example.edu#secret",
+            "https:///missing-host", "https://portal.example.edu:invalid",
+        ):
+            with self.subTest(url=url), self.assertRaises(InsightsConfigurationError):
+                InsightsSettings.from_environment({
+                    "INSIGHTS_TEST_BASE_URL": "https://test.example.edu",
+                    "INSIGHTS_TEST_DATABASE_ID": "2",
+                    "INSIGHTS_TEST_SSO_START_URL": url,
+                })
+
     def test_loads_only_the_explicitly_selected_environment(self) -> None:
         settings = InsightsSettings.from_environment(
             {
@@ -130,6 +159,12 @@ class InsightsSettingsTests(unittest.TestCase):
 
 
 class InsightsAuthenticationTests(unittest.TestCase):
+    def test_exchange_rejects_redirect_without_following_it(self) -> None:
+        with patch("shared.insights.auth.requests.post", return_value=make_response(302, {})) as post:
+            with self.assertRaises(InsightsAuthenticationError):
+                exchange_sso_jwt("https://test.example.edu", "synthetic-token")
+        self.assertFalse(post.call_args.kwargs["allow_redirects"])
+
     def test_authentication_error_does_not_include_response_body(self) -> None:
         response = make_response(
             401,
@@ -147,6 +182,59 @@ class InsightsAuthenticationTests(unittest.TestCase):
 
 
 class InsightsBrowserAuthenticationTests(unittest.TestCase):
+    def test_portal_entry_keeps_capture_scoped_to_insights(self) -> None:
+        # Fake the browser dependency: no live credentials or browser required.
+        browser = MagicMock()
+        context = browser.new_context.return_value
+        page = context.new_page.return_value
+        context.pages = [page]
+        playwright = MagicMock()
+        playwright.chromium.launch.return_value = browser
+        manager = MagicMock()
+        manager.__enter__.return_value = playwright
+        module = SimpleNamespace(
+            sync_playwright=lambda: manager, Error=RuntimeError, TimeoutError=TimeoutError,
+        )
+        def handoff(*args, **kwargs):
+            callback = context.on.call_args.args[1]
+            callback(SimpleNamespace(
+                url="https://portal.example.edu/auth/sso?jwt=wrong-token", method="GET",
+            ))
+            callback(SimpleNamespace(
+                url="https://test.example.edu/auth/sso?jwt=synthetic", method="GET",
+            ))
+        # Simulate the handoff from another tab after the starting page loads.
+        context.wait_for_event.side_effect = handoff
+        with (
+            patch.dict("sys.modules", {"playwright.sync_api": module}),
+            patch.dict("os.environ", {"DEBUG": "", "PWDEBUG": "", "SSLKEYLOGFILE": ""}),
+            patch("builtins.print"),
+        ):
+            token = capture_sso_jwt(
+                "https://test.example.edu", browser="chrome",
+                sso_start_url="https://portal.example.edu/app/UserHome",
+            )
+        self.assertEqual(token, "synthetic")
+        self.assertEqual(page.goto.call_args.args[0], "https://portal.example.edu/app/UserHome")
+        page.get_by_text.assert_not_called()
+        context.on.assert_called_once()
+        browser.close.assert_called_once()
+
+    def test_extracts_post_handoff_and_rejects_ambiguous_tokens(self) -> None:
+        base = "https://insights.example.edu"
+        self.assertEqual(_extract_sso_jwt(base + "/auth/sso", base, "jwt=synthetic"), "synthetic")
+        self.assertEqual(_extract_sso_jwt(base + "/auth/sso/to_session", base, '{"jwt":"synthetic"}'), "synthetic")
+        for url, body in [
+            (base + "/auth/sso?jwt=a&jwt=b", None),
+            (base + "/auth/sso?jwt=a", "jwt=b"),
+            (base + "/auth/sso", '{"jwt":123}'),
+            (base + ":8443/auth/sso?jwt=a", None),
+            ("http://insights.example.edu/auth/sso?jwt=a", None),
+            ("https://user@insights.example.edu/auth/sso?jwt=a", None),
+        ]:
+            with self.subTest(url=url):
+                self.assertIsNone(_extract_sso_jwt(url, base, body))
+
     def test_extracts_only_the_configured_sso_handoff(self) -> None:
         base_url = "https://insights.example.edu"
 
@@ -228,6 +316,45 @@ class InsightsSessionCacheTests(unittest.TestCase):
         self.cache.delete()
         self.assertIsNone(self.cache.load())
 
+    def test_deletion_failure_is_not_silently_ignored(self) -> None:
+        class DeleteError(Exception):
+            pass
+
+        keyring = SimpleNamespace(
+            delete_password=MagicMock(side_effect=DeleteError("private details")),
+            errors=SimpleNamespace(PasswordDeleteError=DeleteError, KeyringError=DeleteError),
+        )
+        with patch("shared.insights.session_cache._load_keyring", return_value=keyring):
+            with patch.object(SystemCredentialStore, "get_password", return_value="synthetic"):
+                with self.assertRaises(InsightsCredentialError) as error:
+                    SystemCredentialStore().delete_password("service", "user")
+        self.assertNotIn("private details", str(error.exception))
+
+
+class InsightsSmokeTestTests(unittest.TestCase):
+    def test_smoke_test_runs_only_connection_sql_and_never_exports(self) -> None:
+        from workflows.insights_api_test import run_insights_test as workflow
+
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.run_sql_file.return_value = pd.DataFrame([[1]], columns=["connection_ok"])
+        settings = InsightsSettings("TEST", "https://test.example.edu", 2, "synthetic")
+        with (
+            patch("sys.argv", ["insights", "--smoke-test"]),
+            patch.object(workflow, "load_dotenv"),
+            patch.object(workflow.InsightsSettings, "from_environment", return_value=settings),
+            patch.object(workflow, "build_authenticated_client", return_value=(client, "API key")),
+            patch.object(workflow, "print_discovery") as discovery,
+            patch.object(pd.DataFrame, "to_excel") as export,
+            patch("builtins.print"),
+        ):
+            workflow.main()
+        discovery.assert_not_called()
+        export.assert_not_called()
+        path = client.run_sql_file.call_args.args[0]
+        self.assertEqual(path.name, "connection_check.sql")
+        self.assertIn("SELECT 1 AS connection_ok", path.read_text())
+
 
 class InsightsSessionAuthenticationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -260,6 +387,34 @@ class InsightsSessionAuthenticationTests(unittest.TestCase):
         self.assertIsNotNone(cached)
         self.assertEqual(cached.principal_id, 1519)
         self.assertEqual(cached.session_token, "new-session-token")
+
+    def test_api_key_does_not_access_session_vault(self) -> None:
+        settings = InsightsSettings("TEST", "https://test.example.edu", 2, "synthetic-key")
+        with patch("shared.insights.session_auth.DailyInsightsSessionCache") as cache:
+            client, method = build_authenticated_client(settings)
+        cache.assert_not_called()
+        self.assertEqual(method, "API key")
+        client.close()
+
+    def test_logout_of_already_absent_session_deletes_cache(self) -> None:
+        self.cache.save(CachedInsightsSession.create(self.settings, "synthetic", 1519))
+        with patch("shared.insights.session_auth.InsightsClient", FakeInsightsClient):
+            with patch.object(FakeInsightsClient, "logout", side_effect=InsightsAPIError("Absent", status_code=404)):
+                self.assertTrue(clear_cached_session(self.settings, cache=self.cache))
+        self.assertIsNone(self.cache.load())
+
+    def test_unauthorized_cached_session_triggers_new_login(self) -> None:
+        self.cache.save(CachedInsightsSession.create(self.settings, "old-synthetic", 1519))
+        with patch("shared.insights.session_auth.InsightsClient", FakeInsightsClient):
+            with patch.object(FakeInsightsClient, "get_current_user", side_effect=[
+                InsightsAPIError("Expired", status_code=401), SimpleNamespace(id=1519),
+            ]):
+                client, method = build_authenticated_client(
+                    self.settings, cache=self.cache, acquire_session=lambda: "new-synthetic",
+                )
+        self.assertEqual(method, "new daily SSO session")
+        self.assertEqual(client.session_token, "new-synthetic")
+        self.assertTrue(FakeInsightsClient.created[0].closed)
 
     def test_reuses_a_valid_cached_session_without_new_login(self) -> None:
         self.cache.save(
@@ -356,6 +511,13 @@ class InsightsCleanupTaskContractTests(unittest.TestCase):
 
 
 class InsightsClientTests(unittest.TestCase):
+    def test_api_redirect_is_not_followed(self) -> None:
+        session = StubSession(make_response(307, {}))
+        client = InsightsClient("https://test.example.edu", 2, api_key="synthetic", http_session=session)
+        with self.assertRaises(InsightsAPIError):
+            client.get_current_user()
+        self.assertFalse(session.requests[0]["allow_redirects"])
+
     def test_runs_native_sql_and_returns_dataframe(self) -> None:
         session = StubSession(
             make_response(

@@ -125,17 +125,18 @@ class InsightsClient:
                 headers=self._headers(),
                 json=payload,
                 timeout=self.timeout,
+                allow_redirects=False,
             )
         except Timeout as error:
             raise InsightsAPIError(
                 f"The Insights request timed out: {method} {path}"
-            ) from error
+            ) from None
         except RequestException as error:
             raise InsightsAPIError(
                 f"Could not connect to the Insights API: {method} {path}"
-            ) from error
+            ) from None
 
-        if not response.ok:
+        if not 200 <= response.status_code < 300:
             # Do not include the response body: Metabase errors can echo native
             # SQL or database details.
             raise InsightsAPIError(
@@ -160,7 +161,7 @@ class InsightsClient:
         except JSONDecodeError as error:
             raise InsightsAPIError(
                 f"Insights returned non-JSON data for {method} {path}."
-            ) from error
+            ) from None
 
     def logout(self) -> None:
         """Revoke the current Metabase session token."""
@@ -205,8 +206,8 @@ class InsightsClient:
 
         if result.get("status") != "completed":
             raise InsightsAPIError(
-                "Insights did not complete the query.\n"
-                f"Query status: {result.get('status')!r}"
+                "Insights did not complete the query. Check the SQL in the "
+                "Insights editor; server error details are withheld."
             )
 
         data = result.get("data")

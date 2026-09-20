@@ -1,6 +1,6 @@
 # Insights API proof of concept
 
-This workflow validates read-only native SQL access to the Ellucian Insights
+This workflow tests native SQL access to the Ellucian Insights
 TEST or PROD environment. It uses the shared client under `shared/insights` so
 future workflows do not need to know whether authentication uses a permanent
 Metabase API key or a temporary SSO session.
@@ -11,24 +11,68 @@ Copy `.env.example` to `.env`. Keep `INSIGHTS_ENV=TEST` until PROD access has
 been separately approved and configured. Never commit `.env`, API keys, SSO
 JWTs, session values, cookies, or credential-bearing SSO URLs.
 
+For Mines portal-first sign-in, set:
+
+```dotenv
+INSIGHTS_TEST_SSO_START_URL=https://my.mines.edu/app/UserHome
+```
+
+In the opened browser, sign in to MyMines normally. Follow your usual route to
+Experience TEST (`https://experience-test.elluciancloud.com/comtemp`), then open
+Insights TEST. You can enter the Experience TEST URL in the same browser after
+signing in; new tabs opened there are also observed. Signing in through a
+different, already-open browser window does not authenticate this temporary
+context. The helper waits up to five minutes.
+
+The starting URL is separate from `INSIGHTS_TEST_BASE_URL`, which must remain
+the Insights API host, not MyMines or Experience. Capture still accepts a JWT
+only at that Insights host's SSO endpoint; it does not capture MyMines tokens.
+Use a stable starting URL without query strings, fragments, or credentials;
+do not save a URL copied from the middle of an SSO redirect. The optional
+`INSIGHTS_PROD_SSO_START_URL` is configured independently. Leaving either start
+URL blank preserves the direct Insights `/auth/login` behavior.
+
 If no API key is configured for the selected environment, the workflow reuses a
-validated same-day Metabase session from Windows Credential Manager. When no
-valid session exists, it opens a dedicated Edge profile and waits for the user
+validated same-day Metabase session from Windows Credential Manager (Windows)
+or Keychain (macOS). When no valid session exists, it opens a temporary browser
+context (Edge on Windows, Chrome on macOS) and waits for the user
 to complete the normal Ellucian SSO/2FA flow. The automation captures only the
-JWT handoff to the configured Insights origin, aborts that browser request, and
-exchanges the JWT in memory for a Metabase session. It does not enumerate or
+JWT handoff to the configured Insights origin and exchanges the JWT in memory
+for a Metabase session. The ordinary browser SSO request is not intercepted or
+blocked; capture observes request events, including redirect hops. Whether the
+tenant accepts that JWT for a subsequent session exchange must be tested live.
+It does not enumerate or
 export browser cookies, local storage, passwords, or browsing history.
 
-The dedicated browser profile is stored under the signed-in user's local
-application-data directory, outside this repository. Like any normal browser
-profile, it may retain SSO cookies so the identity provider can reduce repeated
-login prompts. Treat that profile as sensitive and never copy or synchronize
-it. The automation does not read those cookies; the browser uses them normally.
+The browser context is nonpersistent and closes after capture or failure. No
+browser state, HAR, trace, screenshot, or JWT is intentionally saved by this
+integration. This does not guarantee forensic erasure from OS memory or
+temporary storage. DEBUG, PWDEBUG, and SSLKEYLOGFILE must be unset to prevent
+diagnostic credential exposure. Earlier versions used a persistent profile;
+this implementation does not reuse or remove any such existing profile.
 
-Only the resulting Metabase session is placed in Windows Credential Manager.
+Only the resulting Metabase session is placed in the native OS credential vault.
+Windows credentials use local-machine persistence, not enterprise roaming.
+The code refuses other platform backends rather than falling back to plaintext.
 The cache includes the environment, database, principal ID, and expiration
 metadata, but never the SSO JWT. It is accepted only on the local calendar date
 when it was created and is validated with `/api/user/current` before reuse.
+
+Start with a non-sensitive connectivity check (no export):
+
+```powershell
+.\.venv\Scripts\python.exe -m workflows.insights_api_test.run_insights_test --smoke-test
+```
+
+On macOS, use your Python environment, for example:
+
+```sh
+python3 -m workflows.insights_api_test.run_insights_test --browser chrome --smoke-test
+```
+
+Install the repository's declared `playwright` and `keyring` dependencies in
+that environment and have Chrome installed. Complete password/MFA prompts
+yourself in the opened window. Never send tokens in chat or command arguments.
 
 From the repository root, inspect safe connection metadata without executing
 SQL:
@@ -62,7 +106,10 @@ Revoke the Metabase session and remove it from Credential Manager:
 ```
 
 Windows Credential Manager does not have native per-entry expiration. The
-client refuses and revokes an entry after its creation date changes. To also
+client builder refuses an expired entry and attempts revocation before a new
+login. This is checked when building a client, not on every request of a
+long-lived client. The vault entry itself does not automatically expire; the
+server can expire or revoke the session earlier. To also
 attempt cleanup automatically at the end of each day, install the current-user
 Scheduled Task once:
 
@@ -75,10 +122,26 @@ computer is asleep, it runs at the next available sign-in. This is best-effort:
 the server ultimately controls session lifetime, and an offline computer cannot
 contact Metabase to revoke a session.
 
+No scheduled cleanup is installed automatically, and the Windows task does not
+run on macOS. Use `--logout` when finished on the Mac. A failed revocation keeps
+the cache entry available for a later retry. When switching to an API key, run
+`--logout` explicitly to remove a previously cached session; API-key mode does
+not read or modify the session vault. No request follows HTTP redirects with
+API credentials.
+
 The workflow reports only the authentication method, principal ID,
 administrator status, version, accessible database count, configured database
 summary, row count, and output path. It does not print query rows or raw API
 error bodies.
+
+This is an interactive temporary bridge, not an unattended service account or
+a way around institutional controls. Each person must sign in using their own
+account and OS vault. Do not distribute your session to Jenny, Stanley, or a
+shared job. Existing UI access does not establish institutional approval for
+automation. The client accepts SQL; read-only enforcement must come from the
+server/database permissions, not the filename or Python code. A successful
+Insights query does not prove direct Banner API access or real-time warehouse
+freshness.
 
 ## Request for IT / Insights administrators
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Protocol
@@ -34,9 +35,9 @@ class SystemCredentialStore:
             return keyring.get_password(service, username)
         except keyring.errors.KeyringError as error:
             raise InsightsCredentialError(
-                "Windows Credential Manager could not read the cached "
+                "The OS credential vault could not read the cached "
                 "Insights session."
-            ) from error
+            ) from None
 
     def set_password(self, service: str, username: str, password: str) -> None:
         keyring = _load_keyring()
@@ -45,9 +46,9 @@ class SystemCredentialStore:
             keyring.set_password(service, username, password)
         except keyring.errors.KeyringError as error:
             raise InsightsCredentialError(
-                "Windows Credential Manager could not save the Insights "
+                "The OS credential vault could not save the Insights "
                 "session."
-            ) from error
+            ) from None
 
     def delete_password(self, service: str, username: str) -> None:
         keyring = _load_keyring()
@@ -55,12 +56,15 @@ class SystemCredentialStore:
         try:
             keyring.delete_password(service, username)
         except keyring.errors.PasswordDeleteError:
-            return
+            if self.get_password(service, username) is not None:
+                raise InsightsCredentialError(
+                    "The OS credential vault could not delete the session."
+                ) from None
         except keyring.errors.KeyringError as error:
             raise InsightsCredentialError(
-                "Windows Credential Manager could not delete the cached "
+                "The OS credential vault could not delete the cached "
                 "Insights session."
-            ) from error
+            ) from None
 
 
 @dataclass(frozen=True)
@@ -262,4 +266,23 @@ def _load_keyring() -> object:
             "environment. Run setup.ps1 before using session caching."
         ) from None
 
-    return keyring
+    # Do not use third-party/plaintext backends selected by user configuration.
+    if sys.platform == "darwin":
+        from keyring.backends.macOS import Keyring
+        backend = Keyring()
+    elif sys.platform == "win32":
+        from keyring.backends.Windows import WinVaultKeyring
+        backend = WinVaultKeyring()
+        backend.persist = "local machine"
+    else:
+        raise InsightsCredentialError(
+            "Session caching supports only macOS Keychain and Windows "
+            "Credential Manager."
+        )
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        get_password=backend.get_password,
+        set_password=backend.set_password,
+        delete_password=backend.delete_password,
+        errors=keyring.errors,
+    )

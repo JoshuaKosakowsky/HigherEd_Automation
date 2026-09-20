@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import json
 import os
-from pathlib import Path
 from time import monotonic
 from urllib.parse import parse_qs, urlsplit
 
@@ -30,6 +30,7 @@ def login_and_exchange_sso(
         settings.base_url,
         browser=browser,
         timeout_seconds=timeout_seconds,
+        sso_start_url=settings.sso_start_url,
     )
 
     try:
@@ -43,6 +44,7 @@ def capture_sso_jwt(
     *,
     browser: str = "edge",
     timeout_seconds: int = 300,
+    sso_start_url: str | None = None,
 ) -> str:
     browser = browser.strip().lower()
 
@@ -54,12 +56,17 @@ def capture_sso_jwt(
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
 
-    profile_dir = _insights_profile_dir(browser)
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    if any(os.environ.get(name) for name in ("DEBUG", "PWDEBUG", "SSLKEYLOGFILE")):
+        raise InsightsBrowserAuthenticationError(
+            "Disable DEBUG, PWDEBUG, and SSLKEYLOGFILE before SSO login; "
+            "debug output could expose credentials."
+        )
+
     captured: list[str] = []
 
     try:
         from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise InsightsBrowserAuthenticationError(
@@ -67,54 +74,79 @@ def capture_sso_jwt(
             "Run setup.ps1 before using browser SSO."
         ) from None
 
+    stage = "opening Chrome/Edge"
     try:
         with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
+            browser_instance = playwright.chromium.launch(
                 channel=channel,
                 headless=False,
+                args=["--window-position=40,40", "--window-size=1200,850"],
+                env={k: v for k, v in os.environ.items()
+                     if k not in {"DEBUG", "PWDEBUG", "SSLKEYLOGFILE"}},
+            )
+            context = browser_instance.new_context(
                 accept_downloads=False,
+                service_workers="block",
             )
 
-            def capture_route(route: object, request: object) -> None:
-                request_url = getattr(request, "url", "")
-                token = _extract_sso_jwt(request_url, base_url)
+            def capture_request(request) -> None:
+                # Request events include redirect hops that route handlers miss.
+                # Inspect a POST body only after its destination is verified.
+                if not _is_sso_destination(request.url, base_url):
+                    return
+                token = _extract_sso_jwt(
+                    request.url, base_url,
+                    request.post_data if request.method == "POST" else None,
+                )
 
                 if token and not captured:
                     captured.append(token)
-                    getattr(route, "abort")()
-                    return
+                    print("SSO handoff captured in memory.", flush=True)
 
-                getattr(route, "continue_")()
-
-            context.route("**/*", capture_route)
+            context.on("request", capture_request)
             page = context.new_page()
+            page.bring_to_front()
             deadline = monotonic() + timeout_seconds
-
-            page.goto(
-                f"{base_url.rstrip('/')}/auth/login",
-                wait_until="domcontentloaded",
-                timeout=min(timeout_seconds * 1000, 60_000),
-            )
-
-            sso_link = page.get_by_text("Sign in with SSO", exact=True)
-            sso_link.wait_for(state="visible", timeout=30_000)
-
             try:
-                sso_link.click(timeout=30_000)
-            except PlaywrightError:
-                if not captured:
-                    raise
-
-            while not captured and monotonic() < deadline:
-                page.wait_for_timeout(250)
-
-            context.close()
+                stage = "loading the configured sign-in starting page"
+                print("Opening the configured sign-in page. Complete sign-in "
+                      "and MFA, then open Insights in this same browser window.",
+                      flush=True)
+                page.goto(
+                    sso_start_url or f"{base_url.rstrip('/')}/auth/login",
+                    wait_until="domcontentloaded",
+                    timeout=min(timeout_seconds * 1000, 60_000),
+                )
+                stage = "waiting for interactive SSO sign-in"
+                print("Starting page loaded. Waiting for the Insights SSO handoff.", flush=True)
+                # Portal-first tenants need their normal application launch
+                # path; do not click a generic SSO control on the portal.
+                if not captured and not sso_start_url:
+                    try:
+                        page.get_by_text("Sign in with SSO", exact=True).click(
+                            timeout=10_000,
+                        )
+                    except PlaywrightTimeoutError:
+                        print("Use the browser to open Insights through your "
+                              "normal school SSO entry point. Waiting for sign-in...",
+                              flush=True)
+                while not captured and monotonic() < deadline:
+                    if not context.pages:
+                        break
+                    try:
+                        # Listen across tabs/popups even if the portal closes
+                        # its original tab while launching Insights.
+                        context.wait_for_event("request", timeout=250)
+                    except PlaywrightTimeoutError:
+                        pass
+            finally:
+                browser_instance.close()
     except PlaywrightError:
-        raise InsightsBrowserAuthenticationError(
-            "The Insights SSO browser handoff did not complete. No SSO JWT "
-            "was cached by the automation."
-        ) from None
+        if not captured:
+            raise InsightsBrowserAuthenticationError(
+                f"The browser stopped while {stage}. No SSO JWT "
+                "was cached by the automation."
+            ) from None
 
     if not captured:
         raise InsightsBrowserAuthenticationError(
@@ -124,32 +156,41 @@ def capture_sso_jwt(
     return captured[0]
 
 
-def _extract_sso_jwt(request_url: str, base_url: str) -> str | None:
-    request = urlsplit(request_url)
-    configured = urlsplit(base_url)
-
-    if (
-        request.scheme != configured.scheme
-        or request.netloc != configured.netloc
-        or request.path.rstrip("/") != "/auth/sso"
-    ):
+def _extract_sso_jwt(
+    request_url: str, base_url: str, post_data: str | None = None,
+) -> str | None:
+    if not _is_sso_destination(request_url, base_url):
         return None
-
-    values = parse_qs(request.query).get("jwt", [])
-
+    values = parse_qs(urlsplit(request_url).query).get("jwt", [])
+    if post_data:
+        try:
+            body = json.loads(post_data)
+        except ValueError:
+            body = None
+        if isinstance(body, dict) and "jwt" in body:
+            values.append(body["jwt"])
+        elif body is None:
+            values.extend(parse_qs(post_data).get("jwt", []))
     if len(values) != 1:
         return None
-
+    if not isinstance(values[0], str):
+        return None
     token = values[0].strip()
     return token or None
 
 
-def _insights_profile_dir(browser: str) -> Path:
-    local_app_data = os.getenv("LOCALAPPDATA", "").strip()
-
-    if local_app_data:
-        root = Path(local_app_data)
-    else:
-        root = Path.home() / ".highered_automation"
-
-    return root / "Playwright_Profiles" / f"Insights_{browser.title()}"
+def _is_sso_destination(request_url: str, base_url: str) -> bool:
+    try:
+        request = urlsplit(request_url)
+        configured = urlsplit(base_url)
+        return (
+            request.scheme == configured.scheme == "https"
+            and request.hostname == configured.hostname
+            and (request.port or 443) == (configured.port or 443)
+            and not request.username and not request.password
+            and request.path.rstrip("/") in {
+                "/auth/sso", "/auth/sso/to_session",
+            }
+        )
+    except ValueError:
+        return False
