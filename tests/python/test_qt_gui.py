@@ -18,13 +18,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl, QTimer
 from PySide6.QtGui import QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton
 
 from app.gui.main import AutomationApplication
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode, WorkflowResult
 from app.gui.pages.access_management import ProfileDialog
 from app.gui.pages.workflow_detail import WorkflowDetailPage
-from app.gui.services.access import load_access_configuration
+from app.gui.services.access import (
+    AccessConfigurationError, add_view, rename_view, remove_view, load_access_configuration,
+)
 from app.gui.services.drag_drop import FileInput
 from app.gui.services.execution import WorkflowExecutor
 from app.gui.services.parameters import parse_parameters
@@ -181,6 +183,87 @@ class QtGuiTests(unittest.TestCase):
         with patch.object(QMessageBox, "warning"):
             self.assertFalse(page._save(replace(page.configuration, users=users)))
         self.assertEqual(load_access_configuration(self.policy).users["owner"].job_title, "Manager")
+
+    def test_view_rules_preserve_assignments_and_reject_invalid_changes(self):
+        configuration = load_access_configuration(self.policy)
+        added = add_view(configuration, "  Accounting Manager  ")
+        self.assertEqual(added.workflows_by_view["accounting manager"], frozenset())
+        for name in ("", "  ", "ANALYST", "Administrator", "Bad\nName"):
+            with self.assertRaises(AccessConfigurationError):
+                add_view(configuration, name)
+        renamed = rename_view(configuration, "analyst", "AR Specialist")
+        self.assertEqual(renamed.users["staff"].view, "ar specialist")
+        self.assertEqual(renamed.users["staff"].job_title, "Analyst")
+        revoked_users = dict(configuration.users)
+        revoked_users["staff"] = replace(revoked_users["staff"], active=False)
+        with self.assertRaises(AccessConfigurationError):
+            remove_view(replace(configuration, users=revoked_users), "analyst")
+        for operation in (lambda: rename_view(configuration, "administrator", "Boss"),
+                          lambda: remove_view(configuration, "administrator"),
+                          lambda: rename_view(configuration, "analyst", "cashier")):
+            with self.assertRaises(AccessConfigurationError):
+                operation()
+        self.assertNotIn("accounting manager", remove_view(added, "accounting manager").workflows_by_view)
+
+    def test_admin_can_create_rename_and_remove_views_from_dialog(self):
+        # A second administrator can manage views without the owner's password.
+        self.payload["users"]["DELEGATE"] = {
+            "displayName": "Example Delegate", "jobTitle": "Bursar", "view": "administrator"
+        }
+        self.write_policy()
+        window = self.open_app("DELEGATE")
+        window.show_access_management()
+        page = window.current_page
+
+        def edit():
+            dialog = QApplication.activeModalWidget()
+            try:
+                buttons = {widget.text(): widget for widget in dialog.findChildren(QPushButton)}
+                combo = dialog.findChild(QComboBox)
+                with patch.object(QInputDialog, "getText", return_value=("Collections", True)):
+                    buttons["Add view"].click()
+                self.assertEqual(combo.currentData(), "collections")
+                self.assertTrue(all(not check.isChecked() for check in dialog.findChildren(QCheckBox)))
+                dialog.findChildren(QCheckBox)[0].setChecked(True)
+                combo.setCurrentIndex(combo.findData("analyst"))
+                with patch.object(QInputDialog, "getText", return_value=("AR Specialist", True)):
+                    buttons["Rename view"].click()
+                combo.setCurrentIndex(combo.findData("cashier"))
+                with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                    buttons["Remove view"].click()
+                dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Save).click()
+            finally:
+                dialog.reject()
+
+        QTimer.singleShot(0, edit)
+        page._edit_view()
+        saved = load_access_configuration(self.policy)
+        self.assertEqual(saved.workflows_by_view["collections"], frozenset({"population_testing"}))
+        self.assertEqual(saved.users["staff"].view, "ar specialist")
+        self.assertNotIn("analyst", saved.workflows_by_view)
+        self.assertNotIn("cashier", saved.workflows_by_view)
+        self.assertEqual(saved.workflows_by_view["administrator"], frozenset({"*"}))
+        profile = ProfileDialog(None, saved)
+        self.assertGreaterEqual(profile.view.findData("collections"), 0)
+        profile.close()
+
+    def test_cancel_view_changes_does_not_write_policy(self):
+        window = self.open_app()
+        window.show_access_management()
+        original = self.policy.read_bytes()
+
+        def edit():
+            dialog = QApplication.activeModalWidget()
+            try:
+                add = next(widget for widget in dialog.findChildren(QPushButton) if widget.text() == "Add view")
+                with patch.object(QInputDialog, "getText", return_value=("Temporary", True)):
+                    add.click()
+            finally:
+                dialog.reject()
+
+        QTimer.singleShot(0, edit)
+        window.current_page._edit_view()
+        self.assertEqual(self.policy.read_bytes(), original)
 
     def test_native_drop_with_spaces_accumulates_without_duplicates(self):
         source = self.root / "file with spaces.csv"

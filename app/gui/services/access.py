@@ -366,6 +366,56 @@ def save_access_configuration(
     return load_access_configuration(config_path)
 
 
+def add_view(configuration: AccessConfiguration, name: str) -> AccessConfiguration:
+    """Create an empty view; new views never inherit workflow permissions."""
+    key = _required_text(name, "view name").casefold()
+    if key in configuration.workflows_by_view:
+        raise AccessConfigurationError("A view with that name already exists.")
+    views = dict(configuration.workflows_by_view)
+    views[key] = frozenset()
+    return replace(configuration, workflows_by_view=views)
+
+
+def rename_view(
+    configuration: AccessConfiguration, name: str, new_name: str,
+) -> AccessConfiguration:
+    """Rename a view and preserve assignments, including revoked profiles."""
+    key = name.strip().casefold()
+    replacement = _required_text(new_name, "view name").casefold()
+    if key == ADMINISTRATOR_VIEW:
+        raise AccessConfigurationError("The Administrator view cannot be renamed.")
+    if key not in configuration.workflows_by_view:
+        raise AccessConfigurationError("The selected view no longer exists.")
+    if replacement == key:
+        return configuration
+    if replacement in configuration.workflows_by_view:
+        raise AccessConfigurationError("A view with that name already exists.")
+    views = dict(configuration.workflows_by_view)
+    views[replacement] = views.pop(key)
+    users = {
+        login: replace(profile, view=replacement) if profile.view == key else profile
+        for login, profile in configuration.users.items()
+    }
+    return replace(configuration, workflows_by_view=views, users=users)
+
+
+def remove_view(configuration: AccessConfiguration, name: str) -> AccessConfiguration:
+    """Only remove unused views so existing staff never lose their assignment."""
+    key = name.strip().casefold()
+    if key == ADMINISTRATOR_VIEW:
+        raise AccessConfigurationError("The Administrator view cannot be removed.")
+    if key not in configuration.workflows_by_view:
+        raise AccessConfigurationError("The selected view no longer exists.")
+    if any(profile.view == key for profile in configuration.users.values()):
+        raise AccessConfigurationError(
+            "This view is assigned to staff. Use Edit profile to assign those "
+            "users to another view first, including revoked users."
+        )
+    views = dict(configuration.workflows_by_view)
+    del views[key]
+    return replace(configuration, workflows_by_view=views)
+
+
 def filter_workflows_for_view(
     workflows: Iterable[WorkflowDefinition],
     configuration: AccessConfiguration,

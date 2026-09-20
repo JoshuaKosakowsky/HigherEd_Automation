@@ -68,7 +68,15 @@ contact-the-administrator message.
 
 Active administrators see **Staff access** in the sidebar. They can
 add or edit profiles, revoke or restore access, and choose the workflows shown
-to Analyst and Cashier views. Updates are validated, written atomically, and
+to each view. **Manage views & permissions** lets any active administrator
+create, rename, or remove non-administrator views without editing JSON.
+New views start with no workflows. Renaming preserves workflow permissions
+and updates assigned profiles, including revoked users; job titles remain
+independent and are edited through **Edit profile**. Before removing a view,
+reassign all profiles using it (including revoked users). Administrator cannot
+be renamed or removed. Save applies all pending changes; Cancel discards them.
+Existing owner-password requirements still apply if a rename changes the
+owner's assigned view. Updates are validated, written atomically, and
 back up the previous policy beside the live file. A file-change check detects locally visible changes since the policy was loaded.
 Use Reload after a conflict. OneDrive synchronization is asynchronous, so this
 is not a distributed lock across offline or simultaneously editing computers.

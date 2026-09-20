@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from app.gui.services.access import (
     AccessConfiguration, AccessConfigurationError, UserAccessProfile,
+    add_view, rename_view, remove_view,
     create_owner_protection, load_access_configuration, save_access_configuration,
 )
 from app.gui.theme import button, label
@@ -138,7 +139,7 @@ class AccessManagementPage(QWidget):
         self.table.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
-        self.permissions_button = button("View permissions", self._edit_view)
+        self.permissions_button = button("Manage views & permissions", self._edit_view)
         self.owner_button = button("Owner password", self._set_owner_password)
         actions.addWidget(self.permissions_button)
         actions.addWidget(self.owner_button)
@@ -323,17 +324,28 @@ class AccessManagementPage(QWidget):
 
     def _edit_view(self) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle("View permissions")
-        dialog.resize(560, 440)
+        dialog.setWindowTitle("Manage views & permissions")
+        dialog.resize(620, 520)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(label("Choose visible workflows", "section"))
-        layout.addWidget(label("Changes apply to every person assigned to this view.", "muted"))
+        layout.addWidget(label("Views & workflow permissions", "section"))
+        layout.addWidget(label(
+            "Create a view for a team or position, then choose its workflows. "
+            "Job titles can be changed separately in Edit profile. "
+            "Administrator always includes every workflow.", "muted",
+        ))
         view = QComboBox()
-        for key in sorted(self.configuration.workflows_by_view):
-            if key != "administrator":
-                view.addItem(key.title(), key)
         view.setAccessibleName("View to configure")
         layout.addWidget(view)
+        actions = QHBoxLayout()
+        add_button = button("Add view", lambda: add())
+        rename_button = button("Rename view", lambda: rename())
+        remove_button = button("Remove view", lambda: remove())
+        for control in (add_button, rename_button, remove_button):
+            actions.addWidget(control)
+        actions.addStretch()
+        layout.addLayout(actions)
+        assignment_label = label("", "muted")
+        layout.addWidget(assignment_label)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         body = QWidget()
@@ -347,29 +359,114 @@ class AccessManagementPage(QWidget):
         checks_layout.addStretch()
         scroll.setWidget(body)
         layout.addWidget(scroll)
-        pending = dict(self.configuration.workflows_by_view)
+        error_label = label("", "error")
+        layout.addWidget(error_label)
+        layout.addWidget(label("Changes take effect only after Save. New views start with no workflows.", "muted"))
+        pending = [self.configuration]
         selected_view = [None]
+        loaded_checks = [frozenset()]
 
         def remember() -> None:
-            if selected_view[0] is not None:
-                pending[selected_view[0]] = frozenset(key for key, check in checks.items() if check.isChecked())
+            key = selected_view[0]
+            if key is not None:
+                selected = frozenset(name for name, check in checks.items() if check.isChecked())
+                if selected != loaded_checks[0]:
+                    views = dict(pending[0].workflows_by_view)
+                    # Preserve unknown IDs until explicitly addressed, and preserve
+                    # wildcard grants when the administrator has made no change.
+                    unknown = views[key] - checks.keys() - {"*"}
+                    views[key] = selected | unknown
+                    pending[0] = replace(pending[0], workflows_by_view=views)
 
         def load_view() -> None:
             remember()
             selected_view[0] = view.currentData()
-            allowed = pending.get(selected_view[0], frozenset())
+            allowed = pending[0].workflows_by_view.get(selected_view[0], frozenset())
             for key, check in checks.items():
                 check.setChecked("*" in allowed or key in allowed)
+                check.setEnabled(selected_view[0] is not None)
+            loaded_checks[0] = frozenset(key for key, check in checks.items() if check.isChecked())
+            assigned = sum(profile.view == selected_view[0] for profile in pending[0].users.values())
+            assignment_label.setText(f"Assigned to {assigned} staff profile(s), including revoked users.")
+            rename_button.setEnabled(selected_view[0] is not None)
+            remove_button.setEnabled(selected_view[0] is not None)
+
+        def refresh(selected: str | None = None) -> None:
+            selected_view[0] = None
+            view.blockSignals(True)
+            view.clear()
+            for key in sorted(pending[0].workflows_by_view):
+                if key != "administrator":
+                    view.addItem(key.title(), key)
+            if selected is not None:
+                view.setCurrentIndex(view.findData(selected))
+            view.blockSignals(False)
+            load_view()
+
+        def add() -> None:
+            name, accepted = QInputDialog.getText(dialog, "Add view", "New view name:")
+            if not accepted:
+                return
+            remember()
+            try:
+                pending[0] = add_view(pending[0], name)
+            except AccessConfigurationError as error:
+                error_label.setText(str(error))
+                return
+            error_label.clear()
+            refresh(name.strip().casefold())
+
+        def rename() -> None:
+            key = view.currentData()
+            if key is None:
+                return
+            name, accepted = QInputDialog.getText(
+                dialog, "Rename view", "New view name:", QLineEdit.EchoMode.Normal, key.title()
+            )
+            if not accepted:
+                return
+            remember()
+            try:
+                pending[0] = rename_view(pending[0], key, name)
+            except AccessConfigurationError as error:
+                error_label.setText(str(error))
+                return
+            error_label.clear()
+            refresh(name.strip().casefold())
+
+        def remove() -> None:
+            key = view.currentData()
+            if key is None:
+                return
+            remember()
+            try:
+                updated = remove_view(pending[0], key)
+            except AccessConfigurationError as error:
+                error_label.setText(str(error))
+                return
+            if QMessageBox.question(
+                dialog, "Remove view", f"Remove the {key.title()} view? Staff profiles will not be deleted.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            pending[0] = updated
+            error_label.clear()
+            refresh()
 
         view.currentIndexChanged.connect(load_view)
-        load_view()
+        refresh()
         controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        controls.button(QDialogButtonBox.StandardButton.Save).setEnabled(view.count() > 0)
         controls.rejected.connect(dialog.reject)
 
         def save() -> None:
             remember()
-            if self._save(replace(self.configuration, workflows_by_view=pending)):
+            password = None
+            if pending[0].users.get(self.owner_key) != self.configuration.users.get(self.owner_key):
+                password = self._owner_password_if_needed(self.owner_key)
+                if password is False:
+                    return
+            if self._save(pending[0], owner_password=password):
                 dialog.accept()
 
         controls.accepted.connect(save)
