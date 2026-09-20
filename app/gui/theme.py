@@ -96,6 +96,7 @@ def apply_theme(application: QApplication) -> None:
         QFrame#sidebar {{ background: {DARK_BLUE}; }}
         QFrame#sidebar QLabel {{ color: {PALE_BLUE}; }}
         QFrame#sidebar QLabel#brand {{ color: {WHITE}; font-size: 25px; font-weight: 800; }}
+        QFrame#sidebar QLabel#brandLogo {{ background: {WHITE}; border-radius: 6px; }}
         QFrame#sidebar QLabel#sideTitle {{ color: {WHITE}; font-size: 16px; font-weight: 600; }}
         QFrame#sidebar QLabel#institution {{ font-size: 10px; }}
         QPushButton {{ background: {WHITE}; border: 1px solid {LIGHT_BLUE};

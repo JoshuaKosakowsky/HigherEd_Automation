@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
     QStackedWidget, QVBoxLayout, QWidget,
@@ -68,7 +69,24 @@ class AutomationApplication(QMainWindow):
         navigation = QVBoxLayout(self.sidebar)
         navigation.setContentsMargins(22, 30, 22, 22)
         navigation.setSpacing(12)
-        navigation.addWidget(label("MINES", "brand"))
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+        logo = label("", "brandLogo", wrap=False)
+        logo.setFixedSize(48, 48)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setAccessibleName("Colorado School of Mines logo")
+        logo_pixmap = QPixmap(str(Path(__file__).resolve().parent / "assets" / "app-logo.png"))
+        # Retain enough source pixels for a crisp mark on high-DPI displays.
+        logo_pixmap = logo_pixmap.scaled(
+            80, 80, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        logo_pixmap.setDevicePixelRatio(2)
+        logo.setPixmap(logo_pixmap)
+        brand_row.addWidget(logo)
+        brand_row.addWidget(label("MINES", "brand", wrap=False))
+        brand_row.addStretch()
+        navigation.addLayout(brand_row)
         navigation.addWidget(label("Bursar Automation", "sideTitle"))
         navigation.addWidget(label("COLORADO SCHOOL OF MINES", "institution"))
         navigation.addSpacing(32)
