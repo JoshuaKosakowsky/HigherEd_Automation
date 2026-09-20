@@ -52,7 +52,11 @@ class WorkflowDetailPage(QScrollArea):
         layout.addWidget(label(definition.description, "muted"))
         layout.addWidget(label("01  INPUTS     /     02  REVIEW & RUN     /     03  RESULTS", "eyebrow"))
         self.form, form_layout = card()
-        form_layout.addWidget(label("Prepare your inputs", "section"))
+        form_layout.addWidget(label(
+            "Prepare your inputs" if definition.parameters else "Ready to set up", "section"
+        ))
+        if not definition.parameters:
+            form_layout.addWidget(label("No files or additional inputs are needed. Review the details before running.", "muted"))
         for parameter in definition.parameters:
             field_label = label(parameter.label, "field")
             form_layout.addWidget(field_label)
@@ -134,6 +138,7 @@ class WorkflowDetailPage(QScrollArea):
         layout = QVBoxLayout(dialog)
         layout.addWidget(label("Ready to run?", "title"))
         layout.addWidget(label(self.definition.name, "section"))
+        layout.addWidget(label(self.definition.description, "muted"))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         summary = QWidget()

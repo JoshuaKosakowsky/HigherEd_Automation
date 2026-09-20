@@ -43,6 +43,13 @@ filename and extracts its date before a confirmation can appear.
 
 ## Install or update the watcher
 
+From the desktop GUI, an administrator can enable **Set Up Report Watcher**
+for the Cashier view under **Staff access → Manage views & permissions**.
+The cashier then opens that workflow under their own Windows account, chooses
+**Review & run**, and confirms **Run workflow**. This invokes the same installer
+as the shortcut below; it does not install for a different selected staff member.
+Complete `setup.ps1` first to save the cashier's name and initials.
+
 Run this PowerShell shortcut after installing the repository shortcuts:
 
 ```powershell

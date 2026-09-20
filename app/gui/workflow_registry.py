@@ -15,6 +15,7 @@ from data_processing.population_testing.config import (
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
+from app.gui.services.report_watcher import run_setup_report_watcher
 from app.gui.services.textbook_brokers import run_textbook_brokers
 from shared.banner.term import get_banner_term
 
@@ -202,6 +203,19 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 default_extension=".csv",
             ),
         ),
+    ),
+    WorkflowDefinition(
+        workflow_id="setup_report_watcher",
+        name="Set Up Report Watcher",
+        description=(
+            "Windows only. Installs or updates the report filing watcher for your "
+            "signed-in Windows account, starts it now, and enables it at sign-in. "
+            "Run setup.ps1 first to save your name and initials. Matching Downloads "
+            "reports ask for confirmation before filing. Run this on the cashier's "
+            "own computer and login, not an administrator's account."
+        ),
+        category="Cashier Tools",
+        runner=run_setup_report_watcher,
     ),
 )
 

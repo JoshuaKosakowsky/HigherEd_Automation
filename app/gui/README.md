@@ -36,6 +36,15 @@ layout; accent colors remain limited.
 
 The integrated workflows are:
 
+- **Set Up Report Watcher** (`setup_report_watcher`), calling the existing
+  `setup/setup_report_filing_watcher.ps1` installer on Windows. It installs or
+  updates the scheduled task for the signed-in employee, requests an immediate
+  start, and enables startup at sign-in. The employee must have completed
+  `setup.ps1` to save their name and initials. This action has no file inputs.
+  Admins can assign it through **Staff access → Manage views & permissions**;
+  it is not automatically granted to Cashier or Analyst. The cashier runs it
+  under their own Windows login. Mac review can display the card but cannot
+  install the task. Existing report confirmations and filing rules are unchanged.
 - **Student Testing Population**, using its existing typed Python configuration
   and pipeline. It does not have a run-level TEST or PROD switch: the workflow
   creates balanced TEST/PROD assignments inside the result workbook.
