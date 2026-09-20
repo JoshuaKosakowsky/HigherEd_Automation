@@ -14,6 +14,12 @@ $configurationPath = Join-Path `
 $modulePath = Join-Path `
     $repositoryRoot `
     "workflows\report_filing\report_filing.psm1"
+$jpmlbRunnerPath = Join-Path `
+    $repositoryRoot `
+    "workflows\jpmlb\run_jpmlb.py"
+$pythonExecutablePath = Join-Path `
+    $repositoryRoot `
+    ".venv\Scripts\python.exe"
 $userSettingsScript = Join-Path `
     $repositoryRoot `
     "shared\user_settings.ps1"
@@ -23,6 +29,8 @@ foreach ($requiredPath in @(
     $launcherPath,
     $configurationPath,
     $modulePath,
+    $jpmlbRunnerPath,
+    $pythonExecutablePath,
     $userSettingsScript
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
@@ -82,7 +90,7 @@ $task = New-ScheduledTask `
     -Settings $settings `
     -Description (
         "Watches the signed-in user's Downloads folder for configured " +
-        "Cashier reports and requests confirmation before filing them."
+        "Cashier reports and requests confirmation before processing them."
     )
 
 $existingTask = Get-ScheduledTask `

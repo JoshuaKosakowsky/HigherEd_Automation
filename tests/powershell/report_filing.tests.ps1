@@ -117,6 +117,56 @@ try {
     Assert-Equal -Expected "P12" -Actual $alternate.Period -Case "June period"
     Assert-Equal -Expected "P12 - June 2026" -Actual $alternate.PeriodDirectoryName -Case "June folder"
 
+    $jpmlbReport = @(
+        $configuration.Reports |
+            Where-Object { [string]$_.Id -eq "cashier_jpmlb" }
+    )[0]
+    $jpmlbSourceDate = Get-ReportSourceDate `
+        -FileName "Transaction_Results_07_31_2026_14_05_09.csv" `
+        -Report $jpmlbReport
+    Assert-Equal `
+        -Expected ([datetime]"2026-07-31") `
+        -Actual $jpmlbSourceDate `
+        -Case "JPMLB source date"
+
+    foreach ($invalidJpmlbName in @(
+        "Transaction_Results_02_29_2025_12_00_00.csv",
+        "Transaction_Results_07_31_2026_24_00_00.csv",
+        "Transaction_Results_07_31_2026_14_05_09 (1).csv",
+        "Transaction_Results_07_31_2026_14_05_09.csv.crdownload",
+        "Other_07_31_2026_14_05_09.csv"
+    )) {
+        $parsed = Get-ReportSourceDate `
+            -FileName $invalidJpmlbName `
+            -Report $jpmlbReport
+        Assert-Equal `
+            -Expected $true `
+            -Actual ($null -eq $parsed) `
+            -Case "Ignore $invalidJpmlbName"
+    }
+
+    $jpmlbProposal = Get-ReportDestinationProposal `
+        -ReportDate $jpmlbSourceDate `
+        -Report $jpmlbReport `
+        -DestinationConfiguration $configuration.Destination
+    Assert-Equal `
+        -Expected "JPMLB 07-31-2026.xlsx" `
+        -Actual $jpmlbProposal.FileName `
+        -Case "JPMLB filename"
+    Assert-Equal `
+        -Expected "TransformJpmlb" `
+        -Actual $jpmlbProposal.Operation `
+        -Case "JPMLB operation"
+
+    $expectedJpmlbPath = Join-Path $testRoot (
+        "GRP-Bursar Office - General\Y-Brswork\Cashier\Payments\" +
+        "FY27\P01 - July 2026\JPMLB 07-31-2026.xlsx"
+    )
+    Assert-Equal `
+        -Expected $expectedJpmlbPath `
+        -Actual $jpmlbProposal.FullPath `
+        -Case "JPMLB complete destination"
+
     Save-AutomationUserSettings `
         -DisplayName "Synthetic Cashier" `
         -Initials "sc" |

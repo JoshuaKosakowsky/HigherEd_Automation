@@ -109,14 +109,17 @@ documented in [app/gui/README.md](app/gui/README.md).
 ## Cashier report filing watcher
 
 This optional role-specific tool watches the signed-in employee's Downloads
-folder and ignores unrelated files silently. A matching PDF opens a confirmation
-window showing the report date, cashier initials, final filename, fiscal period,
-and complete destination before anything moves.
+folder and ignores unrelated files silently. A matching report opens a
+confirmation window showing its report date, final filename, fiscal period, and
+complete destination before anything is moved or transformed.
 
 Submission confirmations named `Submission_Confirmation_MM_DD_YYYY_HH_MM_SS.pdf`
 default to the filename's date and the employee's saved initials. The confirmation
-allows another cashier's initials and an optional `2723` bank suffix. Configuration
-and installation instructions are
+allows another cashier's initials and an optional `2723` bank suffix. The watcher
+also handles JPMLB transaction results named
+`Transaction_Results_MM_DD_YYYY_HH_MM_SS.csv`; those CSVs are converted to
+formatted XLSX workbooks and routed to the Cashier Payments fiscal-period folder.
+Configuration and installation instructions are
 in [workflows/report_filing/README.md](workflows/report_filing/README.md).
 
 ## Trusted browser sessions

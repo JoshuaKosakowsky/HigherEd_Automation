@@ -89,18 +89,47 @@ function Get-ReportFilingConfiguration {
         foreach ($requiredField in @(
             "Id",
             "DisplayName",
+            "Operation",
             "SourceFilePattern",
             "SourceTimestampFormat",
-            "RequiredExtension",
-            "DestinationSuffix"
+            "RequiredExtension"
         )) {
             if ([string]::IsNullOrWhiteSpace([string]$report[$requiredField])) {
                 throw "A report definition is missing $requiredField."
             }
         }
 
-        if ([string]$report.RequiredExtension -ne ".pdf") {
-            throw "The first report-filing version supports PDF reports only."
+        $operation = [string]$report.Operation
+
+        if ($operation -notin @("MovePdf", "TransformJpmlb")) {
+            throw "Unsupported report operation: $operation"
+        }
+
+        if ($operation -eq "MovePdf") {
+            if ([string]$report.RequiredExtension -ne ".pdf") {
+                throw "MovePdf reports must use the .pdf extension."
+            }
+
+            if ([string]::IsNullOrWhiteSpace(
+                [string]$report["DestinationSuffix"]
+            )) {
+                throw "A MovePdf report definition is missing DestinationSuffix."
+            }
+        }
+
+        if ($operation -eq "TransformJpmlb") {
+            if ([string]$report.RequiredExtension -ne ".csv") {
+                throw "TransformJpmlb reports must use the .csv extension."
+            }
+
+            if ([string]::IsNullOrWhiteSpace(
+                [string]$report["DestinationBusinessDirectory"]
+            )) {
+                throw (
+                    "A TransformJpmlb report definition is missing " +
+                    "DestinationBusinessDirectory."
+                )
+            }
         }
     }
 
@@ -160,7 +189,9 @@ function Resolve-ReportFilingBusinessRoot {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [hashtable]$DestinationConfiguration
+        [hashtable]$DestinationConfiguration,
+
+        [string]$BusinessDirectory
     )
 
     $environmentVariableName = [string](
@@ -189,7 +220,11 @@ Confirm OneDrive is signed in and fully synchronized.
 "@
     }
 
-    Join-Path $rootPath ([string]$DestinationConfiguration.BusinessDirectory)
+    if ([string]::IsNullOrWhiteSpace($BusinessDirectory)) {
+        $BusinessDirectory = [string]$DestinationConfiguration.BusinessDirectory
+    }
+
+    Join-Path $rootPath $BusinessDirectory
 }
 
 
@@ -224,8 +259,7 @@ function Get-ReportDestinationProposal {
         [Parameter(Mandatory)]
         [datetime]$ReportDate,
 
-        [Parameter(Mandatory)]
-        [string]$Initials,
+        [string]$Initials = "",
 
         [Parameter(Mandatory)]
         [hashtable]$Report,
@@ -238,7 +272,8 @@ function Get-ReportDestinationProposal {
 
     $fiscalPeriod = Get-MinesFiscalPeriod -Date $ReportDate
     $businessRoot = Resolve-ReportFilingBusinessRoot `
-        -DestinationConfiguration $DestinationConfiguration
+        -DestinationConfiguration $DestinationConfiguration `
+        -BusinessDirectory ([string]$Report["DestinationBusinessDirectory"])
     $fiscalYearDirectoryName = (
         [string]$DestinationConfiguration.FiscalYearDirectoryPattern
     ).Replace(
@@ -252,13 +287,18 @@ function Get-ReportDestinationProposal {
     $periodDirectory = Join-Path `
         $fiscalYearDirectory `
         $fiscalPeriod.PeriodDirectoryName
-    $normalizedInitials = $Initials.Trim().ToUpperInvariant()
-    $bankSuffix = if ($Bank2723) { " 2723" } else { "" }
-    $fileName = "{0}_{1} {2}{3}.pdf" -f `
-        $ReportDate.ToString("MM-dd-yyyy"),
-        $normalizedInitials,
-        ([string]$Report.DestinationSuffix),
-        $bankSuffix
+    $fileName = if ([string]$Report.Operation -eq "TransformJpmlb") {
+        "JPMLB {0}.xlsx" -f $ReportDate.ToString("MM-dd-yyyy")
+    }
+    else {
+        $normalizedInitials = $Initials.Trim().ToUpperInvariant()
+        $bankSuffix = if ($Bank2723) { " 2723" } else { "" }
+        "{0}_{1} {2}{3}.pdf" -f `
+            $ReportDate.ToString("MM-dd-yyyy"),
+            $normalizedInitials,
+            ([string]$Report.DestinationSuffix),
+            $bankSuffix
+    }
 
     [pscustomobject]@{
         ReportDate             = $ReportDate.Date
@@ -267,6 +307,7 @@ function Get-ReportDestinationProposal {
         Period                 = $fiscalPeriod.PeriodCode
         PeriodDirectory        = $periodDirectory
         PeriodDirectoryName    = $fiscalPeriod.PeriodDirectoryName
+        Operation              = [string]$Report.Operation
         FileName               = $fileName
         FullPath               = Join-Path $periodDirectory $fileName
     }
@@ -521,8 +562,15 @@ function Show-ReportFilingConfirmation {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
+    $isJpmlb = [string]$Report.Operation -eq "TransformJpmlb"
+
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "Confirm Cashier Report Filing"
+    $form.Text = if ($isJpmlb) {
+        "Confirm JPMLB Workbook"
+    }
+    else {
+        "Confirm Cashier Report Filing"
+    }
     $form.StartPosition = "CenterScreen"
     $form.Size = New-Object System.Drawing.Size(940, 680)
     $form.MinimumSize = New-Object System.Drawing.Size(940, 680)
@@ -532,7 +580,12 @@ function Show-ReportFilingConfirmation {
     $form.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
     $heading = New-Object System.Windows.Forms.Label
-    $heading.Text = "Please verify every detail before this file is moved."
+    $heading.Text = if ($isJpmlb) {
+        "Please verify every detail before this workbook is created."
+    }
+    else {
+        "Please verify every detail before this file is moved."
+    }
     $heading.Font = New-Object System.Drawing.Font("Segoe UI", 15, [Drawing.FontStyle]::Bold)
     $heading.AutoSize = $true
     $heading.Location = New-Object System.Drawing.Point(25, 20)
@@ -576,6 +629,7 @@ function Show-ReportFilingConfirmation {
     $initialsLabel.Text = "Cashier initials"
     $initialsLabel.AutoSize = $true
     $initialsLabel.Location = New-Object System.Drawing.Point(457, 172)
+    $initialsLabel.Visible = -not $isJpmlb
     $form.Controls.Add($initialsLabel)
 
     $initialsBox = New-Object System.Windows.Forms.TextBox
@@ -584,6 +638,7 @@ function Show-ReportFilingConfirmation {
     $initialsBox.MaxLength = 6
     $initialsBox.Location = New-Object System.Drawing.Point(460, 198)
     $initialsBox.Size = New-Object System.Drawing.Size(150, 30)
+    $initialsBox.Visible = -not $isJpmlb
     $form.Controls.Add($initialsBox)
 
     $nameLabel = New-Object System.Windows.Forms.Label
@@ -591,12 +646,14 @@ function Show-ReportFilingConfirmation {
     $nameLabel.AutoSize = $true
     $nameLabel.ForeColor = [Drawing.Color]::DimGray
     $nameLabel.Location = New-Object System.Drawing.Point(625, 202)
+    $nameLabel.Visible = -not $isJpmlb
     $form.Controls.Add($nameLabel)
 
     $bankBox = New-Object System.Windows.Forms.CheckBox
     $bankBox.Text = "Bank 2723 (append to filename)"
     $bankBox.AutoSize = $true
     $bankBox.Location = New-Object System.Drawing.Point(460, 245)
+    $bankBox.Visible = -not $isJpmlb
     $form.Controls.Add($bankBox)
 
     $newNameLabel = New-Object System.Windows.Forms.Label
@@ -631,11 +688,20 @@ function Show-ReportFilingConfirmation {
     $form.Controls.Add($destinationBox)
 
     $instructionLabel = New-Object System.Windows.Forms.Label
-    $instructionLabel.Text = (
-        "Is the name correct? Change the initials when filing for someone else. " +
-        "Select Bank 2723 only when needed. " +
-        "Changing the date updates the fiscal year, period, and filename."
-    )
+    $instructionLabel.Text = if ($isJpmlb) {
+        (
+            "Confirm the business date, filename, and destination. " +
+            "Changing the date updates the fiscal year, period, and filename. " +
+            "The downloaded CSV is removed only after the workbook is verified."
+        )
+    }
+    else {
+        (
+            "Is the name correct? Change the initials when filing for someone else. " +
+            "Select Bank 2723 only when needed. " +
+            "Changing the date updates the fiscal year, period, and filename."
+        )
+    }
     $instructionLabel.AutoSize = $false
     $instructionLabel.Size = New-Object System.Drawing.Size(860, 50)
     $instructionLabel.Location = New-Object System.Drawing.Point(30, 470)
@@ -677,7 +743,12 @@ function Show-ReportFilingConfirmation {
     & $updatePreview
 
     $confirmButton = New-Object System.Windows.Forms.Button
-    $confirmButton.Text = "Confirm and Move"
+    $confirmButton.Text = if ($isJpmlb) {
+        "Confirm and Create"
+    }
+    else {
+        "Confirm and Move"
+    }
     $confirmButton.Size = New-Object System.Drawing.Size(210, 52)
     $confirmButton.Location = New-Object System.Drawing.Point(440, 545)
     $confirmButton.BackColor = [Drawing.Color]::PaleGreen
@@ -685,7 +756,12 @@ function Show-ReportFilingConfirmation {
     $form.Controls.Add($confirmButton)
 
     $cancelButton = New-Object System.Windows.Forms.Button
-    $cancelButton.Text = "Cancel - Leave File"
+    $cancelButton.Text = if ($isJpmlb) {
+        "Cancel - Leave CSV"
+    }
+    else {
+        "Cancel - Leave File"
+    }
     $cancelButton.Size = New-Object System.Drawing.Size(210, 52)
     $cancelButton.Location = New-Object System.Drawing.Point(680, 545)
     $form.Controls.Add($cancelButton)
@@ -693,7 +769,7 @@ function Show-ReportFilingConfirmation {
     $confirmButton.Add_Click({
         $normalizedInitials = $initialsBox.Text.Trim().ToUpperInvariant()
 
-        if ($normalizedInitials -notmatch '^[A-Z]{2,6}$') {
+        if (-not $isJpmlb -and $normalizedInitials -notmatch '^[A-Z]{2,6}$') {
             Show-ReportFilingMessage `
                 -Title "Check Cashier Initials" `
                 -Icon "Warning" `
@@ -849,6 +925,127 @@ function Move-ReportFileSafely {
 }
 
 
+function Invoke-JpmlbTransformationSafely {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [System.IO.FileInfo]$SourceFile,
+
+        [Parameter(Mandatory)]
+        [string]$DestinationPath
+    )
+
+    if (Test-Path -LiteralPath $DestinationPath) {
+        throw "Destination already exists; no file was overwritten: $DestinationPath"
+    }
+
+    $destinationDirectory = Split-Path -Parent $DestinationPath
+    if (-not (Test-Path -LiteralPath $destinationDirectory -PathType Container)) {
+        throw "Destination folder does not exist: $destinationDirectory"
+    }
+
+    $pythonExecutable = Join-Path $script:RepositoryRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $pythonExecutable -PathType Leaf)) {
+        throw @"
+The repository Python environment was not found:
+$pythonExecutable
+
+Run setup.ps1 from the repository root, then reinstall the report watcher.
+"@
+    }
+
+    $temporaryName = ".{0}.{1}.partial.xlsx" -f `
+        ([System.IO.Path]::GetFileNameWithoutExtension($DestinationPath)),
+        ([guid]::NewGuid().ToString("N"))
+    $temporaryPath = Join-Path $destinationDirectory $temporaryName
+    $sourceFingerprint = Get-ReportFileFingerprint -File $SourceFile
+    $finalCreated = $false
+
+    try {
+        $arguments = @(
+            "-m",
+            "workflows.jpmlb.run_jpmlb",
+            "--input",
+            $SourceFile.FullName,
+            "--output",
+            $temporaryPath
+        )
+
+        Push-Location $script:RepositoryRoot
+        try {
+            $transformationOutput = & $pythonExecutable @arguments 2>&1
+            $transformationExitCode = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+        }
+
+        if ($transformationExitCode -ne 0) {
+            $diagnostic = ($transformationOutput | Out-String).Trim()
+            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+                $diagnostic = "The Python transformation returned exit code $transformationExitCode."
+            }
+            throw $diagnostic
+        }
+
+        if (-not (Test-Path -LiteralPath $temporaryPath -PathType Leaf)) {
+            throw "The JPMLB transformation did not create an output workbook."
+        }
+
+        $temporaryFile = Get-Item -LiteralPath $temporaryPath -ErrorAction Stop
+        if ($temporaryFile.Length -le 0) {
+            throw "The JPMLB transformation created an empty output workbook."
+        }
+
+        $currentSource = Get-Item -LiteralPath $SourceFile.FullName -ErrorAction Stop
+        $currentFingerprint = Get-ReportFileFingerprint -File $currentSource
+        if (
+            $currentFingerprint.Length -ne $sourceFingerprint.Length -or
+            $currentFingerprint.LastWriteTimeUtc -ne $sourceFingerprint.LastWriteTimeUtc -or
+            $currentFingerprint.Sha256 -ne $sourceFingerprint.Sha256
+        ) {
+            throw (
+                "The Downloads CSV changed while the workbook was being created. " +
+                "It was left in place."
+            )
+        }
+
+        if (Test-Path -LiteralPath $DestinationPath) {
+            throw "Destination already exists; no file was overwritten: $DestinationPath"
+        }
+
+        [System.IO.File]::Move($temporaryPath, $DestinationPath)
+        $finalCreated = $true
+    }
+    catch {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            Remove-Item `
+                -LiteralPath $temporaryPath `
+                -Force `
+                -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+
+    $sourceRemoved = $true
+    try {
+        Remove-Item `
+            -LiteralPath $SourceFile.FullName `
+            -Force `
+            -ErrorAction Stop
+    }
+    catch {
+        $sourceRemoved = $false
+    }
+
+    [pscustomobject]@{
+        DestinationPath = $DestinationPath
+        SourceRemoved   = $sourceRemoved
+        OutputCreated   = $finalCreated
+    }
+}
+
+
 function Invoke-ReportFilingCandidate {
     [CmdletBinding()]
     param(
@@ -904,7 +1101,10 @@ function Invoke-ReportFilingCandidate {
         return
     }
 
-    if (-not (Test-PdfFileSignature -Path $readyFile.FullName)) {
+    if (
+        [string]$report.Operation -eq "MovePdf" -and
+        -not (Test-PdfFileSignature -Path $readyFile.FullName)
+    ) {
         Write-ReportFilingLog `
             -Level "ERROR" `
             -Message "Matching file did not contain a PDF signature: $Path"
@@ -956,35 +1156,68 @@ The file was left in Downloads. Download the report again or ask your supervisor
     }
 
     try {
-        $moveResult = Move-ReportFileSafely `
-            -SourceFile $currentFile `
-            -DestinationPath $selection.Proposal.FullPath
+        $moveResult = if ([string]$report.Operation -eq "TransformJpmlb") {
+            Invoke-JpmlbTransformationSafely `
+                -SourceFile $currentFile `
+                -DestinationPath $selection.Proposal.FullPath
+        }
+        else {
+            Move-ReportFileSafely `
+                -SourceFile $currentFile `
+                -DestinationPath $selection.Proposal.FullPath
+        }
     }
     catch {
+        $failureTitle = if ([string]$report.Operation -eq "TransformJpmlb") {
+            "JPMLB Workbook Could Not Be Created"
+        }
+        else {
+            "File Was Not Moved"
+        }
+
         Write-ReportFilingLog `
             -Level "ERROR" `
-            -Message "Verified transfer failed: $($_.Exception.Message)"
+            -Message "Report processing failed: $($_.Exception.Message)"
         Show-ReportFilingMessage `
-            -Title "File Was Not Moved" `
+            -Title $failureTitle `
             -Icon "Error" `
             -Message $_.Exception.Message
         return
     }
 
-    Write-ReportFilingLog "Report filed successfully: $($moveResult.DestinationPath)"
+    Write-ReportFilingLog "Report processed successfully: $($moveResult.DestinationPath)"
 
     if ($moveResult.SourceRemoved) {
-        Show-ReportFilingMessage `
-            -Title "Report Filed Successfully" `
-            -Message @"
+        $successTitle = if ([string]$report.Operation -eq "TransformJpmlb") {
+            "JPMLB Workbook Created"
+        }
+        else {
+            "Report Filed Successfully"
+        }
+        $successMessage = if (
+            [string]$report.Operation -eq "TransformJpmlb"
+        ) {
+            @"
+The JPMLB workbook was created successfully:
+
+$($moveResult.DestinationPath)
+"@
+        }
+        else {
+            @"
 The report was verified and moved to:
 
 $($moveResult.DestinationPath)
 "@
+        }
+
+        Show-ReportFilingMessage `
+            -Title $successTitle `
+            -Message $successMessage
     }
     else {
         Show-ReportFilingMessage `
-            -Title "Report Copied - Downloads Copy Remains" `
+            -Title "Report Processed - Downloads Copy Remains" `
             -Icon "Warning" `
             -Message @"
 The verified report is here:

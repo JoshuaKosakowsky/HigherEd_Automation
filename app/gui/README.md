@@ -44,7 +44,8 @@ The integrated workflows are:
   Admins can assign it through **Staff access → Manage views & permissions**;
   it is not automatically granted to Cashier or Analyst. The cashier runs it
   under their own Windows login. Mac review can display the card but cannot
-  install the task. Existing report confirmations and filing rules are unchanged.
+  install the task. The watcher handles the configured RDC filing and JPMLB
+  CSV-to-XLSX workflows.
 - **Student Testing Population**, using its existing typed Python configuration
   and pipeline. It does not have a run-level TEST or PROD switch: the workflow
   creates balanced TEST/PROD assignments inside the result workbook.

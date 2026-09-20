@@ -38,6 +38,20 @@ class ReportFilingPowerShellContractTests(unittest.TestCase):
         self.assertIn("MM_dd_yyyy_HH_mm_ss", self.config)
         self.assertIn("[DATETIME]::TRYPARSEEXACT", self.normalized_module)
 
+    def test_jpmlb_transformation_is_configured(self) -> None:
+        self.assertIn(
+            'SourceFilePattern     = "Transaction_Results_*.csv"',
+            self.config,
+        )
+        self.assertIn('Operation             = "TransformJpmlb"', self.config)
+        self.assertIn('RequiredExtension     = ".csv"', self.config)
+        self.assertIn("MM_dd_yyyy_HH_mm_ss", self.config)
+        self.assertIn("Y-Brswork\\Cashier\\Payments", self.config)
+        self.assertIn("WORKFLOWS.JPMLB.RUN_JPMLB", self.normalized_module)
+        self.assertIn(".PARTIAL.XLSX", self.normalized_module)
+        self.assertIn("workflows\\jpmlb\\run_jpmlb.py", self.scheduler_setup)
+        self.assertIn(".venv\\Scripts\\python.exe", self.scheduler_setup)
+
     def test_confirmation_uses_source_date_and_per_file_bank_choice(self) -> None:
         self.assertIn("$DATEPICKER.VALUE = $REPORTDATE.DATE", self.normalized_module)
         self.assertIn("$INITIALSBOX.TEXT = $USERSETTINGS.INITIALS", self.normalized_module)
@@ -69,6 +83,8 @@ class ReportFilingPowerShellContractTests(unittest.TestCase):
         self.assertIn("$SOURCEHASH -NE $COPIEDHASH", self.normalized_module)
         self.assertIn("DESTINATION ALREADY EXISTS", self.normalized_module)
         self.assertIn(".PARTIAL", self.normalized_module)
+        self.assertIn("[SYSTEM.IO.FILE]::MOVE", self.normalized_module)
+        self.assertIn("SOURCEFINGERPRINT", self.normalized_module)
 
     def test_cancel_uses_a_full_file_fingerprint(self) -> None:
         for field in ("PATH", "LENGTH", "LASTWRITETIMEUTC", "SHA256"):

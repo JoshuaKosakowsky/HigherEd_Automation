@@ -22,6 +22,7 @@
         @{
             Id                  = "cashier_daily_closing_rdc"
             DisplayName         = "Cashier Daily Closing RDC"
+            Operation           = "MovePdf"
 
             # The wildcard is a discovery filter; the timestamp format below
             # validates the complete filename and supplies the report date.
@@ -30,6 +31,19 @@
             RequiredExtension   = ".pdf"
 
             DestinationSuffix   = "RDC"
+        }
+        @{
+            Id                    = "cashier_jpmlb"
+            DisplayName           = "Cashier JPMLB"
+            Operation             = "TransformJpmlb"
+
+            SourceFilePattern     = "Transaction_Results_*.csv"
+            SourceTimestampFormat = "'Transaction_Results_'MM_dd_yyyy_HH_mm_ss'.csv'"
+            RequiredExtension     = ".csv"
+
+            DestinationBusinessDirectory = (
+                "GRP-Bursar Office - General\Y-Brswork\Cashier\Payments"
+            )
         }
     )
 }

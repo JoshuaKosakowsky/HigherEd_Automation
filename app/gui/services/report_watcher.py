@@ -63,5 +63,6 @@ def run_setup_report_watcher(context: WorkflowContext) -> WorkflowResult:
     return WorkflowResult(True, (
         "The report filing watcher was installed or updated for your Windows login "
         "and a start was requested. It will also start when you sign in. Matching "
-        "reports will ask for confirmation before being filed; unrelated downloads are ignored."
+        "reports will ask for confirmation before being moved or transformed; "
+        "unrelated downloads are ignored."
     ))

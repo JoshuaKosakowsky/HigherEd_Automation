@@ -2,8 +2,8 @@
 
 This Windows-only workflow watches the signed-in employee's Downloads folder.
 Downloads that do not match a configured report filename are ignored silently.
-When a matching PDF finishes downloading, the employee must confirm its report
-date, cashier initials, final filename, and complete destination before it moves.
+When a matching report finishes downloading, the employee confirms its report
+date, final filename, and complete destination before it is processed.
 
 ## Submission confirmations
 
@@ -30,13 +30,39 @@ For example, `Submission_Confirmation_07_31_2026_14_05_09.pdf` with initials
 The shared fiscal-period logic uses July as period 1 and June as period 12.
 The confirmed report date determines both folders.
 
+## JPMLB transaction results
+
+The watcher recognizes `Transaction_Results_MM_DD_YYYY_HH_MM_SS.csv` with a
+valid date and time. Browser duplicate names such as `... (1).csv` are ignored.
+
+The confirmation starts with the date from the downloaded filename. Correct
+the date when the business date differs from the download date. The date updates
+the fiscal year, period, output filename, and destination shown on screen.
+
+After confirmation, the workflow reproduces the JPMLB macro's column changes,
+summary rows, formulas, colors, number formats, widths, filter, and frozen header.
+It creates:
+
+```text
+%OneDriveCommercial%\GRP-Bursar Office - General\Y-Brswork\Cashier\Payments\FY27\P01 - July 2026\JPMLB 07-31-2026.xlsx
+```
+
+The CSV must contain a header, at least one data row, and at least 16 columns.
+Original columns L:N are removed. New CWID and NAME columns are inserted in O:P.
+The resulting amount column M must contain numeric amounts or blanks.
+
+The fiscal-year and period folders must already exist. An existing JPMLB workbook
+is never overwritten. The CSV stays in Downloads if validation or workbook
+creation fails and is removed only after the XLSX is created and reopened
+successfully.
+
 ## Before installing
 
 1. Run `setup.ps1` and enter the employee's name and initials.
 2. Open `config/report_filing.psd1`.
-3. Confirm the `BusinessDirectory` spelling and the
-   `FiscalYearDirectoryPattern` (`FY27`, for example), and ensure the destination
-   fiscal-year and period folders exist.
+3. Confirm the RDC `BusinessDirectory`, the JPMLB
+   `DestinationBusinessDirectory`, and the `FiscalYearDirectoryPattern` (`FY27`,
+   for example). Ensure both destination fiscal-year and period folders exist.
 
 `SourceFilePattern` narrows discovery; `SourceTimestampFormat` validates the full
 filename and extracts its date before a confirmation can appear.
@@ -68,13 +94,15 @@ scheduled task. Apply them by signing out and back in or by rerunning
 ## Safety behavior
 
 - The source must match exactly one configured report definition.
-- The first version accepts PDF reports only and verifies the `%PDF-` signature.
+- RDC reports verify the `%PDF-` signature before moving.
+- JPMLB CSVs are structurally validated before a workbook is created.
 - The file must be unlocked, nonempty, and stable before a prompt appears.
 - The report date controls the July-through-June fiscal year and period folder.
 - Destination folders must already exist.
 - Existing destination files are never overwritten.
-- The workflow copies to a temporary file, compares SHA-256 hashes, assigns the
-  final name, and only then removes the Downloads copy.
+- RDC files are copied to a temporary file and hash-verified before the final
+  move. JPMLB workbooks are created under a temporary name, reopened and checked,
+  and then assigned the final name. Only then is the Downloads copy removed.
 - Cancel leaves the file in Downloads and suppresses that exact unchanged file.
   A modified or newly downloaded file with the same name is considered new.
 
