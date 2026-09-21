@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "environments": {
+    "TEST": {
+      "base_url": "https://comtemp-insights.50115.elluciancloud.com",
+      "database_id": 2,
+      "sso_start_url": "https://my.mines.edu/app/UserHome",
+      "experience_url": "https://experience-test.elluciancloud.com/comtemp"
+    },
+    "PROD": {
+      "base_url": "https://minessis-insights.50115.elluciancloud.com",
+      "database_id": 2,
+      "sso_start_url": "https://my.mines.edu/app/UserHome",
+      "experience_url": "https://experience.elluciancloud.com/minessis/"
+    }
+  }
+}

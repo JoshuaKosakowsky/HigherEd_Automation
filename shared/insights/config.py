@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlsplit
 
 
@@ -105,3 +107,67 @@ def _required(values: Mapping[str, str], name: str) -> str:
         )
 
     return value
+
+
+DEPARTMENT_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "institutions" / "mines" / "insights.json"
+)
+
+
+@dataclass(frozen=True)
+class InsightsDepartmentProfile:
+    settings: InsightsSettings
+    experience_url: str
+
+
+def load_department_profiles(
+    path: Path = DEPARTMENT_CONFIG_PATH,
+) -> dict[str, InsightsDepartmentProfile | None]:
+    """Load deployment-wide, non-secret GUI settings, without reading .env.
+
+    A null profile is deliberately unavailable. Do not infer PROD from TEST
+    or discover/trust a different API destination from a browser redirect.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"schemaVersion", "environments"}
+            or payload["schemaVersion"] != 1
+            or set(payload["environments"]) != {"TEST", "PROD"}
+        ):
+            raise ValueError
+        profiles = {}
+        for environment, entry in payload["environments"].items():
+            if entry is None:
+                profiles[environment] = None
+                continue
+            keys = {"base_url", "database_id", "sso_start_url", "experience_url"}
+            if not isinstance(entry, dict) or set(entry) != keys:
+                raise ValueError
+            if type(entry["database_id"]) is not int:
+                raise ValueError
+            if any(not isinstance(entry[key], str) or not entry[key].strip()
+                   for key in keys - {"database_id"}):
+                raise ValueError
+            prefix = f"INSIGHTS_{environment}"
+            values = {
+                "INSIGHTS_ENV": environment,
+                f"{prefix}_BASE_URL": entry["base_url"],
+                f"{prefix}_DATABASE_ID": str(entry["database_id"]),
+                f"{prefix}_SSO_START_URL": entry["sso_start_url"],
+            }
+            settings = InsightsSettings.from_environment(values)
+            # Use the same credential-free URL validation for the launch link.
+            values[f"{prefix}_SSO_START_URL"] = entry["experience_url"]
+            experience = InsightsSettings.from_environment(values).sso_start_url
+            base = urlsplit(settings.base_url)
+            if base.path or base.port not in (None, 443):
+                raise ValueError
+            profiles[environment] = InsightsDepartmentProfile(settings, experience or "")
+        return profiles
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
+        raise InsightsConfigurationError(
+            "Department Insights settings are unavailable or invalid. "
+            "Contact the application owner; no personal .env setup is needed."
+        ) from None

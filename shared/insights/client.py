@@ -59,7 +59,7 @@ class InsightsClient:
     def __init__(
         self,
         base_url: str,
-        database_id: int,
+        database_id: int | None = None,
         *,
         api_key: str | None = None,
         session_token: str | None = None,
@@ -172,6 +172,11 @@ class InsightsClient:
         self._request("DELETE", "/api/session")
 
     def _build_payload(self, sql: str) -> dict[str, Any]:
+        if self.database_id is None:
+            raise InsightsAPIError(
+                "Select a verified database ID before executing SQL. "
+                "This client is configured for metadata discovery only."
+            )
         sql = sql.strip()
 
         if not sql:

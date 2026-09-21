@@ -95,6 +95,7 @@ class QtGuiTests(unittest.TestCase):
     def test_staff_view_and_missing_policy_fail_closed(self):
         window = self.open_app("STAFF")
         self.assertTrue(window.access_button.isHidden())
+        self.assertTrue(window.connections_button.isHidden())
         self.assertEqual(window.visible_workflows, ())
         window.show_access_management()
         self.assertTrue(window.access_button.isHidden())
@@ -102,6 +103,19 @@ class QtGuiTests(unittest.TestCase):
         window.show_home()
         self.assertEqual(window.visible_workflows, ())
         self.assertIsNotNone(window.access_error)
+
+    def test_connections_are_admin_only_and_recheck_revocation(self):
+        window = self.open_app()
+        self.assertFalse(window.connections_button.isHidden())
+        window.show_connections()
+        page = window.current_page
+        self.assertEqual(page.mode.currentData(), "TEST")
+        self.payload["users"]["OWNER"]["active"] = False
+        self.write_policy()
+        with patch.object(window.executor, "run_async") as run:
+            page._run("connect")
+        run.assert_not_called()
+        self.assertTrue(window.connections_button.isHidden())
 
     def test_revocation_is_checked_before_opening_workflow(self):
         window = self.open_app()

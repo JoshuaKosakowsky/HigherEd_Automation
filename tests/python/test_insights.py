@@ -511,6 +511,19 @@ class InsightsCleanupTaskContractTests(unittest.TestCase):
 
 
 class InsightsClientTests(unittest.TestCase):
+    def test_metadata_discovery_does_not_require_or_infer_database_id(self) -> None:
+        session = StubSession(make_response(200, {"data": [
+            {"id": 7, "name": "Example Warehouse", "engine": "postgres"},
+        ]}))
+        client = InsightsClient(
+            "https://test.example.edu", session_token="synthetic",
+            http_session=session,
+        )
+        self.assertEqual(client.list_databases()[0].id, 7)
+        with self.assertRaisesRegex(InsightsAPIError, "verified database ID"):
+            client.run_sql("SELECT 1")
+        self.assertEqual(len(session.requests), 1)
+
     def test_api_redirect_is_not_followed(self) -> None:
         session = StubSession(make_response(307, {}))
         client = InsightsClient("https://test.example.edu", 2, api_key="synthetic", http_session=session)

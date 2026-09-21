@@ -62,6 +62,54 @@ The integrated workflows are:
 
 ## Workflow visibility
 
+### Insights connections (administrators)
+
+Active app administrators have a **Connections** page. TEST is selected by
+default; choose TEST or PROD explicitly and click
+**Connect and sign in**. Sign in to MyMines in the temporary browser, open the
+selected environment's Experience address shown on the page in that same window,
+and launch its Insights reporting application. The browser closes after handoff or timeout; the GUI then shows
+the actual result. The check runs only `connection_check.sql` (`SELECT 1`), not
+the student sample query, and does not export files.
+
+Staff do not create `.env` files or enter environment URLs/database IDs. The
+owner maintains non-secret department settings once in
+`config/institutions/mines/insights.json`; Git deployment delivers these settings
+to all installations. GUI connections deliberately ignore `.env` and ambient
+`INSIGHTS_ENV` so a staff selection cannot silently route to another environment.
+The command-line proof of concept retains its existing `.env` behavior.
+
+TEST and PROD are supplied with separately verified hostnames. PROD uses
+`https://minessis-insights.50115.elluciancloud.com` and database ID `2`
+(`data-warehouse`), identified through authenticated, non-administrative
+database metadata. TEST also uses ID `2`, but at its different TEST hostname;
+the IDs were not assumed to match. MyMines is the starting portal for both.
+
+The owner maintains these four non-secret fields centrally and distributes any
+changes with the app. Setting an environment to `null` disables its connection
+actions. Never infer a new host/database from another environment or put
+credentials in this file. Staff do not repeat department provisioning when
+their daily session expires. The shared client's metadata-only mode can list
+accessible databases without a database ID, but refuses SQL until one is set.
+
+Each employee signs in using their own account; sessions remain in their native
+OS vault and are separated by environment. A valid session is reused. Staff
+may need to sign in each day or sooner if the server invalidates the session;
+they do not repeat configuration. **Check connection** never opens a browser.
+**Sign in again** revokes/replaces the selected cached session. **Sign out**
+revokes the selected API session, not the MyMines browser session. Status text
+is a timestamped last check, not a guarantee that a session is still valid.
+
+Access is rechecked before each connection action. PROD connection checks
+require confirmation. Connection operations reuse the background executor;
+authentication errors are sanitized before the general GUI logger sees them.
+The page does not yet add API extraction to existing business workflows or
+change their behavior. PROD SSO and `SELECT 1` were verified on macOS with the
+owner's account; this does not grant other employees access or prove access to
+every table. Windows end-to-end sign-in still needs deployment testing.
+
+### Staff workflow policy
+
 The GUI reads the signed-in Windows account name and matches it
 case-insensitively to the shared policy under the Mines OneDrive root at
 `GRP-Bursar Office - General\Y-Brswork\Staff Folders\.highered_automation\gui_access.json`.

@@ -18,6 +18,7 @@ from app.gui import APP_NAME, APP_VERSION
 from app.gui.models import WorkflowDefinition
 from app.gui.pages.access_management import AccessManagementPage
 from app.gui.pages.home import HomePage
+from app.gui.pages.connections import ConnectionsPage
 from app.gui.pages.workflow_detail import WorkflowDetailPage
 from app.gui.services.access import (
     AccessConfiguration, AccessConfigurationError, create_shared_access_configuration,
@@ -92,7 +93,8 @@ class AutomationApplication(QMainWindow):
         navigation.addSpacing(32)
         self.home_button = button("Workflows", self.show_home, "nav")
         self.access_button = button("Staff access", self.show_access_management, "nav")
-        for control in (self.home_button, self.access_button):
+        self.connections_button = button("Connections", self.show_connections, "nav")
+        for control in (self.home_button, self.connections_button, self.access_button):
             control.setCheckable(True)
             navigation.addWidget(control)
         navigation.addStretch()
@@ -156,6 +158,7 @@ class AutomationApplication(QMainWindow):
             and self.access_configuration.is_administrator(self.user_login)
         )
         self.access_button.setVisible(admin)
+        self.connections_button.setVisible(admin)
         self.identity.setText(self.profile_description or "No view assigned")
 
     def _show(self, page: QWidget) -> None:
@@ -174,6 +177,7 @@ class AutomationApplication(QMainWindow):
             self._reload_access()
         self.home_button.setChecked(True)
         self.access_button.setChecked(False)
+        self.connections_button.setChecked(False)
         self._show(HomePage(
             self.content, self.visible_workflows, self.show_workflow,
             user_first_name=self.user_first_name, profile_description=self.profile_description,
@@ -189,11 +193,30 @@ class AutomationApplication(QMainWindow):
             return
         self.home_button.setChecked(False)
         self.access_button.setChecked(True)
+        self.connections_button.setChecked(False)
         self._show(AccessManagementPage(
             self.content, configuration=self.access_configuration,
             config_path=self.access_config_path, current_login=self.user_login,
             go_home=self.show_home, policy_saved=self._apply_access_configuration,
         ))
+
+    def _authorize_connections(self) -> bool:
+        self._reload_access()
+        return bool(self.access_configuration and
+                    self.access_configuration.is_administrator(self.user_login))
+
+    def show_connections(self) -> None:
+        if self._busy or self.executor.is_running:
+            return
+        if not self._authorize_connections():
+            self.show_home(reload=False)
+            return
+        self.home_button.setChecked(False)
+        self.access_button.setChecked(False)
+        self.connections_button.setChecked(True)
+        page = ConnectionsPage(self.content, self.executor, self._authorize_connections)
+        page.busy_changed.connect(self._set_busy)
+        self._show(page)
 
     def _authorize_workflow(self, definition: WorkflowDefinition) -> bool:
         self._reload_access()
@@ -217,6 +240,7 @@ class AutomationApplication(QMainWindow):
         self._busy = busy
         self.home_button.setEnabled(not busy)
         self.access_button.setEnabled(not busy)
+        self.connections_button.setEnabled(not busy)
 
     def _open_logs(self) -> None:
         try:

@@ -7,6 +7,12 @@ Metabase API key or a temporary SSO session.
 
 ## Local configuration
 
+For staff using the desktop GUI, use **Connections** instead: department
+settings are bundled in `config/institutions/mines/insights.json`, so each
+employee only signs in and does not need `.env`. The instructions below remain
+for this command-line proof of concept. GUI and CLI reuse the same OS-vault
+session when their environment, server, and database settings match.
+
 Copy `.env.example` to `.env`. Keep `INSIGHTS_ENV=TEST` until PROD access has
 been separately approved and configured. Never commit `.env`, API keys, SSO
 JWTs, session values, cookies, or credential-bearing SSO URLs.
