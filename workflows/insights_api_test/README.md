@@ -5,19 +5,20 @@ TEST or PROD environment. It uses the shared client under `shared/insights` so
 future workflows do not need to know whether authentication uses a permanent
 Metabase API key or a temporary SSO session.
 
-## Local configuration
+## Configuration
 
-For staff using the desktop GUI, use **Connections** instead: department
-settings are bundled in `config/institutions/mines/insights.json`, so each
-employee only signs in and does not need `.env`. The instructions below remain
-for this command-line proof of concept. GUI and CLI reuse the same OS-vault
-session when their environment, server, and database settings match.
+Department TEST and PROD addresses and database IDs are bundled in
+`config/institutions/mines/insights.json`. Both the GUI and this command-line
+proof of concept use that non-secret configuration, so employees do not need to
+copy those values into `.env`. Both entry points reuse the same OS-vault session
+when their environment, server, and database settings match.
 
-Copy `.env.example` to `.env`. Keep `INSIGHTS_ENV=TEST` until PROD access has
-been separately approved and configured. Never commit `.env`, API keys, SSO
-JWTs, session values, cookies, or credential-bearing SSO URLs.
+TEST is the default. Use `--environment PROD` only when PROD access and the
+specific query have been approved. `.env` remains optional for an API key or a
+fully explicit alternate deployment; never commit `.env`, API keys, SSO JWTs,
+session values, cookies, or credential-bearing SSO URLs.
 
-For Mines portal-first sign-in, set:
+The bundled Mines portal-first sign-in address is:
 
 ```dotenv
 INSIGHTS_TEST_SSO_START_URL=https://my.mines.edu/app/UserHome
@@ -30,8 +31,9 @@ signing in; new tabs opened there are also observed. Signing in through a
 different, already-open personal browser window does not authenticate the
 automation profile. The helper waits up to five minutes.
 
-The starting URL is separate from `INSIGHTS_TEST_BASE_URL`, which must remain
-the Insights API host, not MyMines or Experience. Capture still accepts a JWT
+When locally overridden, the starting URL is separate from
+`INSIGHTS_TEST_BASE_URL`, which must remain the Insights API host, not MyMines
+or Experience. Capture still accepts a JWT
 only at that Insights host's SSO endpoint; it does not capture MyMines tokens.
 Use a stable starting URL without query strings, fragments, or credentials;
 do not save a URL copied from the middle of an SSO redirect. The optional
@@ -106,6 +108,12 @@ output at `data/insights_api_test/stvterm_sample.xlsx`:
 This sample returns at most ten Banner term-code rows and does not query or
 export student records. The generated workbook is ignored by Git and should
 remain on an approved local or institutional storage location.
+
+To run the same proof of concept against PROD explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m workflows.insights_api_test.run_insights_test --environment PROD
+```
 
 Force a fresh login and revoke the previous cached session:
 

@@ -10,7 +10,11 @@ from dotenv import load_dotenv
 from shared.insights.auth import InsightsAuthenticationError, exchange_sso_jwt
 from shared.insights.browser_auth import InsightsBrowserAuthenticationError
 from shared.insights.client import InsightsAPIError, InsightsClient
-from shared.insights.config import InsightsConfigurationError, InsightsSettings
+from shared.insights.config import (
+    InsightsConfigurationError,
+    InsightsSettings,
+    load_configured_settings,
+)
 from shared.insights.session_cache import InsightsCredentialError
 from shared.insights.session_auth import (
     InsightsSessionError,
@@ -53,6 +57,11 @@ def parse_args() -> argparse.Namespace:
         description="Validate the configured Ellucian Insights connection."
     )
     mode = parser.add_mutually_exclusive_group()
+    parser.add_argument(
+        "--environment",
+        choices=["TEST", "PROD"],
+        help="Insights environment (default: INSIGHTS_ENV or TEST).",
+    )
     mode.add_argument(
         "--discover-only",
         action="store_true",
@@ -123,7 +132,7 @@ def print_discovery(client: InsightsClient, settings: InsightsSettings) -> None:
 def main() -> None:
     arguments = parse_args()
     load_dotenv(REPO_ROOT / ".env")
-    settings = InsightsSettings.from_environment()
+    settings = load_configured_settings(environment=arguments.environment)
 
     if arguments.logout:
         removed = clear_cached_session(settings)

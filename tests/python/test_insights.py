@@ -19,7 +19,9 @@ from shared.insights.client import InsightsAPIError, InsightsClient
 from shared.insights.browser_auth import _extract_sso_jwt, capture_sso_jwt
 from shared.insights.config import (
     InsightsConfigurationError,
+    InsightsDepartmentProfile,
     InsightsSettings,
+    load_configured_settings,
 )
 from shared.insights.session_auth import build_authenticated_client, clear_cached_session
 from shared.insights.session_cache import (
@@ -93,6 +95,43 @@ class FakeInsightsClient:
 
 
 class InsightsSettingsTests(unittest.TestCase):
+    def test_configured_settings_use_department_defaults_without_dotenv(self) -> None:
+        profile = InsightsDepartmentProfile(
+            InsightsSettings(
+                "TEST",
+                "https://test.example.edu",
+                2,
+                sso_start_url="https://portal.example.edu/app/UserHome",
+            ),
+            "https://experience-test.example.edu",
+        )
+        with patch(
+            "shared.insights.config.load_department_profiles",
+            return_value={"TEST": profile, "PROD": None},
+        ):
+            settings = load_configured_settings(environ={})
+
+        self.assertEqual(settings, profile.settings)
+
+    def test_configured_settings_add_api_key_to_department_profile(self) -> None:
+        profile = InsightsDepartmentProfile(
+            InsightsSettings("PROD", "https://prod.example.edu", 7),
+            "https://experience.example.edu",
+        )
+        with patch(
+            "shared.insights.config.load_department_profiles",
+            return_value={"TEST": None, "PROD": profile},
+        ):
+            settings = load_configured_settings(
+                environment="PROD",
+                environ={"INSIGHTS_PROD_API_KEY": " synthetic-key "},
+            )
+
+        self.assertEqual(settings.base_url, profile.settings.base_url)
+        self.assertEqual(settings.database_id, 7)
+        self.assertEqual(settings.api_key, "synthetic-key")
+        self.assertNotIn("synthetic-key", repr(settings))
+
     def test_portal_start_url_is_environment_specific_and_optional(self) -> None:
         values = {
             "INSIGHTS_ENV": "TEST",
@@ -348,7 +387,7 @@ class InsightsSmokeTestTests(unittest.TestCase):
         with (
             patch("sys.argv", ["insights", "--smoke-test"]),
             patch.object(workflow, "load_dotenv"),
-            patch.object(workflow.InsightsSettings, "from_environment", return_value=settings),
+            patch.object(workflow, "load_configured_settings", return_value=settings),
             patch.object(workflow, "build_authenticated_client", return_value=(client, "API key")),
             patch.object(workflow, "print_discovery") as discovery,
             patch.object(pd.DataFrame, "to_excel") as export,
@@ -383,11 +422,7 @@ class InsightsSmokeTestTests(unittest.TestCase):
                 patch("sys.argv", ["insights"]),
                 patch.object(workflow, "OUTPUT_PATH", output_path),
                 patch.object(workflow, "load_dotenv"),
-                patch.object(
-                    workflow.InsightsSettings,
-                    "from_environment",
-                    return_value=settings,
-                ),
+                patch.object(workflow, "load_configured_settings", return_value=settings),
                 patch.object(
                     workflow,
                     "build_authenticated_client",

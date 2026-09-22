@@ -171,3 +171,51 @@ def load_department_profiles(
             "Department Insights settings are unavailable or invalid. "
             "Contact the application owner; no personal .env setup is needed."
         ) from None
+
+
+def load_configured_settings(
+    *,
+    environment: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    path: Path = DEPARTMENT_CONFIG_PATH,
+) -> InsightsSettings:
+    """Load one environment from department config with optional local overrides.
+
+    Department URLs and database IDs are non-secret deployment configuration.
+    A local environment may still select TEST/PROD, supply an API key, or fully
+    override both endpoint fields for a different deployment.
+    """
+    values = os.environ if environ is None else environ
+    selected = (
+        environment if environment is not None else values.get("INSIGHTS_ENV", "TEST")
+    ).strip().upper()
+    if selected not in {"TEST", "PROD"}:
+        raise InsightsConfigurationError(
+            "Insights environment must be either TEST or PROD."
+        )
+
+    prefix = f"INSIGHTS_{selected}"
+    endpoint_names = (f"{prefix}_BASE_URL", f"{prefix}_DATABASE_ID")
+    if any(values.get(name, "").strip() for name in endpoint_names):
+        explicit_values = dict(values)
+        explicit_values["INSIGHTS_ENV"] = selected
+        return InsightsSettings.from_environment(explicit_values)
+
+    profile = load_department_profiles(path)[selected]
+    if profile is None:
+        raise InsightsConfigurationError(
+            f"Insights {selected} is not configured for the department."
+        )
+
+    configured_values = {
+        "INSIGHTS_ENV": selected,
+        f"{prefix}_BASE_URL": profile.settings.base_url,
+        f"{prefix}_DATABASE_ID": str(profile.settings.database_id),
+        f"{prefix}_SSO_START_URL": (
+            values.get(f"{prefix}_SSO_START_URL", "").strip()
+            or profile.settings.sso_start_url
+            or ""
+        ),
+        f"{prefix}_API_KEY": values.get(f"{prefix}_API_KEY", "").strip(),
+    }
+    return InsightsSettings.from_environment(configured_values)
