@@ -26,14 +26,14 @@ SQL_PATH = (
     REPO_ROOT
     / "query"
     / "insights_testing"
-    / "spriden_sample.sql"
+    / "stvterm_sample.sql"
 )
 
 OUTPUT_PATH = (
     REPO_ROOT
     / "data"
     / "insights_api_test"
-    / "spriden_sample.xlsx"
+    / "stvterm_sample.xlsx"
 )
 
 

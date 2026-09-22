@@ -96,11 +96,16 @@ SQL:
 .\.venv\Scripts\python.exe -m workflows.insights_api_test.run_insights_test --discover-only
 ```
 
-Run the SQL file and create the ignored Excel output:
+Run the safe `STVTERM` reference-data sample and create the ignored Excel
+output at `data/insights_api_test/stvterm_sample.xlsx`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m workflows.insights_api_test.run_insights_test
 ```
+
+This sample returns at most ten Banner term-code rows and does not query or
+export student records. The generated workbook is ignored by Git and should
+remain on an approved local or institutional storage location.
 
 Force a fresh login and revoke the previous cached session:
 

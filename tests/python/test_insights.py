@@ -361,6 +361,51 @@ class InsightsSmokeTestTests(unittest.TestCase):
         self.assertEqual(path.name, "connection_check.sql")
         self.assertIn("SELECT 1 AS connection_ok", path.read_text())
 
+    def test_default_sample_exports_only_term_reference_data(self) -> None:
+        from workflows.insights_api_test import run_insights_test as workflow
+
+        client = MagicMock()
+        client.__enter__.return_value = client
+        dataframe = pd.DataFrame(
+            [["202610", "Fall 2025", "2025-08-18", "2025-12-12"]],
+            columns=[
+                "stvterm_code",
+                "stvterm_desc",
+                "stvterm_start_date",
+                "stvterm_end_date",
+            ],
+        )
+        client.run_sql_file.return_value = dataframe
+        settings = InsightsSettings("TEST", "https://test.example.edu", 2, "synthetic")
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "stvterm_sample.xlsx"
+            with (
+                patch("sys.argv", ["insights"]),
+                patch.object(workflow, "OUTPUT_PATH", output_path),
+                patch.object(workflow, "load_dotenv"),
+                patch.object(
+                    workflow.InsightsSettings,
+                    "from_environment",
+                    return_value=settings,
+                ),
+                patch.object(
+                    workflow,
+                    "build_authenticated_client",
+                    return_value=(client, "API key"),
+                ),
+                patch.object(workflow, "print_discovery"),
+                patch.object(pd.DataFrame, "to_excel") as export,
+                patch("builtins.print"),
+            ):
+                workflow.main()
+
+        sql_path = client.run_sql_file.call_args.args[0]
+        normalized_sql = " ".join(sql_path.read_text().lower().split())
+        self.assertEqual(sql_path.name, "stvterm_sample.sql")
+        self.assertIn("from stvterm", normalized_sql)
+        self.assertNotIn("spriden", normalized_sql)
+        export.assert_called_once_with(output_path, index=False)
+
 
 class InsightsSessionAuthenticationTests(unittest.TestCase):
     def setUp(self) -> None:
