@@ -2,11 +2,19 @@ param (
     [ValidatePattern('^\d{6}$')]
     [string]$TermCode,
 
-    [switch]$ArchiveOnly
+    [switch]$ArchiveOnly,
+
+    # Download and transform, then return before the interactive Banner-upload
+    # confirmation. This is used by the desktop GUI.
+    [switch]$PrepareOnly
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($ArchiveOnly -and $PrepareOnly) {
+    throw "ArchiveOnly and PrepareOnly cannot be used together."
+}
 
 
 # ------------------------------------------------------------
@@ -163,6 +171,9 @@ function Get-TextbookBrokersPendingFiles {
 
 $workflowMode = if ($ArchiveOnly) {
     "archive only"
+}
+elseif ($PrepareOnly) {
+    "download and transform only"
 }
 else {
     "download and transform"
@@ -539,6 +550,9 @@ elseif ($readySourceFiles.Count -eq 0) {
         -Message "Transformation was skipped because no local source files are pending."
 
     Write-Log "Textbook Brokers workflow completed with no files to process."
+    if ($PrepareOnly) {
+        Write-Output "HIGHERED_NO_PENDING_FILES=1"
+    }
     return
 }
 else {
@@ -607,6 +621,23 @@ else {
 
         throw
     }
+}
+
+
+# ------------------------------------------------------------
+# RETURN TO THE GUI BEFORE CONSEQUENTIAL ARCHIVAL
+# ------------------------------------------------------------
+
+if ($PrepareOnly) {
+    Write-Log (
+        "Prepare-only mode completed. TSPLOAD.csv and source files remain " +
+        "pending until the Banner upload is confirmed through the archive workflow."
+    )
+
+    # Stable machine-readable output for the GUI adapter. Keep this distinct
+    # from normal log lines so paths never need to be duplicated in Python.
+    Write-Output "HIGHERED_OUTPUT_PATH=$outputFilePath"
+    return
 }
 
 

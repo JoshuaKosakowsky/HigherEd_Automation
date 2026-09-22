@@ -54,11 +54,13 @@ The integrated workflows are:
   from Insights. The app calculates and formats the review locally; it does not
   approve or issue refunds. API extraction, resuming batches, and single-account
   API validation remain available through the existing PowerShell launcher.
-- **Textbook Brokers**, using the existing local transformation to combine one
-  or more selected `finaid_*.csv` / `ia_*.csv` sources into a new TSPLOAD file.
-  The GUI action does not connect to SFTP, move source files, confirm a Banner
-  upload, or archive anything. Those consequential orchestration stages remain
-  in the existing PowerShell launcher.
+- **Textbook Brokers**, using the existing PowerShell and WinSCP integration to
+  download pending `finaid_*.csv` / `ia_*.csv` sources from the configured SFTP
+  server and transform them into TSPLOAD. The GUI accepts the Banner term and
+  runs the launcher in non-interactive prepare-only mode. It does not confirm a
+  Banner upload or archive local or remote files. After the upload succeeds, run
+  `archive-textbook-brokers -TermCode <the same term>` from PowerShell to perform
+  the existing guarded archive step.
 
 ## Workflow visibility
 
@@ -234,13 +236,11 @@ dialogs intentionally omit tracebacks and secrets.
 
 The next useful migration steps are:
 
-1. split Textbook Brokers SFTP discovery/preview from its consequential archive
-   execution before exposing those stages in the GUI;
-2. decide whether Refund Review API extraction and batch-resume controls belong
+1. decide whether Refund Review API extraction and batch-resume controls belong
    in the GUI after the manual workflow has been operationally validated;
-3. explicitly approve workflows for the AR/Analyst and Cashier views;
-4. integrate Historical Trends after confirming its role and input/output selection;
-5. add a small structured recent-activity file now that more than one workflow is
+2. explicitly approve workflows for the AR/Analyst and Cashier views;
+3. integrate Historical Trends after confirming its role and input/output selection;
+4. add a small structured recent-activity file now that more than one workflow is
    available.
 
 Adding a workflow should usually require a `WorkflowDefinition` and a thin

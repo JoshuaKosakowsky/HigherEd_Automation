@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -33,7 +34,11 @@ from app.gui.services.drag_drop import dropped_local_paths
 from PySide6.QtCore import QMimeData, QUrl
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
-from app.gui.services.textbook_brokers import run_textbook_brokers
+from app.gui.services.textbook_brokers import (
+    PROJECT_ROOT as TEXTBOOK_PROJECT_ROOT,
+    WORKFLOW_SCRIPT,
+    run_textbook_brokers,
+)
 from app.gui import theme
 from app.gui.workflow_registry import get_workflow, get_workflows
 from shared.banner.term import get_banner_term
@@ -429,30 +434,105 @@ class RefundReviewAdapterTests(unittest.TestCase):
 
 
 class TextbookBrokersAdapterTests(unittest.TestCase):
-    def test_adapter_runs_proven_local_transformation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "finaid_review.csv"
-            source.write_text(
-                "ignored,ignored,900000001,BKFA,ignored,125.50\n",
-                encoding="utf-8",
-            )
-            output = root / "TSPLOAD.csv"
-            context = WorkflowContext(
-                workflow_id="textbook_brokers",
-                parameters={
-                    "term_code": "202680",
-                    "source_files": (source,),
-                    "output_file": output,
-                },
-            )
+    def test_registry_uses_only_term_input_for_sftp_workflow(self) -> None:
+        workflow = get_workflow("textbook_brokers")
+        self.assertEqual([parameter.key for parameter in workflow.parameters], ["term_code"])
+        self.assertIn("SFTP", workflow.description)
 
+    def test_adapter_runs_existing_launcher_in_prepare_only_mode(self) -> None:
+        output = Path("C:/Mines/BOOK/202680/output/TSPLOAD.csv")
+        completed = subprocess.CompletedProcess(
+            [], 0, f"download log\nHIGHERED_OUTPUT_PATH={output}\n", ""
+        )
+        context = WorkflowContext("textbook_brokers", {"term_code": "202680"})
+
+        with (
+            patch("app.gui.services.textbook_brokers.sys.platform", "win32"),
+            patch(
+                "app.gui.services.textbook_brokers.shutil.which",
+                return_value="C:/Windows/powershell.exe",
+            ),
+            patch(
+                "app.gui.services.textbook_brokers.subprocess.CREATE_NO_WINDOW",
+                0x08000000,
+                create=True,
+            ),
+            patch(
+                "app.gui.services.textbook_brokers.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
             result = run_textbook_brokers(context)
 
-            self.assertTrue(result.success)
-            self.assertEqual(result.output_path, output)
-            self.assertIn("1 file(s)", result.message)
-            self.assertTrue(output.is_file())
+        self.assertTrue(result.success)
+        self.assertEqual(result.output_path, output)
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "C:/Windows/powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                str(WORKFLOW_SCRIPT),
+                "-TermCode",
+                "202680",
+                "-PrepareOnly",
+            ],
+        )
+        self.assertEqual(run.call_args.kwargs["cwd"], TEXTBOOK_PROJECT_ROOT)
+        self.assertEqual(run.call_args.kwargs["timeout"], 300)
+        self.assertNotIn("shell", run.call_args.kwargs)
+
+    def test_adapter_failure_never_claims_files_were_archived(self) -> None:
+        context = WorkflowContext("textbook_brokers", {"term_code": "202680"})
+        with (
+            patch("app.gui.services.textbook_brokers.sys.platform", "win32"),
+            patch(
+                "app.gui.services.textbook_brokers.shutil.which",
+                return_value="C:/Windows/powershell.exe",
+            ),
+            patch(
+                "app.gui.services.textbook_brokers.subprocess.CREATE_NO_WINDOW",
+                0,
+                create=True,
+            ),
+            patch(
+                "app.gui.services.textbook_brokers.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 1, "", "failed"),
+            ),
+        ):
+            result = run_textbook_brokers(context)
+
+        self.assertFalse(result.success)
+        self.assertIn("Nothing was archived", result.message)
+
+    def test_no_pending_remote_files_is_a_safe_successful_no_op(self) -> None:
+        context = WorkflowContext("textbook_brokers", {"term_code": "202680"})
+        with (
+            patch("app.gui.services.textbook_brokers.sys.platform", "win32"),
+            patch(
+                "app.gui.services.textbook_brokers.shutil.which",
+                return_value="C:/Windows/powershell.exe",
+            ),
+            patch(
+                "app.gui.services.textbook_brokers.subprocess.CREATE_NO_WINDOW",
+                0,
+                create=True,
+            ),
+            patch(
+                "app.gui.services.textbook_brokers.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, "HIGHERED_NO_PENDING_FILES=1\n", ""
+                ),
+            ),
+        ):
+            result = run_textbook_brokers(context)
+
+        self.assertTrue(result.success)
+        self.assertIsNone(result.output_path)
+        self.assertIn("No pending", result.message)
+        self.assertIn("Nothing was downloaded", result.message)
 
 
 class WorkflowExecutorTests(unittest.TestCase):

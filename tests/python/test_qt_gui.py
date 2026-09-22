@@ -310,26 +310,12 @@ class QtGuiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_parameters((names,), {"n": "One\nOne"})
 
-    def test_actual_textbook_workflow_runs_and_exposes_output_actions(self):
-        source = self.root / "finaid_example.csv"
-        source.write_text("ignored,ignored,900000001,BKFA,ignored,125.50\n", encoding="utf-8")
-        output = self.root / "TSPLOAD.csv"
+    def test_textbook_workflow_shows_only_sftp_term_input(self):
         window = self.open_app()
         window.show_workflow(get_workflow("textbook_brokers"))
         page = window.current_page
-        page.inputs["source_files"].setText(str(source))
-        page.inputs["output_file"].setText(str(output))
-        with patch.object(page, "_confirm", return_value=True):
-            page._run()
-        self.assertFalse(window.home_button.isEnabled())
-        deadline = time.monotonic() + 5
-        while page.result_queue is not None and time.monotonic() < deadline:
-            QTest.qWait(20)
-        self.assertIsNone(page.result_queue)
-        self.assertTrue(output.exists())
-        self.assertFalse(page.output_button.isHidden())
-        self.assertTrue(window.home_button.isEnabled())
-        self.assertTrue(page.form.isEnabled())
+        self.assertEqual(set(page.inputs), {"term_code"})
+        self.assertIn("SFTP", page.definition.description)
 
     def test_production_defaults_to_test_and_cancel_does_not_run(self):
         definition = WorkflowDefinition("modes", "Modes", "Example", "Testing",

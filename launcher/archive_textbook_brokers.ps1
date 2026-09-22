@@ -1,3 +1,8 @@
+param (
+    [ValidatePattern('^\d{6}$')]
+    [string]$TermCode
+)
+
 $ErrorActionPreference = "Stop"
 
 $workflowLauncher = Join-Path `
@@ -8,4 +13,12 @@ if (-not (Test-Path -LiteralPath $workflowLauncher -PathType Leaf)) {
     throw "Textbook Brokers workflow launcher was not found: $workflowLauncher"
 }
 
-& $workflowLauncher -ArchiveOnly
+$workflowParameters = @{
+    ArchiveOnly = $true
+}
+
+if (-not [string]::IsNullOrWhiteSpace($TermCode)) {
+    $workflowParameters.TermCode = $TermCode
+}
+
+& $workflowLauncher @workflowParameters

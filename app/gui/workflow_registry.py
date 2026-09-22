@@ -159,8 +159,9 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         workflow_id="textbook_brokers",
         name="Textbook Brokers",
         description=(
-            "Combines selected Finaid and IA files into a new Banner-ready "
-            "TSPLOAD.csv file. Source files are not moved or archived."
+            "Downloads pending Finaid and IA files from the Textbook Brokers SFTP "
+            "server and creates a Banner-ready TSPLOAD.csv file. Source files are "
+            "not moved or archived until the separate archive step."
         ),
         category="Payments",
         runner=run_textbook_brokers,
@@ -171,36 +172,6 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 kind=ParameterKind.TEXT,
                 default=CURRENT_TERM.code,
                 help_text=f"Current term: {CURRENT_TERM.name} ({CURRENT_TERM.code}).",
-            ),
-            ParameterDefinition(
-                key="source_files",
-                label="Finaid and IA source files",
-                kind=ParameterKind.MULTI_INPUT_FILE,
-                help_text=(
-                    "Enter one path per line, browse for files, or drop one or "
-                    "more finaid_*.csv / ia_*.csv files here."
-                ),
-                file_types=(
-                    ("Textbook Brokers CSV files", "*.csv"),
-                    ("All files", "*.*"),
-                ),
-            ),
-            ParameterDefinition(
-                key="output_file",
-                label="Save result as",
-                kind=ParameterKind.OUTPUT_FILE,
-                default=(
-                    PROJECT_ROOT
-                    / "data"
-                    / "textbook_brokers"
-                    / "output"
-                    / "TSPLOAD.csv"
-                ),
-                help_text=(
-                    "For safety, an existing output file will not be overwritten."
-                ),
-                file_types=(("CSV file", "*.csv"),),
-                default_extension=".csv",
             ),
         ),
     ),
