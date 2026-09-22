@@ -12,10 +12,20 @@ current month. `TBBDETC` supplies the description, category, charge/payment
 indicator, and priority. The displayed `Balance` is the transaction-level
 `TBRACCD_BALANCE`, not a calculated full-account balance.
 
+### `Last_month_activity.sql`
+
+Returns the same transaction detail for the previous calendar month, using a
+feed-date range from the first of last month through the start of this month.
+
 ### `Current_month_payment_activity.sql`
 
 Returns current-month activity for a maintained list of payment detail codes
 plus `CFEE`. `CFEE` is labeled as a credit-card fee rather than a payment.
+
+### `Last_month_payment_activity.sql`
+
+Uses the same payment detail-code list and `CFEE` classification for the
+previous calendar month's feed dates.
 
 The query currently uses a hard-coded detail-code list. Before broadening it to
 category-based selection, confirm the intended Banner detail-code category and

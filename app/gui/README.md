@@ -81,7 +81,8 @@ owner maintains non-secret department settings once in
 `config/institutions/mines/insights.json`; Git deployment delivers these settings
 to all installations. GUI connections deliberately ignore `.env` and ambient
 `INSIGHTS_ENV` so a staff selection cannot silently route to another environment.
-The command-line proof of concept retains its existing `.env` behavior.
+The command-line proof of concept also uses the bundled department settings by
+default; `.env` is optional for an API key or a different deployment.
 
 TEST and PROD are supplied with separately verified hostnames. PROD uses
 `https://minessis-insights.50115.elluciancloud.com` and database ID `2`
@@ -117,10 +118,37 @@ cookies; use the identity provider's own sign-out for a full SSO logout.
 Access is rechecked before each connection action. PROD connection checks
 require confirmation. Connection operations reuse the background executor;
 authentication errors are sanitized before the general GUI logger sees them.
-The page does not yet add API extraction to existing business workflows or
-change their behavior. PROD SSO and `SELECT 1` were verified on macOS with the
-owner's account; this does not grant other employees access or prove access to
-every table. Windows end-to-end sign-in still needs deployment testing.
+The administrator Connections page also has a query picker and **Run selected
+query and save Excel**. Select TEST or PROD, choose a report, and choose the
+workbook destination. PROD requires a separate confirmation. The picker uses
+the explicit list in `shared/insights/query_catalog.py`; it never accepts an
+arbitrary SQL path. Available reports include current and previous calendar
+month transaction and payment activity, the existing historical loan activity
+draft, contact lookup, Parent PLUS sample, sponsored student summary, refund
+review SQL, the two manual refund extracts, the Banner term sample, four
+institutional-loan enrollment reports, and two SHIP Fall exceptions. The loan
+and SHIP reports prompt for a six-digit Banner term. The SHIP reports require a
+Fall term ending in `80`. The term is validated and inserted as a quoted SQL
+literal; no raw free-form SQL is accepted from the interface.
+
+The previous-month reports preserve the existing activity columns and payment
+detail-code list while selecting feed dates from the first of the previous
+month through the start of this month. The current-month queries keep their
+existing SQL, including the absence of an upper date bound. The historical
+loan activity report remains a draft with a two-month historical window and
+unvalidated detail-code list/grouping; its name does not describe its actual
+window. The contact lookup does not identify outstanding checks despite its
+filename. The two manual refund extracts are a matched pair; exporting one
+alone does not run the refund review workflow.
+
+Validation queries, SQL templates for the refund pipeline, and the single-CWID
+refund diagnostic are omitted. Aging dashboard cards require two inputs plus
+Metabase field-filter mappings and are not available through this picker. The
+picker runs one read query at a time. It writes the complete result
+to the chosen location after the query completes, without replacing an
+existing file. Reports may contain student and financial records; use an
+approved destination. Large results may exceed the API timeout or Excel's row
+limit. This is a proof of concept and does not change operational workflows.
 
 ### Staff workflow policy
 
