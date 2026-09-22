@@ -28,6 +28,27 @@ def _login_required() -> str:
     raise InsightsSessionError("Sign-in is required. Click Connect and sign in.")
 
 
+def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Convert ISO 8601 feed timestamps to timezone-free UTC Excel dates."""
+    feed_date_columns = [
+        column for column in dataframe.columns
+        if isinstance(column, str) and column.endswith("Feed Date")
+    ]
+    if not feed_date_columns:
+        return dataframe
+
+    export = dataframe.copy()
+    for column in feed_date_columns:
+        try:
+            dates = pd.to_datetime(export[column], format="ISO8601", utc=True)
+        except (TypeError, ValueError):
+            raise InsightsConfigurationError(
+                f"Insights returned an unreadable {column} value; no workbook was saved."
+            ) from None
+        export[column] = dates.dt.tz_localize(None)
+    return export
+
+
 def _export_query(dataframe: pd.DataFrame, output_path: Path) -> None:
     """Write a complete workbook at the selected location without replacing a file."""
     if output_path.suffix.lower() != ".xlsx" or not output_path.is_absolute():
@@ -40,6 +61,7 @@ def _export_query(dataframe: pd.DataFrame, output_path: Path) -> None:
         raise InsightsConfigurationError(
             "The query returned too many rows for one Excel sheet. Narrow the query before exporting."
         )
+    export = _prepare_excel_dates(dataframe)
 
     temporary_path = None
     created_destination = False
@@ -49,7 +71,7 @@ def _export_query(dataframe: pd.DataFrame, output_path: Path) -> None:
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
-        dataframe.to_excel(temporary_path, index=False)
+        export.to_excel(temporary_path, index=False)
         # Exclusive creation protects an existing workbook if the destination
         # appeared while the query or Excel writer was running.
         with output_path.open("xb") as destination:

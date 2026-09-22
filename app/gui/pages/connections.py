@@ -148,17 +148,6 @@ class ConnectionsPage(QWidget):
             except (OSError, ValueError) as error:
                 QMessageBox.warning(self, "Query input needed", str(error))
                 return
-            if environment == "PROD":
-                answer = QMessageBox.question(
-                    self, "Confirm production query export",
-                    f"Run {query.title} in PROD? Reports may contain student financial "
-                    "records, including identifiers and amounts. The full result "
-                    "will be saved where you choose next.",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if answer != QMessageBox.StandardButton.Yes:
-                    return
             suggested_name = (
                 f"{query.query_id}_{environment.lower()}_"
                 f"{datetime.now():%Y%m%d_%H%M%S}.xlsx"
@@ -186,15 +175,6 @@ class ConnectionsPage(QWidget):
                 parameters["term_code"] = term_code
         else:
             parameters = {"action": action}
-        if environment == "PROD" and action not in {"logout", "query_export"}:
-            answer = QMessageBox.question(
-                self, "Confirm production connection",
-                "Connect to the production Insights environment? This check runs SELECT 1 only.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
         is_query = action == "query_export"
         workflow_id = "insights_query_export" if is_query else "insights_connection"
         title = "Insights query export" if is_query else "Insights connection"

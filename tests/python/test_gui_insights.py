@@ -5,11 +5,13 @@ import os
 import queue
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+from openpyxl import load_workbook
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
@@ -176,7 +178,11 @@ class InsightsConnectionServiceTests(unittest.TestCase):
         client = MagicMock()
         client.__enter__.return_value = client
         client.run_sql_file.return_value = pd.DataFrame(
-            [["TEST-1", 12.50]], columns=["CWID", "Amount"]
+            [
+                ["TEST-1", 12.50, "2026-09-01T00:00:00Z"],
+                ["TEST-2", 15.00, "2026-09-02T13:45:30Z"],
+            ],
+            columns=["CWID", "Amount", "Feed Date"],
         )
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "activity.xlsx"
@@ -194,6 +200,11 @@ class InsightsConnectionServiceTests(unittest.TestCase):
             workbook = pd.read_excel(output)
             self.assertEqual(workbook.loc[0, "CWID"], "TEST-1")
             self.assertEqual(workbook.loc[0, "Amount"], 12.50)
+            sheet = load_workbook(output, read_only=True).active
+            self.assertEqual(sheet["C2"].value, datetime(2026, 9, 1))
+            self.assertEqual(sheet["C3"].value, datetime(2026, 9, 2, 13, 45, 30))
+            self.assertEqual(sheet["C2"].data_type, "d")
+            self.assertEqual(sheet["C2"].number_format.lower(), "yyyy-mm-dd hh:mm:ss")
         self.assertEqual(build.call_args.args[0].environment, "TEST")
         self.assertEqual(
             client.run_sql_file.call_args.args[0].name,
@@ -322,19 +333,19 @@ class ConnectionsPageTests(unittest.TestCase):
         self.page._run("connect")
         self.executor.run_async.assert_not_called()
 
-    def test_configured_prod_requires_confirmation(self):
+    def test_configured_prod_connects_without_confirmation(self):
         self.page.profiles["PROD"] = production_profile()
         self.page.mode.setCurrentIndex(1)
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as ask:
+        with patch.object(QMessageBox, "question") as ask:
             self.page._run("connect")
-        ask.assert_called_once()
-        self.executor.run_async.assert_not_called()
+        ask.assert_not_called()
+        context = self.executor.run_async.call_args.args[1]
+        self.assertEqual(context.mode, WorkflowMode.PRODUCTION)
 
-    def test_confirmed_prod_action_keeps_prod_context(self):
+    def test_prod_action_keeps_prod_context(self):
         self.page.profiles["PROD"] = production_profile()
         self.page.mode.setCurrentIndex(1)
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
-            self.page._run("connect")
+        self.page._run("connect")
         context = self.executor.run_async.call_args.args[1]
         self.assertEqual(context.mode, WorkflowMode.PRODUCTION)
         self.results.put(WorkflowResult(True, "PROD verified"))
@@ -359,17 +370,20 @@ class ConnectionsPageTests(unittest.TestCase):
             self.page._poll()
             self.assertIn("One row exported", self.page.status_label.text())
 
-    def test_prod_query_requires_its_own_confirmation(self):
+    def test_prod_query_runs_without_confirmation(self):
         self.page.profiles["PROD"] = production_profile()
         self.page.mode.setCurrentIndex(1)
-        with (
-            patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as ask,
-            patch.object(QFileDialog, "getSaveFileName") as save,
-        ):
-            self.page._run("query_export")
-        self.assertIn("student financial records", ask.call_args.args[2])
-        save.assert_not_called()
-        self.executor.run_async.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "activity.xlsx"
+            with (
+                patch.object(QMessageBox, "question") as ask,
+                patch.object(QFileDialog, "getSaveFileName", return_value=(str(output), "Excel workbooks (*.xlsx)")),
+            ):
+                self.page._run("query_export")
+            ask.assert_not_called()
+            context = self.executor.run_async.call_args.args[1]
+            self.assertEqual(context.mode, WorkflowMode.PRODUCTION)
+            self.assertEqual(context.parameters["output_path"], str(output.resolve()))
 
     def test_term_query_requires_input_before_file_dialog(self):
         self.page.queries.setCurrentIndex(self.page.queries.findData("loan_all_enrollment"))

@@ -115,12 +115,13 @@ Only one automation browser window may use it at a time. Chrome is the default;
 Edge remains an explicit fallback with a separate profile. Signing out of the API connection does not erase browser
 cookies; use the identity provider's own sign-out for a full SSO logout.
 
-Access is rechecked before each connection action. PROD connection checks
-require confirmation. Connection operations reuse the background executor;
+Access is rechecked before each connection action. TEST and PROD are selected
+explicitly on the page and do not show a separate confirmation. Connection
+operations reuse the background executor;
 authentication errors are sanitized before the general GUI logger sees them.
 The administrator Connections page also has a query picker and **Run selected
 query and save Excel**. Select TEST or PROD, choose a report, and choose the
-workbook destination. PROD requires a separate confirmation. The picker uses
+workbook destination. The picker uses
 the explicit list in `shared/insights/query_catalog.py`; it never accepts an
 arbitrary SQL path. Available reports include current and previous calendar
 month transaction and payment activity, the existing historical loan activity
@@ -148,7 +149,9 @@ picker runs one read query at a time. It writes the complete result
 to the chosen location after the query completes, without replacing an
 existing file. Reports may contain student and financial records; use an
 approved destination. Large results may exceed the API timeout or Excel's row
-limit. This is a proof of concept and does not change operational workflows.
+limit. Feed Date columns are written as real Excel dates and times in UTC,
+matching the API's `Z` timestamps, so Excel can sort and filter them as dates.
+This is a proof of concept and does not change operational workflows.
 
 ### Staff workflow policy
 
