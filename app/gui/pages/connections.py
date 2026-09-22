@@ -90,9 +90,10 @@ class ConnectionsPage(QWidget):
             self.instructions.setText(
                 f"Connect opens MyMines. After signing in, open {profile.experience_url} "
                 f"in that same window, then launch Insights {environment}.\n\n"
-                "The temporary browser closes after the handoff or a five-minute timeout. "
-                "Return here for the result. Passwords and MFA stay in the browser; "
-                "only your API session is saved in your OS credential vault."
+                "The dedicated automation browser closes after the handoff or a "
+                "five-minute timeout. Return here for the result. Its local profile "
+                "can retain persistent SSO recognition for future automation; the "
+                "API session is saved separately in your OS credential vault."
             )
         self.status_label.setText(self.statuses.get(environment, "Not checked in this view. No login is performed until you click Connect."))
 

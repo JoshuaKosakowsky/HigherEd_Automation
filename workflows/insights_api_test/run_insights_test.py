@@ -66,8 +66,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--browser",
         choices=["edge", "chrome"],
-        default="chrome" if sys.platform == "darwin" else "edge",
-        help="SSO browser (default: Chrome on macOS, Edge on Windows).",
+        default="chrome",
+        help="SSO browser (default: Chrome; Edge is an explicit fallback).",
     )
     parser.add_argument(
         "--fresh-login",

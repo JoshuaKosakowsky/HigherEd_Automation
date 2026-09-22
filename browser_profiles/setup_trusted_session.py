@@ -29,8 +29,8 @@ class TrustedSessionSystem:
     profile_factory: Callable[[str], BrowserProfile]
 
 
-# Add new trusted-session websites here. Each entry supplies the URL opened
-# for login and the function that returns its persistent browser profile.
+# Add new trusted-session websites here. Profile factories must delegate to the
+# shared resolver so all automation using one browser channel shares one profile.
 TRUSTED_SESSION_SYSTEMS: dict[str, TrustedSessionSystem] = {
     "Mines": TrustedSessionSystem(
         login_url=MINES_URL,
@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--browser",
-        default="edge",
+        default="chrome",
         choices=["edge", "chrome"],
         help="Browser profile to use.",
     )

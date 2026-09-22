@@ -68,9 +68,11 @@ The integrated workflows are:
 
 Active app administrators have a **Connections** page. TEST is selected by
 default; choose TEST or PROD explicitly and click
-**Connect and sign in**. Sign in to MyMines in the temporary browser, open the
+**Connect and sign in**. Sign in to MyMines in the dedicated automation browser, open the
 selected environment's Experience address shown on the page in that same window,
-and launch its Insights reporting application. The browser closes after handoff or timeout; the GUI then shows
+and launch its Insights reporting application. The browser closes after handoff
+or timeout, retains persistent SSO state locally when the identity provider
+allows it, and the GUI then shows
 the actual result. The check runs only `connection_check.sql` (`SELECT 1`), not
 the student sample query, and does not export files.
 
@@ -101,6 +103,16 @@ they do not repeat configuration. **Check connection** never opens a browser.
 **Sign in again** revokes/replaces the selected cached session. **Sign out**
 revokes the selected API session, not the MyMines browser session. Status text
 is a timestamped last check, not a guarantee that a session is still valid.
+
+TEST and PROD use the same persistent automation-browser profile, as do the
+repository's Banner and MyMines browser helpers when they use the same channel.
+On Windows Chrome it is stored under
+`%LOCALAPPDATA%\HigherEdAutomation\Playwright\Shared_Chrome`, outside the
+repository and normal OneDrive project folder. It may contain SSO cookies and
+local storage and must never be copied, synchronized, committed, or shared.
+Only one automation browser window may use it at a time. Chrome is the default;
+Edge remains an explicit fallback with a separate profile. Signing out of the API connection does not erase browser
+cookies; use the identity provider's own sign-out for a full SSO logout.
 
 Access is rechecked before each connection action. PROD connection checks
 require confirmation. Connection operations reuse the background executor;

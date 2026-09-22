@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser",
         choices=["edge", "chrome"],
-        default="edge",
+        default="chrome",
         help="Browser used for Insights SSO when no daily session is cached.",
     )
     parser.add_argument("--fresh-login", action="store_true")

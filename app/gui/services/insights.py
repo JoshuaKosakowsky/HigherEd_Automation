@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from app.gui.models import WorkflowContext, WorkflowResult
@@ -47,7 +46,7 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                 _login_required()
         client, method = build_authenticated_client(
             settings,
-            browser="chrome" if sys.platform == "darwin" else "edge",
+            browser="chrome",
             force_login=action == "reconnect",
             acquire_session=_login_required if action == "check" else None,
         )

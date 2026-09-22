@@ -5,6 +5,7 @@ import os
 from time import monotonic
 from urllib.parse import parse_qs, urlsplit
 
+from shared.browser_profile import get_automation_browser_profile
 from shared.insights.auth import exchange_sso_jwt
 from shared.insights.config import InsightsSettings
 
@@ -16,7 +17,7 @@ class InsightsBrowserAuthenticationError(RuntimeError):
 def login_and_exchange_sso(
     settings: InsightsSettings,
     *,
-    browser: str = "edge",
+    browser: str = "chrome",
     timeout_seconds: int = 300,
 ) -> str:
     """Capture the approved SSO handoff and return a Metabase session.
@@ -42,16 +43,13 @@ def login_and_exchange_sso(
 def capture_sso_jwt(
     base_url: str,
     *,
-    browser: str = "edge",
+    browser: str = "chrome",
     timeout_seconds: int = 300,
     sso_start_url: str | None = None,
 ) -> str:
     browser = browser.strip().lower()
 
-    try:
-        channel = {"edge": "msedge", "chrome": "chrome"}[browser]
-    except KeyError as error:
-        raise ValueError("browser must be 'edge' or 'chrome'") from error
+    profile = get_automation_browser_profile(browser)
 
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
@@ -63,6 +61,7 @@ def capture_sso_jwt(
         )
 
     captured: list[str] = []
+    profile.profile_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -77,14 +76,13 @@ def capture_sso_jwt(
     stage = "opening Chrome/Edge"
     try:
         with sync_playwright() as playwright:
-            browser_instance = playwright.chromium.launch(
-                channel=channel,
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile.profile_dir),
+                channel=profile.channel,
                 headless=False,
                 args=["--window-position=40,40", "--window-size=1200,850"],
                 env={k: v for k, v in os.environ.items()
                      if k not in {"DEBUG", "PWDEBUG", "SSLKEYLOGFILE"}},
-            )
-            context = browser_instance.new_context(
                 accept_downloads=False,
                 service_workers="block",
             )
@@ -140,12 +138,13 @@ def capture_sso_jwt(
                     except PlaywrightTimeoutError:
                         pass
             finally:
-                browser_instance.close()
+                context.close()
     except PlaywrightError:
         if not captured:
             raise InsightsBrowserAuthenticationError(
                 f"The browser stopped while {stage}. No SSO JWT "
-                "was cached by the automation."
+                "was cached by the automation. Close any other automation "
+                "browser window in case the shared profile is already in use."
             ) from None
 
     if not captured:

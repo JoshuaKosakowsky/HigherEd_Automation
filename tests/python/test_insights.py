@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -184,12 +185,11 @@ class InsightsAuthenticationTests(unittest.TestCase):
 class InsightsBrowserAuthenticationTests(unittest.TestCase):
     def test_portal_entry_keeps_capture_scoped_to_insights(self) -> None:
         # Fake the browser dependency: no live credentials or browser required.
-        browser = MagicMock()
-        context = browser.new_context.return_value
+        context = MagicMock()
         page = context.new_page.return_value
         context.pages = [page]
         playwright = MagicMock()
-        playwright.chromium.launch.return_value = browser
+        playwright.chromium.launch_persistent_context.return_value = context
         manager = MagicMock()
         manager.__enter__.return_value = playwright
         module = SimpleNamespace(
@@ -205,20 +205,26 @@ class InsightsBrowserAuthenticationTests(unittest.TestCase):
             ))
         # Simulate the handoff from another tab after the starting page loads.
         context.wait_for_event.side_effect = handoff
-        with (
-            patch.dict("sys.modules", {"playwright.sync_api": module}),
-            patch.dict("os.environ", {"DEBUG": "", "PWDEBUG": "", "SSLKEYLOGFILE": ""}),
-            patch("builtins.print"),
-        ):
-            token = capture_sso_jwt(
-                "https://test.example.edu", browser="chrome",
-                sso_start_url="https://portal.example.edu/app/UserHome",
-            )
+        with tempfile.TemporaryDirectory() as directory:
+            profile = SimpleNamespace(channel="chrome", profile_dir=Path(directory) / "profile")
+            with (
+                patch.dict("sys.modules", {"playwright.sync_api": module}),
+                patch.dict("os.environ", {"DEBUG": "", "PWDEBUG": "", "SSLKEYLOGFILE": ""}),
+                patch("shared.insights.browser_auth.get_automation_browser_profile", return_value=profile),
+                patch("builtins.print"),
+            ):
+                token = capture_sso_jwt(
+                    "https://test.example.edu", browser="chrome",
+                    sso_start_url="https://portal.example.edu/app/UserHome",
+                )
         self.assertEqual(token, "synthetic")
+        launch = playwright.chromium.launch_persistent_context
+        self.assertEqual(launch.call_args.kwargs["user_data_dir"], str(profile.profile_dir))
+        self.assertEqual(launch.call_args.kwargs["channel"], "chrome")
         self.assertEqual(page.goto.call_args.args[0], "https://portal.example.edu/app/UserHome")
         page.get_by_text.assert_not_called()
         context.on.assert_called_once()
-        browser.close.assert_called_once()
+        context.close.assert_called_once()
 
     def test_extracts_post_handoff_and_rejects_ambiguous_tokens(self) -> None:
         base = "https://insights.example.edu"

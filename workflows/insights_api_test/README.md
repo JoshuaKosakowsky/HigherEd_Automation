@@ -23,12 +23,12 @@ For Mines portal-first sign-in, set:
 INSIGHTS_TEST_SSO_START_URL=https://my.mines.edu/app/UserHome
 ```
 
-In the opened browser, sign in to MyMines normally. Follow your usual route to
+In the opened dedicated automation browser, sign in to MyMines normally. Follow your usual route to
 Experience TEST (`https://experience-test.elluciancloud.com/comtemp`), then open
 Insights TEST. You can enter the Experience TEST URL in the same browser after
 signing in; new tabs opened there are also observed. Signing in through a
-different, already-open browser window does not authenticate this temporary
-context. The helper waits up to five minutes.
+different, already-open personal browser window does not authenticate the
+automation profile. The helper waits up to five minutes.
 
 The starting URL is separate from `INSIGHTS_TEST_BASE_URL`, which must remain
 the Insights API host, not MyMines or Experience. Capture still accepts a JWT
@@ -40,8 +40,8 @@ URL blank preserves the direct Insights `/auth/login` behavior.
 
 If no API key is configured for the selected environment, the workflow reuses a
 validated same-day Metabase session from Windows Credential Manager (Windows)
-or Keychain (macOS). When no valid session exists, it opens a temporary browser
-context (Edge on Windows, Chrome on macOS) and waits for the user
+or Keychain (macOS). When no valid session exists, it opens a dedicated,
+persistent Chrome automation profile on Windows and macOS and waits for the user
 to complete the normal Ellucian SSO/2FA flow. The automation captures only the
 JWT handoff to the configured Insights origin and exchanges the JWT in memory
 for a Metabase session. The ordinary browser SSO request is not intercepted or
@@ -50,12 +50,21 @@ tenant accepts that JWT for a subsequent session exchange must be tested live.
 It does not enumerate or
 export browser cookies, local storage, passwords, or browsing history.
 
-The browser context is nonpersistent and closes after capture or failure. No
-browser state, HAR, trace, screenshot, or JWT is intentionally saved by this
-integration. This does not guarantee forensic erasure from OS memory or
-temporary storage. DEBUG, PWDEBUG, and SSLKEYLOGFILE must be unset to prevent
-diagnostic credential exposure. Earlier versions used a persistent profile;
-this implementation does not reuse or remove any such existing profile.
+The browser window closes after capture or failure, but its machine-local
+profile persists local storage and persistent SSO cookies so the identity
+provider can recognize the employee/device later. Session-only cookies still
+end when the browser closes. No HAR, trace, screenshot, or JWT is
+intentionally saved. DEBUG, PWDEBUG, and SSLKEYLOGFILE must be unset to prevent
+diagnostic credential exposure.
+
+All repository Playwright helpers using the same browser channel share one
+profile. Windows Chrome uses
+`%LOCALAPPDATA%\HigherEdAutomation\Playwright\Shared_Chrome`; macOS Chrome uses
+`~/Library/Application Support/HigherEdAutomation/Playwright/Shared_Chrome`.
+The profile is outside the repository and normal OneDrive project folder.
+Edge remains an explicit fallback with a separate profile. Only one automation browser may use a profile at a
+time. Never copy, sync, commit, or share it. Old system-specific profiles are
+not imported or deleted automatically.
 
 Only the resulting Metabase session is placed in the native OS credential vault.
 Windows credentials use local-machine persistence, not enterprise roaming.
@@ -133,7 +142,8 @@ run on macOS. Use `--logout` when finished on the Mac. A failed revocation keeps
 the cache entry available for a later retry. When switching to an API key, run
 `--logout` explicitly to remove a previously cached session; API-key mode does
 not read or modify the session vault. No request follows HTTP redirects with
-API credentials.
+API credentials. `--logout` revokes the Insights API session but does not clear
+SSO cookies from the shared browser profile.
 
 The workflow reports only the authentication method, principal ID,
 administrator status, version, accessible database count, configured database

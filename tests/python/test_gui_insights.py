@@ -101,6 +101,7 @@ class InsightsConnectionServiceTests(unittest.TestCase):
             result = self.run_action("connect")
         self.assertTrue(result.success)
         self.assertEqual(build.call_args.args[0].environment, "TEST")
+        self.assertEqual(build.call_args.kwargs["browser"], "chrome")
         self.assertFalse(build.call_args.kwargs["force_login"])
         self.assertEqual(client.run_sql_file.call_args.args[0].name, "connection_check.sql")
         client.__exit__.assert_called_once()

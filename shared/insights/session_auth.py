@@ -19,7 +19,7 @@ class InsightsSessionError(RuntimeError):
 def build_authenticated_client(
     settings: InsightsSettings,
     *,
-    browser: str = "edge",
+    browser: str = "chrome",
     force_login: bool = False,
     cache: DailyInsightsSessionCache | None = None,
     acquire_session: Callable[[], str] | None = None,

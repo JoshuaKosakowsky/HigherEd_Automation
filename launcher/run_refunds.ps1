@@ -16,7 +16,7 @@ param(
     [switch]$Resume,
     [switch]$Offline,
     [ValidateSet("edge", "chrome")]
-    [string]$Browser = "edge",
+    [string]$Browser = "chrome",
     [switch]$FreshLogin
 )
 

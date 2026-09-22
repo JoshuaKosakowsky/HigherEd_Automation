@@ -124,26 +124,46 @@ in [workflows/report_filing/README.md](workflows/report_filing/README.md).
 
 ## Trusted browser sessions
 
-Mines and Banner can use saved browser sessions so you do not have to complete
-2FA every time.
+Repository Playwright automation uses one persistent, machine-local profile per
+browser channel. On Windows, Chrome automation—including Insights TEST, Insights
+PROD, MyMines, and Banner—shares:
+
+```text
+%LOCALAPPDATA%\HigherEdAutomation\Playwright\Shared_Chrome
+```
+
+This lets the identity provider retain persistent recognition of the
+employee/device between runs when its policy permits. Session-only cookies
+still expire when the browser closes. API sessions remain separated by environment in Windows
+Credential Manager. Chrome is the default on Windows and macOS. Edge remains
+available as an explicit fallback and uses a different profile;
+sharing one Chromium data directory between browser products can corrupt it.
 
 For Banner, run:
 
 ```powershell
-.\powershell\credentials\setup_trusted_session.ps1 -System Banner -Browser edge
+.\powershell\credentials\setup_trusted_session.ps1 -System Banner -Browser chrome
 ```
 
 For Mines, run:
 
 ```powershell
-.\powershell\credentials\setup_trusted_session.ps1 -System Mines -Browser edge
+.\powershell\credentials\setup_trusted_session.ps1 -System Mines -Browser chrome
 ```
 
-A browser window will open. Log in normally, complete 2FA, and select
-**remember this device** if prompted. When login is complete, return to
-PowerShell and press Enter.
+A browser window will open using the same Chrome automation profile for either
+command. Log in normally, complete 2FA, and select **remember this device** if
+prompted. When login is complete, return to PowerShell and press Enter. An
+Insights **Connect and sign in** flow also initializes this profile, so a
+separate setup command is not required merely to use Insights.
 
-Never copy or commit the browser-profile folders to this repository.
+Only one automation browser can use a profile at a time. Close any existing
+automation browser window before starting another workflow. The profile may
+contain SSO cookies and local storage: never copy it, synchronize it through
+OneDrive, commit it, or share it. **Sign out** on the Insights Connections page
+revokes its API session but does not erase browser cookies. Previous
+`Playwright_Profiles\Banner_*` and `Playwright_Profiles\mines_*` directories are
+not imported or deleted automatically.
 
 ## Troubleshooting
 

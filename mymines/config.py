@@ -1,36 +1,11 @@
-from dataclasses import dataclass
-from pathlib import Path
+from shared.browser_profile import (
+    AutomationBrowserProfile,
+    get_automation_browser_profile,
+)
 
 
 MINES_URL = "https://my.mines.edu/"
 
-@dataclass(frozen=True)
-class BrowserProfile:
-    channel: str
-    profile_dir: Path
-
-
-def get_mines_profile(browser: str = "edge") -> BrowserProfile:
-    browser = browser.lower().strip()
-
-    if browser == "edge":
-        return BrowserProfile(
-            channel="msedge",
-            profile_dir=Path.home()
-            / "AppData"
-            / "Local"
-            / "Playwright_Profiles"
-            / "mines_Edge",
-        )
-
-    if browser == "chrome":
-        return BrowserProfile(
-            channel="chrome",
-            profile_dir=Path.home()
-            / "AppData"
-            / "Local"
-            / "Playwright_Profiles"
-            / "mines_Chrome",
-        )
-
-    raise ValueError("browser must be 'edge' or 'chrome'")
+def get_mines_profile(browser: str = "chrome") -> AutomationBrowserProfile:
+    """Return the shared local automation profile for MyMines."""
+    return get_automation_browser_profile(browser)
