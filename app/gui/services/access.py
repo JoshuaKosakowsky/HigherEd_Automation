@@ -431,7 +431,10 @@ def filter_workflows_for_view(
     if WORKFLOW_WILDCARD in allowed_ids:
         return tuple(d for d in definitions if not d.administrator_only or view.casefold() == ADMINISTRATOR_VIEW)
     registered_ids = {definition.workflow_id for definition in definitions}
-    unknown_ids = allowed_ids - registered_ids
+    # Older policies may still contain the retired separate SQL card. It never
+    # granted non-administrators SQL access, and the consolidated card keeps the
+    # manual workflow ID so existing staff permissions remain intact.
+    unknown_ids = allowed_ids - registered_ids - {"textbook_recon_sql"}
     if unknown_ids:
         raise AccessConfigurationError(
             "GUI access refers to unknown workflows: " + ", ".join(sorted(unknown_ids))

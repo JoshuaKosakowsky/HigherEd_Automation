@@ -11,8 +11,8 @@ from openpyxl import Workbook, load_workbook
 
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowMode, WorkflowResult
 from app.gui.services.access import AccessConfiguration, filter_workflows_for_view
-from app.gui.services.textbook_recon import _normalized_banner, _render_sql, run_sql_recon
-from app.gui.workflow_registry import get_workflow
+from app.gui.services.textbook_recon import _normalized_banner, _render_sql, run_recon
+from app.gui.workflow_registry import get_workflow, get_workflows
 from data_processing.textbook_brokers.recon import (
     BLUE_HEADER, BLUE_TAB_DARK, BLUE_TAB_LIGHT, GREEN_HEADER,
     GREEN_TAB_DARK, GREEN_TAB_LIGHT, _banner_rows, _broker_rows,
@@ -124,6 +124,9 @@ class TextbookReconTests(unittest.TestCase):
     def test_recon_does_not_request_template(self) -> None:
         definition = get_workflow("textbook_recon_manual")
         self.assertNotIn("template_file", [item.key for item in definition.parameters])
+        self.assertEqual(definition.name, "Textbook Recon")
+        self.assertEqual([item.workflow_id for item in get_workflows()
+                          if item.name.startswith("Textbook Recon")], ["textbook_recon_manual"])
 
     def test_sql_month_is_bounded(self) -> None:
         sql = _render_sql("2026-12")
@@ -158,17 +161,31 @@ class TextbookReconTests(unittest.TestCase):
         )
         self.assertEqual(len(filter_workflows_for_view(workflows, policy, "administrator")), 2)
 
-    def test_sql_route_accepts_only_production_mode(self) -> None:
+    def test_legacy_sql_card_grant_does_not_break_home_page(self) -> None:
+        policy = AccessConfiguration({}, {
+            "administrator": frozenset({"*"}),
+            "analyst": frozenset({"textbook_recon_manual", "textbook_recon_sql"}),
+        })
         self.assertEqual(
-            get_workflow("textbook_recon_sql").supported_modes,
-            (WorkflowMode.PRODUCTION,),
+            [item.name for item in filter_workflows_for_view(get_workflows(), policy, "analyst")],
+            ["Textbook Recon"],
         )
+
+    def test_sql_choice_accepts_only_production_mode(self) -> None:
         policy = SimpleNamespace(is_administrator=lambda login: True)
         with patch("app.gui.services.textbook_recon.get_shared_gui_access_path", return_value=self.root / "access.json"), \
              patch("app.gui.services.textbook_recon.load_access_configuration", return_value=policy), \
              patch("app.gui.services.textbook_recon.get_current_login", return_value="admin"):
             with self.assertRaisesRegex(ValueError, "PROD Insights"):
-                run_sql_recon(WorkflowContext("textbook_recon_sql", {}, WorkflowMode.TEST))
+                run_recon(WorkflowContext("textbook_recon_manual", {"banner_source": "sql"}, WorkflowMode.TEST))
+
+    def test_nonadmin_sql_choice_is_rechecked_by_runner(self) -> None:
+        policy = SimpleNamespace(is_administrator=lambda login: False)
+        with patch("app.gui.services.textbook_recon.get_shared_gui_access_path", return_value=self.root / "access.json"), \
+             patch("app.gui.services.textbook_recon.load_access_configuration", return_value=policy), \
+             patch("app.gui.services.textbook_recon.get_current_login", return_value="staff"):
+            with self.assertRaisesRegex(ValueError, "Only an administrator"):
+                run_recon(WorkflowContext("textbook_recon_manual", {"banner_source": "sql"}, WorkflowMode.PRODUCTION))
 
 
 if __name__ == "__main__":

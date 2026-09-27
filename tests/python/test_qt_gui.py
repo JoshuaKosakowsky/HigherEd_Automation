@@ -92,6 +92,41 @@ class QtGuiTests(unittest.TestCase):
         window.current_page.search.setText("Refund")
         self.assertEqual(sum(not card.isHidden() for card, _ in window.current_page.cards), 1)
 
+    def test_recon_has_one_card_and_admin_can_choose_sql(self):
+        window = self.open_app()
+        self.assertEqual(sum(item.name == "Textbook Recon" for item in window.visible_workflows), 1)
+        window.show_workflow(get_workflow("textbook_recon_manual"))
+        page = window.current_page
+        self.assertEqual(page.recon_source.count(), 2)
+        self.assertEqual(page.recon_source.currentData(), "manual")
+        broker = self.root / "brokers.xlsx"
+        broker.touch()
+        page.inputs["brokers_file"].setText(str(broker))
+        page.inputs["frst_file"].setText(str(self.root / "not-present.xlsx"))
+        page.recon_source.setCurrentIndex(page.recon_source.findData("sql"))
+        self.assertTrue(page.inputs["frst_file"].isHidden())
+        self.assertTrue(page.inputs["book_file"].isHidden())
+        self.assertTrue(page.production_warning.isVisible())
+        captured = []
+        with patch.object(page, "_confirm", side_effect=lambda context: captured.append(context) or False):
+            page._run()
+        self.assertEqual(captured[0].mode, WorkflowMode.PRODUCTION)
+        self.assertEqual(captured[0].parameters["banner_source"], "sql")
+        self.assertNotIn("frst_file", captured[0].parameters)
+
+    def test_staff_recon_offers_only_manual_files(self):
+        self.payload["views"]["analyst"]["workflows"] = ["textbook_recon_manual"]
+        self.write_policy()
+        window = self.open_app("STAFF")
+        self.assertEqual([item.name for item in window.visible_workflows], ["Textbook Recon"])
+        window.show_workflow(window.visible_workflows[0])
+        page = window.current_page
+        self.assertEqual(page.recon_source.count(), 1)
+        self.assertEqual(page.recon_source.currentData(), "manual")
+        self.assertFalse(page.inputs["frst_file"].isHidden())
+        self.assertFalse(page.inputs["book_file"].isHidden())
+        self.assertTrue(page.production_warning.isHidden())
+
     def test_staff_view_and_missing_policy_fail_closed(self):
         window = self.open_app("STAFF")
         self.assertTrue(window.access_button.isHidden())

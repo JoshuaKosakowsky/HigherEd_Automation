@@ -232,6 +232,8 @@ class AutomationApplication(QMainWindow):
         page = WorkflowDetailPage(
             self.content, definition, self.executor, self.show_home,
             authorize=lambda: self._authorize_workflow(definition),
+            is_administrator=bool(self.access_configuration and
+                                  self.access_configuration.is_administrator(self.user_login)),
         )
         page.busy_changed.connect(self._set_busy)
         self._show(page)

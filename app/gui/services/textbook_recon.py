@@ -49,6 +49,8 @@ FIELD_NAMES = {
     "'Due Date'": "tbraccd_due_date",
     "'Activity Date'": "tbraccd_activity_date",
 }
+MANUAL_SOURCE = "manual"
+SQL_SOURCE = "sql"
 
 
 def _month_bounds(text: str) -> tuple[date, date]:
@@ -154,3 +156,13 @@ def run_sql_recon(context: WorkflowContext) -> WorkflowResult:
             inputs[code] = path
         counts = build_recon(brokers=brokers, frst=inputs["FRST"], book=inputs["BOOK"], output=output, month=month)
     return WorkflowResult(True, f"Created {month} recon from Insights ({counts['IA']} IA and {counts['FA']} FA student IDs). Open in Excel to refresh the PivotTables.", output)
+
+
+def run_recon(context: WorkflowContext) -> WorkflowResult:
+    """Dispatch the single GUI workflow after validating its Banner source."""
+    source = context.parameters.get("banner_source")
+    if source == MANUAL_SOURCE:
+        return run_manual_recon(context)
+    if source == SQL_SOURCE:
+        return run_sql_recon(context)
+    raise ValueError("Choose how to get the Banner FRST and BOOK transactions.")

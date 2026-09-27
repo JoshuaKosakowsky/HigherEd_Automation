@@ -17,6 +17,7 @@ from app.gui.models import ParameterKind, WorkflowContext, WorkflowDefinition, W
 from app.gui.services.drag_drop import FileInput
 from app.gui.services.execution import WorkflowExecutor
 from app.gui.services.parameters import parse_parameters
+from app.gui.services.textbook_recon import MANUAL_SOURCE, SQL_SOURCE
 from app.gui.services.system import open_path
 from app.gui.theme import button, card, label
 
@@ -27,6 +28,7 @@ class WorkflowDetailPage(QScrollArea):
     def __init__(
         self, parent, definition: WorkflowDefinition, executor: WorkflowExecutor,
         go_home: Callable[[], None], authorize: Callable[[], bool] | None = None,
+        is_administrator: bool = False,
     ) -> None:
         super().__init__(parent)
         self.definition = definition
@@ -35,6 +37,8 @@ class WorkflowDetailPage(QScrollArea):
         self.result_queue = None
         self.output_path: Path | None = None
         self.inputs = {}
+        self.manual_banner_widgets = []
+        self.recon_source = None
         self.setWidgetResizable(True)
         body = QWidget()
         body.setObjectName("page")
@@ -75,9 +79,23 @@ class WorkflowDetailPage(QScrollArea):
             control.setAccessibleName(parameter.label)
             self.inputs[parameter.key] = control
             form_layout.addWidget(control)
+            if parameter.key in ("frst_file", "book_file") and definition.workflow_id == "textbook_recon_manual":
+                self.manual_banner_widgets.extend((field_label, control))
             if parameter.help_text:
-                form_layout.addWidget(label(parameter.help_text, "muted"))
+                help_label = label(parameter.help_text, "muted")
+                form_layout.addWidget(help_label)
+                if parameter.key in ("frst_file", "book_file") and definition.workflow_id == "textbook_recon_manual":
+                    self.manual_banner_widgets.append(help_label)
             form_layout.addSpacing(8)
+            if parameter.key == "brokers_file" and definition.workflow_id == "textbook_recon_manual":
+                form_layout.addWidget(label("Banner data source", "field"))
+                self.recon_source = QComboBox()
+                self.recon_source.setAccessibleName("Banner data source")
+                self.recon_source.addItem("Upload BOOK/FRST files manually", MANUAL_SOURCE)
+                if is_administrator:
+                    self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
+                form_layout.addWidget(self.recon_source)
+                form_layout.addSpacing(8)
         self.mode = QComboBox()
         for mode in definition.supported_modes:
             self.mode.addItem("Test" if mode == WorkflowMode.TEST else "Production", mode.value)
@@ -90,6 +108,9 @@ class WorkflowDetailPage(QScrollArea):
         self.production_warning = label(definition.production_warning, "warning")
         form_layout.addWidget(self.production_warning)
         self.mode.currentIndexChanged.connect(self._update_production_warning)
+        if self.recon_source is not None:
+            self.recon_source.currentIndexChanged.connect(self._update_recon_source)
+            self._update_recon_source()
         self._update_production_warning()
         layout.addWidget(self.form)
         self.error = label("", "error")
@@ -122,14 +143,32 @@ class WorkflowDetailPage(QScrollArea):
         self.timer.timeout.connect(self._poll_result)
 
     def _update_production_warning(self) -> None:
-        self.production_warning.setVisible(self.mode.currentData() == WorkflowMode.PRODUCTION.value)
+        self.production_warning.setVisible(
+            self.mode.currentData() == WorkflowMode.PRODUCTION.value or
+            (self.recon_source is not None and self.recon_source.currentData() == SQL_SOURCE)
+        )
+
+    def _update_recon_source(self) -> None:
+        manual = self.recon_source.currentData() == MANUAL_SOURCE
+        for widget in self.manual_banner_widgets:
+            widget.setVisible(manual)
+        self._update_production_warning()
 
     def _parse_parameters(self) -> dict:
         values = {
             key: control.toPlainText() if isinstance(control, QPlainTextEdit) else control.text()
             for key, control in self.inputs.items()
         }
-        return parse_parameters(self.definition.parameters, values)
+        definitions = self.definition.parameters
+        if self.recon_source is not None:
+            source = self.recon_source.currentData()
+            if source == SQL_SOURCE:
+                definitions = tuple(parameter for parameter in definitions
+                                    if parameter.key not in ("frst_file", "book_file"))
+            parsed = parse_parameters(definitions, values)
+            parsed["banner_source"] = source
+            return parsed
+        return parse_parameters(definitions, values)
 
     def _confirm(self, context: WorkflowContext) -> bool:
         dialog = QDialog(self)
@@ -144,7 +183,12 @@ class WorkflowDetailPage(QScrollArea):
         summary = QWidget()
         form = QFormLayout(summary)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        if self.recon_source is not None:
+            source_label = "Run SQL from PROD Insights" if context.parameters["banner_source"] == SQL_SOURCE else "Upload BOOK/FRST files manually"
+            form.addRow(label("Banner data source", "field"), label(source_label))
         for parameter in self.definition.parameters:
+            if parameter.key not in context.parameters:
+                continue
             value = context.parameters[parameter.key]
             text = "\n".join(str(item) for item in value) if isinstance(value, tuple) else str(value)
             form.addRow(label(parameter.label, "field"), label(text))
@@ -179,7 +223,9 @@ class WorkflowDetailPage(QScrollArea):
             self.ensureWidgetVisible(self.error)
             return
         value = self.mode.currentData()
-        context = WorkflowContext(self.definition.workflow_id, parameters, WorkflowMode(value) if value else None)
+        mode = (WorkflowMode.PRODUCTION if parameters.get("banner_source") == SQL_SOURCE else
+                WorkflowMode(value) if value else None)
+        context = WorkflowContext(self.definition.workflow_id, parameters, mode)
         if not self._confirm(context) or not self.authorize():
             return
         try:
