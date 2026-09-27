@@ -52,6 +52,9 @@ def parse_parameters(
             raise ValueError(f"{parameter.label} is required.")
 
         if parameter.kind in {ParameterKind.INPUT_FILE, ParameterKind.OUTPUT_FILE}:
+            if not raw_value and not parameter.required:
+                parsed[parameter.key] = None
+                continue
             path = Path(raw_value.strip('"')).expanduser()
             if parameter.kind == ParameterKind.INPUT_FILE and not path.is_file():
                 raise ValueError(f"{parameter.label} was not found.")

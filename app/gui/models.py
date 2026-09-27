@@ -70,6 +70,7 @@ class WorkflowDefinition:
     production_warning: str = (
         "This process will create or transmit production output."
     )
+    administrator_only: bool = False
 
     @property
     def default_mode(self) -> WorkflowMode | None:

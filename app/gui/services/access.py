@@ -429,11 +429,15 @@ def filter_workflows_for_view(
     if allowed_ids is None:
         return ()
     if WORKFLOW_WILDCARD in allowed_ids:
-        return definitions
+        return tuple(d for d in definitions if not d.administrator_only or view.casefold() == ADMINISTRATOR_VIEW)
     registered_ids = {definition.workflow_id for definition in definitions}
     unknown_ids = allowed_ids - registered_ids
     if unknown_ids:
         raise AccessConfigurationError(
             "GUI access refers to unknown workflows: " + ", ".join(sorted(unknown_ids))
         )
-    return tuple(d for d in definitions if d.workflow_id in allowed_ids)
+    return tuple(
+        d for d in definitions
+        if d.workflow_id in allowed_ids
+        and (not d.administrator_only or view.casefold() == ADMINISTRATOR_VIEW)
+    )

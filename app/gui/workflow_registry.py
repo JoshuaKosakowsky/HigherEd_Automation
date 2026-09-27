@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 from data_processing.population_testing.config import (
@@ -12,16 +12,31 @@ from data_processing.population_testing.config import (
     DEFAULT_STAFF_NAMES,
 )
 
-from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition
+from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
 from app.gui.services.report_watcher import run_setup_report_watcher
 from app.gui.services.textbook_brokers import run_textbook_brokers
+from app.gui.services.textbook_recon import run_manual_recon, run_sql_recon
 from shared.banner.term import get_banner_term
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CURRENT_TERM = get_banner_term()
+LAST_MONTH = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+RECON_INPUTS = (
+    ParameterDefinition(
+        key="brokers_file", label="Textbook Brokers workbook", kind=ParameterKind.INPUT_FILE,
+        file_types=(("Excel workbook", "*.xlsx"),),
+        help_text="Select the monthly workbook containing IA Charge Report and FA Charge Report.",
+    ),
+    ParameterDefinition(
+        key="output_file", label="Save recon as", kind=ParameterKind.OUTPUT_FILE,
+        default=PROJECT_ROOT / "data" / "textbook_brokers" / f"{LAST_MONTH} TBB Recon.xlsx",
+        file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
+        help_text="A new workbook is created. Existing files are never overwritten.",
+    ),
+)
 
 
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
@@ -187,6 +202,41 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         ),
         category="Cashier Tools",
         runner=run_setup_report_watcher,
+    ),
+    WorkflowDefinition(
+        workflow_id="textbook_recon_manual", name="Textbook Recon — Upload Files Manually",
+        description="Match the Brokers workbook to manually exported FRST and BOOK transactions.",
+        category="Accounts Receivable", runner=run_manual_recon,
+        parameters=RECON_INPUTS + (
+            ParameterDefinition(
+                key="recon_month", label="Feed month (YYYY-MM)", kind=ParameterKind.TEXT,
+                default=LAST_MONTH, help_text="Banner extracts must have Feed Dates in this month.",
+            ),
+            ParameterDefinition(
+                key="frst_file", label="FRST extract", kind=ParameterKind.INPUT_FILE,
+                required=False, file_types=(("Excel or CSV", "*.xlsx *.csv"),),
+                help_text="Leave blank if the month has no FRST transactions.",
+            ),
+            ParameterDefinition(
+                key="book_file", label="BOOK extract", kind=ParameterKind.INPUT_FILE,
+                required=False, file_types=(("Excel or CSV", "*.xlsx *.csv"),),
+                help_text="Leave blank if the month has no BOOK transactions.",
+            ),
+        ),
+    ),
+    WorkflowDefinition(
+        workflow_id="textbook_recon_sql", name="Textbook Recon — Run SQL",
+        description="Run the previous-month FRST and BOOK extract through Insights and reconcile it to a Brokers workbook.",
+        category="Accounts Receivable", runner=run_sql_recon,
+        administrator_only=True,
+        supported_modes=(WorkflowMode.PRODUCTION,),
+        production_warning="This reads production student account transactions from Insights and saves a recon workbook.",
+        parameters=RECON_INPUTS + (
+            ParameterDefinition(
+                key="recon_month", label="Feed month (YYYY-MM)", kind=ParameterKind.TEXT,
+                default=LAST_MONTH, help_text="Transactions with feed dates in this calendar month are included.",
+            ),
+        ),
     ),
 )
 

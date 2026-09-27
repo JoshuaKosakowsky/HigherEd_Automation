@@ -61,6 +61,25 @@ The integrated workflows are:
   Banner upload or archive local or remote files. After the upload succeeds, run
   `archive-textbook-brokers -TermCode <the same term>` from PowerShell to perform
   the existing guarded archive step.
+- **Textbook Recon — Upload Files Manually**, using a monthly Brokers workbook
+  with `IA Charge Report` and `FA Charge Report` tabs, plus FRST and/or BOOK
+  exports. Choose the feed month. If the exports contain Feed Date, every row
+  must belong to that month. Leave one Banner file blank when that code has no
+  transactions; at least one extract is required.
+- **Textbook Recon — Run SQL**, available only to the administrator view. Choose
+  a feed month. This route uses the PROD Insights database and its existing credential
+  path to read FRST and BOOK transactions for that month. It stops if the API
+  truncates the result. Staff in other views can only be granted the manual
+  route.
+
+Both recon routes create the complete workbook, including four refreshable Excel PivotTables, directly in Python. No template file is needed.
+They group signed amounts by student ID, compare to the cent, and align the two
+sides with blank cells where an ID occurs on only one side. The recon tabs are
+sorted by name. Four native PivotTables remain in the workbook with old cache
+records removed in the output and refresh enabled when Excel opens it. Open the result in
+Excel to populate and refresh the pivot tabs; the recon rows themselves are
+populated before that refresh. The output path must be new. Student data stays in the selected
+output workbook and is not added to the repository.
 
 ## Workflow visibility
 
