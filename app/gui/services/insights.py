@@ -138,6 +138,8 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
             browser="chrome",
             force_login=action == "reconnect",
             acquire_session=_login_required if action == "check" else None,
+            experience_url=profile.experience_url,
+            use_saved_mines_login=True,
         )
         with client:
             if action == "query_export":

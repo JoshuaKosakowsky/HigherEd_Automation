@@ -23,6 +23,8 @@ def build_authenticated_client(
     force_login: bool = False,
     cache: DailyInsightsSessionCache | None = None,
     acquire_session: Callable[[], str] | None = None,
+    experience_url: str | None = None,
+    use_saved_mines_login: bool = False,
 ) -> tuple[InsightsClient, str]:
     """Build a client using an API key or a validated daily SSO session."""
 
@@ -88,7 +90,10 @@ def build_authenticated_client(
     session_token = (
         acquire_session()
         if acquire_session is not None
-        else login_and_exchange_sso(settings, browser=browser)
+        else login_and_exchange_sso(
+            settings, browser=browser, experience_url=experience_url,
+            use_saved_mines_login=use_saved_mines_login,
+        )
     )
     client = InsightsClient(
         settings.base_url,

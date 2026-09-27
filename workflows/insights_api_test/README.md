@@ -52,6 +52,11 @@ tenant accepts that JWT for a subsequent session exchange must be tested live.
 It does not enumerate or
 export browser cookies, local storage, passwords, or browsing history.
 
+The GUI Connections page additionally opens the selected Experience environment
+and launches Insights after MyMines sign-in, and can optionally autofill a
+separately saved MyMines login. The command-line workflow retains its manual
+browser navigation and does not use the saved MyMines password.
+
 The browser window closes after capture or failure, but its machine-local
 profile persists local storage and persistent SSO cookies so the identity
 provider can recognize the employee/device later. Session-only cookies still

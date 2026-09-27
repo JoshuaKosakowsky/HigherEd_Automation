@@ -16,7 +16,11 @@ from shared.insights.auth import (
     exchange_sso_jwt,
 )
 from shared.insights.client import InsightsAPIError, InsightsClient
-from shared.insights.browser_auth import _extract_sso_jwt, capture_sso_jwt
+from shared.insights.browser_auth import (
+    _extract_sso_jwt, _is_experience_page, _is_mines_dashboard,
+    _submit_mines_password, _submit_mines_username, capture_sso_jwt,
+)
+from mymines.credentials import MyMinesCredential, MyMinesCredentialStore, SERVICE, ENTRY
 from shared.insights.config import (
     InsightsConfigurationError,
     InsightsDepartmentProfile,
@@ -63,6 +67,92 @@ class MemoryCredentialStore:
 
     def delete_password(self, service: str, username: str) -> None:
         self.values.pop((service, username), None)
+
+
+class MyMinesCredentialTests(unittest.TestCase):
+    def test_stores_optional_login_only_in_native_store_interface(self) -> None:
+        backing = MemoryCredentialStore()
+        vault = MyMinesCredentialStore(backing)
+        self.assertIsNone(vault.load())
+        vault.save("  synthetic.user  ", "synthetic-password")
+        self.assertIn((SERVICE, ENTRY), backing.values)
+        loaded = vault.load()
+        self.assertEqual(loaded.username, "synthetic.user")
+        self.assertEqual(loaded.password, "synthetic-password")
+        self.assertNotIn("synthetic-password", repr(loaded))
+        vault.delete()
+        self.assertIsNone(vault.load())
+
+    def test_invalid_saved_login_does_not_expose_secret(self) -> None:
+        backing = MemoryCredentialStore()
+        backing.set_password(SERVICE, ENTRY, 'bad-secret')
+        with self.assertRaises(InsightsCredentialError) as error:
+            MyMinesCredentialStore(backing).load()
+        self.assertNotIn("bad-secret", str(error.exception))
+
+
+class MyMinesBrowserLoginTests(unittest.TestCase):
+    def test_autofill_is_bound_to_mines_origin_and_username_step(self) -> None:
+        credential = MyMinesCredential("synthetic.user", "synthetic-password")
+        page = MagicMock()
+        page.url = "https://attacker.example/login"
+        self.assertFalse(_submit_mines_username(page, credential))
+        page.locator.assert_not_called()
+        page.url = "https://my.mines.edu/idp/idx/identify"
+        username = page.locator.return_value
+        username.count.return_value = 1
+        username.is_visible.return_value = True
+        next_button = page.get_by_role.return_value
+        next_button.count.return_value = 1
+        self.assertTrue(_submit_mines_username(page, credential))
+        username.fill.assert_called_once_with("synthetic.user")
+        next_button.click.assert_called_once()
+
+    def test_password_requires_mines_origin(self) -> None:
+        credential = MyMinesCredential("synthetic.user", "synthetic-password")
+        page = MagicMock()
+        page.url = "https://evil.example/idp/idx/challenge"
+        self.assertFalse(_submit_mines_password(page, credential))
+        page.locator.assert_not_called()
+        page.url = "https://my.mines.edu/idp/idx/challenge"
+        password = page.locator.return_value
+        password.count.return_value = 1
+        password.is_visible.return_value = True
+        verify = page.get_by_role.return_value
+        verify.count.return_value = 1
+        verify.is_visible.return_value = True
+        self.assertTrue(_submit_mines_password(page, credential, username_confirmed=True))
+        password.fill.assert_called_once_with("synthetic-password")
+        verify.click.assert_called_once()
+
+    def test_remembered_password_step_requires_matching_account(self) -> None:
+        credential = MyMinesCredential("synthetic.user", "synthetic-password")
+        page = MagicMock()
+        page.url = "https://my.mines.edu/idp/idx/challenge"
+        page.locator.return_value.count.return_value = 1
+        page.locator.return_value.is_visible.return_value = True
+        page.get_by_role.return_value.count.return_value = 1
+        page.get_by_role.return_value.is_visible.return_value = True
+        account = page.get_by_text.return_value
+        account.count.return_value = 0
+        self.assertFalse(_submit_mines_password(page, credential))
+        page.locator.return_value.fill.assert_not_called()
+        account.count.return_value = 1
+        account.is_visible.return_value = True
+        self.assertTrue(_submit_mines_password(page, credential))
+        page.get_by_text.assert_called_with("synthetic.user", exact=True)
+
+    def test_dashboard_and_experience_require_exact_origins(self) -> None:
+        page = MagicMock()
+        page.url = "https://my.mines.edu/app/UserHome"
+        page.get_by_role.return_value.is_visible.return_value = True
+        self.assertTrue(_is_mines_dashboard(page))
+        page.url = "https://my.mines.edu.attacker.example/app/UserHome"
+        self.assertFalse(_is_mines_dashboard(page))
+        page.url = "https://experience-test.example.edu/comtemp/"
+        self.assertTrue(_is_experience_page(page, "https://experience-test.example.edu/comtemp"))
+        page.url = "https://experience-test.example.edu:8443/comtemp/"
+        self.assertFalse(_is_experience_page(page, "https://experience-test.example.edu/comtemp"))
 
 
 class FakeInsightsClient:
@@ -265,6 +355,68 @@ class InsightsBrowserAuthenticationTests(unittest.TestCase):
         context.on.assert_called_once()
         context.close.assert_called_once()
 
+    def test_dashboard_opens_selected_experience_and_launches_insights(self) -> None:
+        context = MagicMock()
+        page = context.new_page.return_value
+        context.pages = [page]
+        playwright = MagicMock()
+        playwright.chromium.launch_persistent_context.return_value = context
+        manager = MagicMock()
+        manager.__enter__.return_value = playwright
+        module = SimpleNamespace(
+            sync_playwright=lambda: manager, Error=RuntimeError, TimeoutError=TimeoutError,
+        )
+        experience = "https://experience-test.example.edu/comtemp"
+        # Origin checks are intentionally specific to the institution's portal.
+        portal = "https://my.mines.edu/app/UserHome"
+
+        def navigate(url, **kwargs):
+            page.url = url
+
+        page.goto.side_effect = navigate
+        dashboard_link = MagicMock()
+        dashboard_link.is_visible.return_value = True
+        launch = MagicMock()
+        launch.count.return_value = 1
+        launch.is_visible.return_value = True
+        reporting = MagicMock()
+        reporting.count.return_value = 1
+        reporting.is_visible.return_value = True
+
+        def role(_, name, **kwargs):
+            return {
+                "My Apps": dashboard_link,
+                "Reporting": reporting,
+                "LAUNCH REPORTS": launch,
+            }[name]
+
+        page.get_by_role.side_effect = role
+
+        def handoff(**kwargs):
+            callback = context.on.call_args.args[1]
+            callback(SimpleNamespace(
+                url="https://test.example.edu/auth/sso?jwt=synthetic", method="GET",
+                post_data=None,
+            ))
+
+        launch.click.side_effect = handoff
+        with tempfile.TemporaryDirectory() as directory:
+            profile = SimpleNamespace(channel="chrome", profile_dir=Path(directory) / "profile")
+            with (
+                patch.dict("sys.modules", {"playwright.sync_api": module}),
+                patch.dict("os.environ", {"DEBUG": "", "PWDEBUG": "", "SSLKEYLOGFILE": ""}),
+                patch("shared.insights.browser_auth.get_automation_browser_profile", return_value=profile),
+                patch("builtins.print"),
+            ):
+                token = capture_sso_jwt(
+                    "https://test.example.edu", sso_start_url=portal,
+                    experience_url=experience,
+                )
+        self.assertEqual(token, "synthetic")
+        self.assertEqual([call.args[0] for call in page.goto.call_args_list], [portal, experience])
+        reporting.click.assert_called_once()
+        launch.click.assert_called_once()
+
     def test_extracts_post_handoff_and_rejects_ambiguous_tokens(self) -> None:
         base = "https://insights.example.edu"
         self.assertEqual(_extract_sso_jwt(base + "/auth/sso", base, "jwt=synthetic"), "synthetic")
@@ -369,7 +521,7 @@ class InsightsSessionCacheTests(unittest.TestCase):
             delete_password=MagicMock(side_effect=DeleteError("private details")),
             errors=SimpleNamespace(PasswordDeleteError=DeleteError, KeyringError=DeleteError),
         )
-        with patch("shared.insights.session_cache._load_keyring", return_value=keyring):
+        with patch("shared.credentials._load_keyring", return_value=keyring):
             with patch.object(SystemCredentialStore, "get_password", return_value="synthetic"):
                 with self.assertRaises(InsightsCredentialError) as error:
                     SystemCredentialStore().delete_password("service", "user")

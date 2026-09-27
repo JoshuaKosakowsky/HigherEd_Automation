@@ -8,12 +8,17 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QFileDialog, QComboBox, QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFileDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+    QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QVBoxLayout, QWidget,
+)
 
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowMode
 from app.gui.services.execution import WorkflowExecutor
 from app.gui.services.insights import run_insights_connection
 from app.gui.theme import button, card, label
+from mymines.credentials import MyMinesCredentialStore
+from shared.credentials import CredentialStoreError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
 from shared.insights.query_catalog import QUERIES, get_query
 
@@ -53,6 +58,15 @@ class ConnectionsPage(QWidget):
         self.instructions = label("")
         self.instructions.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         controls.addWidget(self.instructions)
+        controls.addWidget(label("Optional MyMines autofill", "section"))
+        self.credential_status = label("", "muted")
+        controls.addWidget(self.credential_status)
+        credentials_row = QHBoxLayout()
+        self.save_login_button = button("Set or update saved login", self._save_mines_login)
+        self.remove_login_button = button("Remove saved login", self._remove_mines_login)
+        credentials_row.addWidget(self.save_login_button)
+        credentials_row.addWidget(self.remove_login_button)
+        controls.addLayout(credentials_row)
         row = QHBoxLayout()
         self.actions = {}
         for action, title in (
@@ -118,6 +132,17 @@ class ConnectionsPage(QWidget):
             control.setEnabled(profile is not None and self.result_queue is None)
         self.queries.setEnabled(profile is not None and self.result_queue is None)
         self.term.setEnabled(profile is not None and self.result_queue is None)
+        self.save_login_button.setEnabled(self.result_queue is None)
+        self.remove_login_button.setEnabled(self.result_queue is None)
+        try:
+            saved = MyMinesCredentialStore().load()
+        except CredentialStoreError:
+            self.credential_status.setText("The saved MyMines login could not be read. Update it to use autofill.")
+        else:
+            self.credential_status.setText(
+                f"Saved for {saved.username}. MFA stays with you."
+                if saved else "No MyMines login saved. You can still sign in manually."
+            )
         if profile is None:
             self.instructions.setText(self.config_error or (
                 f"{environment} is not configured for the department yet. "
@@ -125,14 +150,67 @@ class ConnectionsPage(QWidget):
             ))
         else:
             self.instructions.setText(
-                f"Connect opens MyMines. After signing in, open {profile.experience_url} "
-                f"in that same window, then launch Insights {environment}.\n\n"
+                f"Connect opens MyMines, then launches Insights {environment} "
+                f"through {profile.experience_url} after sign-in. Complete MFA "
+                "in the browser if prompted. If a page cannot be recognized, "
+                "you can finish navigation manually.\n\n"
                 "The dedicated automation browser closes after the handoff or a "
                 "five-minute timeout. Return here for the result. Its local profile "
                 "can retain persistent SSO recognition for future automation; the "
                 "API session is saved separately in your OS credential vault."
             )
         self.status_label.setText(self.statuses.get(environment, "Not checked in this view. No login is performed until you click Connect."))
+
+    def _save_mines_login(self) -> None:
+        if self.result_queue is not None or not self.authorize():
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save MyMines login")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label(
+            "Saved locally in Windows Credential Manager or macOS Keychain. "
+            "Only MyMines sign-in uses this password; you complete MFA yourself.",
+            "muted",
+        ))
+        form = QFormLayout()
+        username = QLineEdit()
+        username.setAccessibleName("MyMines username")
+        password = QLineEdit()
+        password.setAccessibleName("MyMines password")
+        password.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Username", username)
+        form.addRow("Password", password)
+        layout.addLayout(form)
+        error_label = label("", "error")
+        layout.addWidget(error_label)
+        controls = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+
+        def save() -> None:
+            try:
+                MyMinesCredentialStore().save(username.text(), password.text())
+            except (ValueError, CredentialStoreError) as error:
+                error_label.setText(str(error))
+                return
+            password.clear()
+            dialog.accept()
+
+        controls.accepted.connect(save)
+        controls.rejected.connect(dialog.reject)
+        layout.addWidget(controls)
+        dialog.exec()
+        password.clear()
+        self._refresh()
+
+    def _remove_mines_login(self) -> None:
+        if self.result_queue is not None or not self.authorize():
+            return
+        try:
+            MyMinesCredentialStore().delete()
+        except CredentialStoreError as error:
+            QMessageBox.warning(self, "Saved login unavailable", str(error))
+        self._refresh()
 
     def _run(self, action: str) -> None:
         if self.result_queue is not None or self.executor.is_running or not self.authorize():

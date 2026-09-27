@@ -140,6 +140,8 @@ class InsightsConnectionServiceTests(unittest.TestCase):
         self.assertEqual(build.call_args.args[0].environment, "TEST")
         self.assertEqual(build.call_args.kwargs["browser"], "chrome")
         self.assertFalse(build.call_args.kwargs["force_login"])
+        self.assertEqual(build.call_args.kwargs["experience_url"], "https://experience.example.edu/test")
+        self.assertTrue(build.call_args.kwargs["use_saved_mines_login"])
         self.assertEqual(client.run_sql_file.call_args.args[0].name, "connection_check.sql")
         client.__exit__.assert_called_once()
 
@@ -166,6 +168,7 @@ class InsightsConnectionServiceTests(unittest.TestCase):
         self.assertEqual(selected.environment, "PROD")
         self.assertEqual(selected.base_url, "https://prod.example.edu")
         self.assertEqual(selected.database_id, 7)
+        self.assertEqual(build.call_args.kwargs["experience_url"], "https://experience.example.edu/prod")
         self.assertIn("PROD verified", result.message)
 
     def test_unexpected_error_never_reaches_general_logger(self):
@@ -305,6 +308,10 @@ class ConnectionsPageTests(unittest.TestCase):
         self.executor.is_running = False
         self.results = queue.Queue()
         self.executor.run_async.return_value = self.results
+        vault_patch = patch("app.gui.pages.connections.MyMinesCredentialStore")
+        self.vault = vault_patch.start().return_value
+        self.vault.load.return_value = None
+        self.addCleanup(vault_patch.stop)
         with patch("app.gui.pages.connections.load_department_profiles", return_value=profiles()):
             self.page = ConnectionsPage(None, self.executor, lambda: True)
         self.addCleanup(self.page.deleteLater)
@@ -315,6 +322,14 @@ class ConnectionsPageTests(unittest.TestCase):
         self.executor.run_async.assert_not_called()
         self.page.mode.setCurrentIndex(1)
         self.assertTrue(all(not item.isEnabled() for item in self.page.actions.values()))
+
+    def test_saved_mines_login_can_be_removed_without_touching_insights_session(self):
+        self.vault.load.return_value = SimpleNamespace(username="synthetic.user")
+        self.page._refresh()
+        self.assertIn("synthetic.user", self.page.credential_status.text())
+        self.page._remove_mines_login()
+        self.vault.delete.assert_called_once()
+        self.executor.run_async.assert_not_called()
 
     def test_busy_state_and_environment_result_separation(self):
         self.page._run("connect")

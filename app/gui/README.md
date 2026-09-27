@@ -85,13 +85,28 @@ output workbook and is not added to the repository.
 
 Active app administrators have a **Connections** page. TEST is selected by
 default; choose TEST or PROD explicitly and click
-**Connect and sign in**. Sign in to MyMines in the dedicated automation browser, open the
-selected environment's Experience address shown on the page in that same window,
-and launch its Insights reporting application. The browser closes after handoff
+**Connect and sign in**. The dedicated automation browser opens MyMines. Once
+the MyMines dashboard appears, it opens the selected environment's configured
+Experience address, selects **Reporting**, and clicks **LAUNCH REPORTS** on the
+Insights card. If a
+page cannot be recognized, finish the sign-in or navigation in that browser.
+The browser closes after handoff
 or timeout, retains persistent SSO state locally when the identity provider
 allows it, and the GUI then shows
 the actual result. The check runs only `connection_check.sql` (`SELECT 1`), not
 the student sample query, and does not export files.
+
+The Connections page can optionally save a MyMines username and password in
+Windows Credential Manager or macOS Keychain through the existing native
+`keyring` backend. **Set or update saved login** replaces that local entry;
+**Remove saved login** deletes it. Autofill runs only on `https://my.mines.edu`
+and only on recognized username and password steps. The person completes Okta
+Verify and any unfamiliar prompts. The password is never added to department
+configuration, browser logs, the repository, or the Insights API session cache.
+If Okta resumes directly at a remembered password step, autofill proceeds only
+when the account shown there exactly matches the saved username. Otherwise,
+enter the password manually. This saved login is separate from
+the cached Insights API session and from Chrome's password manager.
 
 Staff do not create `.env` files or enter environment URLs/database IDs. The
 owner maintains non-secret department settings once in

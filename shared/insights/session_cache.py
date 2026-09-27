@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Protocol
 
+from shared.credentials import CredentialStore, CredentialStoreError, SystemCredentialStore
 from shared.insights.config import InsightsSettings
 
 
@@ -13,58 +12,7 @@ CACHE_FORMAT_VERSION = 1
 CREDENTIAL_USERNAME = "metabase-session"
 
 
-class InsightsCredentialError(RuntimeError):
-    """Raised when the operating-system credential vault cannot be used."""
-
-
-class CredentialStore(Protocol):
-    def get_password(self, service: str, username: str) -> str | None: ...
-
-    def set_password(self, service: str, username: str, password: str) -> None: ...
-
-    def delete_password(self, service: str, username: str) -> None: ...
-
-
-class SystemCredentialStore:
-    """Store secrets in Windows Credential Manager or the native OS keychain."""
-
-    def get_password(self, service: str, username: str) -> str | None:
-        keyring = _load_keyring()
-
-        try:
-            return keyring.get_password(service, username)
-        except keyring.errors.KeyringError as error:
-            raise InsightsCredentialError(
-                "The OS credential vault could not read the cached "
-                "Insights session."
-            ) from None
-
-    def set_password(self, service: str, username: str, password: str) -> None:
-        keyring = _load_keyring()
-
-        try:
-            keyring.set_password(service, username, password)
-        except keyring.errors.KeyringError as error:
-            raise InsightsCredentialError(
-                "The OS credential vault could not save the Insights "
-                "session."
-            ) from None
-
-    def delete_password(self, service: str, username: str) -> None:
-        keyring = _load_keyring()
-
-        try:
-            keyring.delete_password(service, username)
-        except keyring.errors.PasswordDeleteError:
-            if self.get_password(service, username) is not None:
-                raise InsightsCredentialError(
-                    "The OS credential vault could not delete the session."
-                ) from None
-        except keyring.errors.KeyringError as error:
-            raise InsightsCredentialError(
-                "The OS credential vault could not delete the cached "
-                "Insights session."
-            ) from None
+InsightsCredentialError = CredentialStoreError
 
 
 @dataclass(frozen=True)
@@ -255,34 +203,3 @@ def _aware_local_datetime(value: datetime | None) -> datetime:
         raise ValueError("Session-cache timestamps must include a timezone.")
 
     return value
-
-
-def _load_keyring() -> object:
-    try:
-        import keyring
-    except ImportError:
-        raise InsightsCredentialError(
-            "The keyring package is not installed in the active Python "
-            "environment. Run setup.ps1 before using session caching."
-        ) from None
-
-    # Do not use third-party/plaintext backends selected by user configuration.
-    if sys.platform == "darwin":
-        from keyring.backends.macOS import Keyring
-        backend = Keyring()
-    elif sys.platform == "win32":
-        from keyring.backends.Windows import WinVaultKeyring
-        backend = WinVaultKeyring()
-        backend.persist = "local machine"
-    else:
-        raise InsightsCredentialError(
-            "Session caching supports only macOS Keychain and Windows "
-            "Credential Manager."
-        )
-    from types import SimpleNamespace
-    return SimpleNamespace(
-        get_password=backend.get_password,
-        set_password=backend.set_password,
-        delete_password=backend.delete_password,
-        errors=keyring.errors,
-    )
