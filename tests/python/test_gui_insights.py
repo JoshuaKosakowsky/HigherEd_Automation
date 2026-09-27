@@ -14,7 +14,7 @@ import pandas as pd
 from openpyxl import load_workbook
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QFrame, QMessageBox
 
 from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.pages.connections import ConnectionsPage
@@ -319,6 +319,8 @@ class ConnectionsPageTests(unittest.TestCase):
     def test_initial_test_and_unconfigured_prod(self):
         self.assertEqual(self.page.mode.currentData(), "TEST")
         self.assertTrue(self.page.actions["connect"].isEnabled())
+        self.assertTrue(self.page.widgetResizable())
+        self.assertEqual(len(self.page.widget().findChildren(QFrame, "card")), 3)
         self.executor.run_async.assert_not_called()
         self.page.mode.setCurrentIndex(1)
         self.assertTrue(all(not item.isEnabled() for item in self.page.actions.values()))

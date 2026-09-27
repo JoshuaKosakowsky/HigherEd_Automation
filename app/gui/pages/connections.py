@@ -10,7 +10,8 @@ from typing import Callable
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
-    QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QVBoxLayout, QWidget,
+    QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowMode
@@ -23,7 +24,7 @@ from shared.insights.config import InsightsConfigurationError, load_department_p
 from shared.insights.query_catalog import QUERIES, get_query
 
 
-class ConnectionsPage(QWidget):
+class ConnectionsPage(QScrollArea):
     busy_changed = Signal(bool)
 
     def __init__(self, parent, executor: WorkflowExecutor, authorize: Callable[[], bool]):
@@ -32,15 +33,18 @@ class ConnectionsPage(QWidget):
         self.authorize = authorize
         self.result_queue = None
         self.statuses: dict[str, str] = {}
-        self.setObjectName("page")
-        layout = QVBoxLayout(self)
+        self.setWidgetResizable(True)
+        body = QWidget()
+        body.setObjectName("page")
+        self.setWidget(body)
+        layout = QVBoxLayout(body)
         layout.setContentsMargins(36, 30, 36, 30)
-        layout.setSpacing(16)
+        layout.setSpacing(18)
+        layout.addWidget(label("INSIGHTS / ADMIN CONNECTIONS", "eyebrow"))
         layout.addWidget(label("Connections", "title"))
-        layout.addWidget(label("Ellucian Insights", "section"))
         layout.addWidget(label(
-            "Environment setup is supplied by the department. You only sign in "
-            "with your own MyMines account when your session needs renewing.", "muted"
+            "Connect to Ellucian Insights, manage your MyMines login, and export approved reports.",
+            "muted",
         ))
         self.profiles = {}
         self.config_error = None
@@ -48,67 +52,95 @@ class ConnectionsPage(QWidget):
             self.profiles = load_department_profiles()
         except InsightsConfigurationError as error:
             self.config_error = str(error)
-        panel, controls = card()
+
+        connection_card, connection = card()
+        heading = QHBoxLayout()
+        heading.addWidget(label("Insights connection", "section"), 1)
+        environment = QVBoxLayout()
+        environment.setSpacing(4)
+        environment.addWidget(label("Environment", "field"))
         self.mode = QComboBox()
         self.mode.setAccessibleName("Insights environment")
+        self.mode.setMinimumWidth(160)
         self.mode.addItem("TEST", "TEST")
         self.mode.addItem("PROD", "PROD")
-        controls.addWidget(label("Environment", "field"))
-        controls.addWidget(self.mode)
+        environment.addWidget(self.mode)
+        heading.addLayout(environment)
+        connection.addLayout(heading)
         self.instructions = label("")
         self.instructions.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        controls.addWidget(self.instructions)
-        controls.addWidget(label("Optional MyMines autofill", "section"))
+        connection.addWidget(self.instructions)
+        self.status_label = label("", "status")
+        connection.addWidget(self.status_label)
+        primary_actions = QHBoxLayout()
+        secondary_actions = QHBoxLayout()
+        self.actions = {}
+        for action, title, target in (
+            ("connect", "Connect and sign in", primary_actions),
+            ("check", "Check connection", primary_actions),
+            ("reconnect", "Sign in again", secondary_actions),
+            ("logout", "Sign out", secondary_actions),
+        ):
+            control = button(title, lambda checked=False, value=action: self._run(value),
+                             "primary" if action == "connect" else "")
+            self.actions[action] = control
+            target.addWidget(control)
+        primary_actions.addStretch()
+        secondary_actions.addStretch()
+        connection.addLayout(primary_actions)
+        connection.addLayout(secondary_actions)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        connection.addWidget(self.progress)
+        layout.addWidget(connection_card)
+
+        login_card, login = card()
+        login.addWidget(label("MyMines autofill", "section"))
+        login.addWidget(label(
+            "Optional. Save your login on this computer; complete MFA in the browser when prompted.",
+            "muted",
+        ))
         self.credential_status = label("", "muted")
-        controls.addWidget(self.credential_status)
+        login.addWidget(self.credential_status)
         credentials_row = QHBoxLayout()
         self.save_login_button = button("Set or update saved login", self._save_mines_login)
         self.remove_login_button = button("Remove saved login", self._remove_mines_login)
         credentials_row.addWidget(self.save_login_button)
         credentials_row.addWidget(self.remove_login_button)
-        controls.addLayout(credentials_row)
-        row = QHBoxLayout()
-        self.actions = {}
-        for action, title in (
-            ("connect", "Connect and sign in"), ("check", "Check connection"),
-            ("reconnect", "Sign in again"), ("logout", "Sign out"),
-        ):
-            control = button(title, lambda checked=False, value=action: self._run(value),
-                             "primary" if action == "connect" else "")
-            self.actions[action] = control
-            row.addWidget(control)
-        controls.addLayout(row)
-        controls.addWidget(label("Query proof of concept", "section"))
+        credentials_row.addStretch()
+        login.addLayout(credentials_row)
+        layout.addWidget(login_card)
+
+        export_card, export = card()
+        export.addWidget(label("Export an approved report", "section"))
+        export.addWidget(label("Choose a report and save the workbook to an approved location.", "muted"))
+        export.addWidget(label("Report", "field"))
         self.queries = QComboBox()
         self.queries.setAccessibleName("Insights query")
         for query in QUERIES:
             self.queries.addItem(f"{query.group} — {query.title}", query.query_id)
-        controls.addWidget(self.queries)
+        export.addWidget(self.queries)
         self.query_description = label("", "muted")
-        controls.addWidget(self.query_description)
+        export.addWidget(self.query_description)
         self.term_label = label("Banner term", "field")
         self.term = QLineEdit()
         self.term.setAccessibleName("Banner term for selected query")
         self.term.setPlaceholderText("Six-digit term, for example 202680")
-        controls.addWidget(self.term_label)
-        controls.addWidget(self.term)
-        controls.addWidget(label(
-            "Reports may contain student and financial data. Choose an approved "
-            "location for the Excel workbook; some queries may return many rows.",
-            "muted",
-        ))
+        export.addWidget(self.term_label)
+        export.addWidget(self.term)
+        export.addWidget(label("Reports may contain student and financial data.", "muted"))
         self.actions["query_export"] = button(
             "Run selected query and save Excel",
             lambda checked=False: self._run("query_export"),
+            "primary",
         )
-        controls.addWidget(self.actions["query_export"])
-        layout.addWidget(panel)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.hide()
-        layout.addWidget(self.progress)
-        self.status_label = label("", "status")
-        layout.addWidget(self.status_label)
+        export_actions = QHBoxLayout()
+        export_actions.addWidget(self.actions["query_export"])
+        export_actions.addStretch()
+        export.addLayout(export_actions)
+        layout.addWidget(export_card)
         layout.addStretch()
         self.mode.currentIndexChanged.connect(self._refresh)
         self.queries.currentIndexChanged.connect(self._refresh_query)
@@ -148,18 +180,17 @@ class ConnectionsPage(QWidget):
                 f"{environment} is not configured for the department yet. "
                 "The application owner configures it once, not each employee."
             ))
+            self.instructions.setToolTip("")
         else:
             self.instructions.setText(
-                f"Connect opens MyMines, then launches Insights {environment} "
-                f"through {profile.experience_url} after sign-in. Complete MFA "
-                "in the browser if prompted. If a page cannot be recognized, "
-                "you can finish navigation manually.\n\n"
-                "The dedicated automation browser closes after the handoff or a "
-                "five-minute timeout. Return here for the result. Its local profile "
-                "can retain persistent SSO recognition for future automation; the "
-                "API session is saved separately in your OS credential vault."
+                f"Connect opens MyMines and launches {environment} Insights. "
+                "Complete MFA in the browser if prompted."
             )
-        self.status_label.setText(self.statuses.get(environment, "Not checked in this view. No login is performed until you click Connect."))
+            self.instructions.setToolTip(
+                f"If automatic navigation stops, open {profile.experience_url} "
+                "in the same browser and select Reporting → Insights."
+            )
+        self.status_label.setText(self.statuses.get(environment, "No connection checked yet."))
 
     def _save_mines_login(self) -> None:
         if self.result_queue is not None or not self.authorize():
@@ -269,6 +300,7 @@ class ConnectionsPage(QWidget):
         self.mode.setEnabled(False)
         self._refresh()
         self.status_label.setText("Working… If a browser opens, complete sign-in there and return here for the result.")
+        self.verticalScrollBar().setValue(0)
         self.progress.show()
         self.busy_changed.emit(True)
         self.timer.start()
@@ -288,4 +320,5 @@ class ConnectionsPage(QWidget):
         self.mode.setEnabled(True)
         self.progress.hide()
         self._refresh()
+        self.verticalScrollBar().setValue(0)
         self.busy_changed.emit(False)
