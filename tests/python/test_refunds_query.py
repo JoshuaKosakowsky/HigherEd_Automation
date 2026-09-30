@@ -65,6 +65,12 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("RAW_TRANSACTION_BALANCE IS DISTINCT FROM 0", history)
         self.assertIn("CUMULATIVE_BALANCE = 0 AND UNRESOLVED_PREFIX = 0", history)
 
+    def test_zero_balance_requires_ordinary_unpaid_charges(self) -> None:
+        self.assertIn(
+            "F.FULL_ACCOUNT_BALANCE <> 0 OR F.ORDINARY_UNPAID_CHARGE_AMOUNT > 0",
+            self.normalized_query,
+        )
+
     def test_schema_inventory_requires_new_metadata(self) -> None:
         schema_query = REFUNDS_QUERY.with_name("validate_refund_schema.sql").read_text(
             encoding="utf-8"
@@ -279,6 +285,13 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             row["fdpl_priority_tie_rule"],
             "EFFECTIVE_PRIORITY_THEN_EARLIEST_TRAN_NUMBER",
         )
+
+    def test_prior_posted_refund_alone_does_not_create_zero_balance_refund(self) -> None:
+        rows = self.run_report([
+            RefundTransaction("ARFD", "C", "800", 100, tran_number=10),
+            RefundTransaction("ACHK", "P", "000", 100, tran_number=20),
+        ])
+        self.assertEqual(rows, [])
 
     def test_output_columns_follow_requested_order_with_policy_audit(self) -> None:
         expected = """

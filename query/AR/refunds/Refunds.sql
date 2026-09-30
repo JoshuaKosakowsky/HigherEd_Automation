@@ -964,6 +964,7 @@ selected_balance_sources AS (
 
 unpaid_charge_summary AS MATERIALIZED (
     SELECT a.pidm,
+        a.unpaid_charge_amount AS ordinary_unpaid_charge_amount,
         a.unpaid_charge_amount + r.unmatched_posted_refund_amount AS unpaid_charge_amount
     FROM allocation_final a
     INNER JOIN posted_refund_final r ON r.pidm = a.pidm
@@ -1291,6 +1292,7 @@ joined AS (
         COALESCE(sc.stored_balance_difference_count, 0)
             AS stored_balance_difference_count,
         COALESCE(uc.unpaid_charge_amount, 0) AS unpaid_charge_amount,
+        COALESCE(uc.ordinary_unpaid_charge_amount, 0) AS ordinary_unpaid_charge_amount,
         COALESCE(bs.ambiguous_source_pool_count, 0) AS ambiguous_source_pool_count,
         COALESCE(tb.previous_term_balance, 0) AS previous_term_balance,
         COALESCE(tb.prior_terms_balance, 0) AS prior_terms_balance,
@@ -1702,6 +1704,8 @@ WHERE (p.cwid_filter IS NULL OR f.cwid = TRIM(p.cwid_filter))
   AND (p.last_name_filter IS NULL
        OR UPPER(f.last_name) LIKE UPPER(p.last_name_filter))
   AND f.total_refund_amount > 0
+  /* An unmatched prior refund alone cannot support a new zero-balance refund. */
+  AND (f.full_account_balance <> 0 OR f.ordinary_unpaid_charge_amount > 0)
 ORDER BY
     f.last_name,
     f.first_name,

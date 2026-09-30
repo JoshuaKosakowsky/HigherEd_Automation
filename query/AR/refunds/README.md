@@ -149,9 +149,10 @@ CWID or last-name validation filter bypasses the activity conditions but still
 excludes positive balances. Do not commit identifying filters.
 
 Positive full-account balances are excluded. Zero-balance accounts can contain
-restricted refunds and offsetting unpaid charges. Final output requires a
-positive reconstructed refund. `total_refund_amount` is unused payment principal
-and may exceed the net account credit.
+restricted refunds and offsetting ordinary unpaid charges. An unmatched earlier
+posted refund alone does not qualify as an unpaid charge for this exception.
+Final output requires a positive reconstructed refund. `total_refund_amount` is
+unused payment principal and may exceed the net account credit.
 
 The latest completed historical prefix is excluded from replay only if its
 cumulative raw balance is zero and every stored transaction balance in that

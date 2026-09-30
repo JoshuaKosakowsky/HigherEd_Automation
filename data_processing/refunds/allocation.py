@@ -792,7 +792,13 @@ def _allocate_account(
         source["payment_sequence"] = sequence
         if remaining > 0:
             selected_sources.append({**source, "source_credit_amount": remaining})
-    unpaid_charges = _money(sum(charge_remaining, ZERO) + unmatched_posted_refunds)
+    ordinary_unpaid_charges = _money(sum(charge_remaining, ZERO))
+    unpaid_charges = _money(ordinary_unpaid_charges + unmatched_posted_refunds)
+    # A prior posted refund is not an unpaid charge that justifies another
+    # refund on a zero-balance account. Preserve genuine restricted-payment
+    # cases only when ordinary charges remain unpaid.
+    if full_balance == ZERO and ordinary_unpaid_charges == ZERO:
+        return None
     policy_unused_total = _money(sum((source["source_credit_amount"] for source in selected_sources), ZERO))
     unused_fdpl = _money(sum((source["source_credit_amount"] for source in selected_sources if source["detail_code"] == "FDPL"), ZERO))
     unused_non_fdpl = policy_unused_total - unused_fdpl

@@ -558,18 +558,17 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertNotIn("R879", ordered["balance_sources"])
         self.assertIn("FREE", ordered["balance_sources"])
 
-    def test_posted_student_refund_requires_an_earlier_payment_and_excludes_rfdp(self) -> None:
-        earlier_refund = self.report([
+    def test_prior_posted_refund_does_not_justify_zero_balance_refund(self) -> None:
+        self.report([
             Transaction("ARFD", "C", "800", 2500, 2500, tran_number=10),
             Transaction("R879", "P", "879", 2500, -2500, tran_number=20),
-        ])
-        self.assert_split(earlier_refund, "0.00", "2500.00")
-        self.assertEqual(earlier_refund["unpaid_charge_amount"], Decimal("2500.00"))
-        self.assertNotIn(
-            "POSTED_STUDENT_REFUND_RECONCILED",
-            earlier_refund["review_reasons"] or "",
-        )
+        ], expected_rows=0)
+        self.report([
+            Transaction("ARFD", "C", "800", 2500, 2500, tran_number=10),
+            Transaction("ACHK", "P", "000", 2500, -2500, tran_number=20),
+        ], expected_rows=0)
 
+    def test_parent_refund_remains_an_ordinary_charge(self) -> None:
         parent_refund = self.report([
             Transaction("R879", "P", "879", 2500, -2500, tran_number=10),
             Transaction("RFDP", "C", "800", 2500, 2500, tran_number=20),

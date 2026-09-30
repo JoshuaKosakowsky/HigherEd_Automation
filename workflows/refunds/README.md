@@ -51,9 +51,10 @@ filter selects that account directly.
 The SQL excludes known positive full-account balances. Python also excludes
 positive balances and accounts with no reconstructed unused payments. A zero
 balance is eligible when restricted payments leave a refund and offsetting
-unpaid charges. For example, $10,000 of `899` charges plus $1,000 of `897`
-charges, paid by $9,500 at `899` and $1,500 at `897`, produces a $500 student
-refund and $500 unpaid tuition, despite a zero net balance.
+ordinary unpaid charges. An earlier posted ARFD/RFND alone does not qualify as
+an unpaid charge for this purpose. For example, $10,000 of `899` charges plus
+$1,000 of `897` charges, paid by $9,500 at `899` and $1,500 at `897`, produces
+a $500 student refund and $500 unpaid tuition, despite a zero net balance.
 
 `full_account_balance` remains charges minus payments across all history.
 `total_refund_amount` is now the reconstructed unused payment total, split by
