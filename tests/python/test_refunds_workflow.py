@@ -730,6 +730,13 @@ class RefundTermTests(unittest.TestCase):
 
 
 class RefundExtractTests(unittest.TestCase):
+    def test_ed_hold_end_date_cutoff_matches_all_sql_paths(self) -> None:
+        root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
+        predicate = "CAST(h.sprhold_to_date AS date) >= DATE '2099-12-31'"
+        for name in ("refund_context_extract.sql", "refund_context_manual.sql", "Refunds.sql"):
+            with self.subTest(query=name):
+                self.assertIn(predicate, (root / name).read_text(encoding="utf-8"))
+
     def test_template_is_rendered_only_from_validated_values(self) -> None:
         settings = ExtractSettings("202680", 20, Path("unused"))
         rendered = render_extract_sql(

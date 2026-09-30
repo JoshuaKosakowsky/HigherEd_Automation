@@ -52,7 +52,8 @@ active_ed AS MATERIALIZED (
     FROM saturn.sprhold h
     INNER JOIN batch_scope s ON s.pidm = h.sprhold_pidm
     WHERE UPPER(TRIM(h.sprhold_hldd_code)) = 'ED'
-      AND CAST(h.sprhold_to_date AS date) = DATE '9999-12-31'
+      -- Banner and cashnet use different far-future ED end dates.
+      AND CAST(h.sprhold_to_date AS date) >= DATE '2099-12-31'
     GROUP BY h.sprhold_pidm
 )
 SELECT

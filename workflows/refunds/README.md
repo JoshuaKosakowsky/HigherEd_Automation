@@ -15,6 +15,8 @@ For the normal manual process, Insights runs two flat queries. One returns
 TBRACCD rows with current TBBDETC metadata; the other returns identity, account
 controls, ED holds, and RLRPAPP Parent PLUS authorization. Each response
 includes a total-row guard so Python stops if the website download is truncated.
+An ED hold counts as active when its end date is December 31, 2099 or later;
+this includes the Banner and cashnet far-future dates.
 
 The local Python process then performs:
 

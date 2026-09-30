@@ -146,7 +146,7 @@ def _validate_complete_result(
 
 def _manifest_values(settings: ExtractSettings) -> dict[str, object]:
     return {
-        "format_version": 3,
+        "format_version": 4,
         "target_term": settings.target_term,
         "batch_count": settings.batch_count,
         "cwid": settings.cwid,
