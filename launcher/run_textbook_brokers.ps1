@@ -6,11 +6,18 @@ param (
 
     # Download and transform, then return before the interactive Banner-upload
     # confirmation. This is used by the desktop GUI.
-    [switch]$PrepareOnly
+    [switch]$PrepareOnly,
+
+    # Passed only after the GUI confirms successful Banner transaction loading.
+    [switch]$BannerUploadConfirmed
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($BannerUploadConfirmed -and (-not $ArchiveOnly -or $PrepareOnly)) {
+    throw "BannerUploadConfirmed requires ArchiveOnly and cannot be used with PrepareOnly."
+}
 
 if ($ArchiveOnly -and $PrepareOnly) {
     throw "ArchiveOnly and PrepareOnly cannot be used together."
@@ -645,13 +652,16 @@ if ($PrepareOnly) {
 # CONFIRM MANUAL BANNER UPLOAD
 # ------------------------------------------------------------
 
-$bannerUploadConfirmed = Read-YesNoResponse `
-    -Prompt (
-        "Have you uploaded TSPLOAD.csv through GJAJFLU and " +
-        "confirmed that the transactions were applied successfully?"
-    )
+$uploadConfirmed = [bool]$BannerUploadConfirmed
+if (-not $uploadConfirmed) {
+    $uploadConfirmed = Read-YesNoResponse `
+        -Prompt (
+            "Have you uploaded TSPLOAD.csv through GJAJFLU, completed TSPLOAD, and " +
+            "confirmed that the transactions were applied successfully?"
+        )
+}
 
-if (-not $bannerUploadConfirmed) {
+if (-not $uploadConfirmed) {
     Write-Log (
         "Banner upload was not confirmed. TSPLOAD.csv, local source " +
         "files, and remote source files were left unchanged."
@@ -882,6 +892,9 @@ try {
     )
 
     Write-Log "Textbook Brokers archival completed successfully."
+    if ($BannerUploadConfirmed) {
+        Write-Output "HIGHERED_OUTPUT_PATH=$uploadedFilePath"
+    }
 }
 catch {
     Write-Log `

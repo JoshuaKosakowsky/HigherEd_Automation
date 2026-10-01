@@ -534,6 +534,59 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
         self.assertIn("No pending", result.message)
         self.assertIn("Nothing was downloaded", result.message)
 
+    def test_archive_requires_explicit_true_confirmation(self) -> None:
+        for confirmation in (None, False, "yes", 1):
+            with self.subTest(confirmation=confirmation):
+                context = WorkflowContext("textbook_brokers", {
+                    "term_code": "202680", "step": "archive",
+                    "banner_upload_confirmed": confirmation,
+                })
+                with patch("app.gui.services.textbook_brokers.subprocess.run") as run:
+                    with self.assertRaisesRegex(ValueError, "Confirm.*TSPLOAD"):
+                        run_textbook_brokers(context)
+                    run.assert_not_called()
+
+    def test_archive_launcher_arguments_and_failures(self) -> None:
+        context = WorkflowContext("textbook_brokers", {
+            "term_code": "202680", "step": "archive", "banner_upload_confirmed": True,
+        })
+        output = Path("C:/Mines/BOOK/202680/uploaded/TSPLOAD_example.csv")
+        outcomes = (
+            (subprocess.CompletedProcess([], 0, f"HIGHERED_OUTPUT_PATH={output}\n", ""), True),
+            (subprocess.CompletedProcess([], 1, "", "failed"), False),
+            (subprocess.CompletedProcess([], 0, "", ""), False),
+            (subprocess.TimeoutExpired("powershell.exe", 300), False),
+        )
+        for completed, success in outcomes:
+            with (
+                self.subTest(completed=completed),
+                patch("app.gui.services.textbook_brokers.sys.platform", "win32"),
+                patch("app.gui.services.textbook_brokers.shutil.which", return_value="powershell.exe"),
+                patch("app.gui.services.textbook_brokers.subprocess.CREATE_NO_WINDOW", 0, create=True),
+                patch("app.gui.services.textbook_brokers.subprocess.run") as run,
+            ):
+                if isinstance(completed, Exception):
+                    run.side_effect = completed
+                else:
+                    run.return_value = completed
+                result = run_textbook_brokers(context)
+                self.assertEqual(result.success, success)
+                arguments = run.call_args.args[0]
+                self.assertEqual(arguments[-4:], ["-TermCode", "202680", "-ArchiveOnly", "-BannerUploadConfirmed"])
+                self.assertNotIn("-PrepareOnly", arguments)
+                if success:
+                    self.assertEqual(result.output_path, output)
+                else:
+                    self.assertIsNone(result.output_path)
+                    self.assertNotIn("Nothing was archived", result.message)
+                    self.assertIn("before retrying", result.message)
+
+    def test_unknown_step_cannot_launch_process(self) -> None:
+        with patch("app.gui.services.textbook_brokers.subprocess.run") as run:
+            with self.assertRaisesRegex(ValueError, "valid.*step"):
+                run_textbook_brokers(WorkflowContext("textbook_brokers", {"step": "unknown"}))
+            run.assert_not_called()
+
 
 class WorkflowExecutorTests(unittest.TestCase):
     def setUp(self) -> None:

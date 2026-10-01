@@ -35,10 +35,12 @@ class WorkflowDetailPage(QScrollArea):
         self.executor = executor
         self.authorize = authorize or (lambda: True)
         self.result_queue = None
+        self.active_context: WorkflowContext | None = None
         self.output_path: Path | None = None
         self.inputs = {}
         self.manual_banner_widgets = []
         self.recon_source = None
+        self.textbook_step = None
         self.setWidgetResizable(True)
         body = QWidget()
         body.setObjectName("page")
@@ -96,6 +98,17 @@ class WorkflowDetailPage(QScrollArea):
                     self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
                 form_layout.addWidget(self.recon_source)
                 form_layout.addSpacing(8)
+        if definition.workflow_id == "textbook_brokers":
+            form_layout.addWidget(label("Workflow step", "field"))
+            self.textbook_step = QComboBox()
+            self.textbook_step.setAccessibleName("Workflow step")
+            self.textbook_step.addItem("1. Prepare TSPLOAD", "prepare")
+            self.textbook_step.addItem("2. Archive after TSPLOAD", "archive")
+            form_layout.addWidget(self.textbook_step)
+            form_layout.addWidget(label(
+                "Complete TSPLOAD in Banner and verify the transactions before step 2. "
+                "To resume later, select step 2 with the same Banner term.", "muted"
+            ))
         self.mode = QComboBox()
         for mode in definition.supported_modes:
             self.mode.addItem("Test" if mode == WorkflowMode.TEST else "Production", mode.value)
@@ -168,7 +181,10 @@ class WorkflowDetailPage(QScrollArea):
             parsed = parse_parameters(definitions, values)
             parsed["banner_source"] = source
             return parsed
-        return parse_parameters(definitions, values)
+        parsed = parse_parameters(definitions, values)
+        if self.textbook_step is not None:
+            parsed["step"] = self.textbook_step.currentData()
+        return parsed
 
     def _confirm(self, context: WorkflowContext) -> bool:
         dialog = QDialog(self)
@@ -186,6 +202,8 @@ class WorkflowDetailPage(QScrollArea):
         if self.recon_source is not None:
             source_label = "Run SQL from PROD Insights" if context.parameters["banner_source"] == SQL_SOURCE else "Upload BOOK/FRST files manually"
             form.addRow(label("Banner data source", "field"), label(source_label))
+        if self.textbook_step is not None:
+            form.addRow(label("Workflow step", "field"), label(self.textbook_step.currentText()))
         for parameter in self.definition.parameters:
             if parameter.key not in context.parameters:
                 continue
@@ -228,6 +246,21 @@ class WorkflowDetailPage(QScrollArea):
         context = WorkflowContext(self.definition.workflow_id, parameters, mode)
         if not self._confirm(context) or not self.authorize():
             return
+        if parameters.get("step") == "archive" and self.textbook_step is not None:
+            answer = QMessageBox.question(
+                self, "Confirm TSPLOAD completion",
+                f"For Banner term {parameters['term_code']}, have you uploaded TSPLOAD.csv "
+                "through GJAJFLU, completed TSPLOAD, and verified that the transactions "
+                "applied successfully?\n\nYes will archive the pending local and remote "
+                "source files and TSPLOAD output. Select No to leave them pending.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes or not self.authorize():
+                return
+            parameters = {**parameters, "banner_upload_confirmed": True}
+            context = WorkflowContext(self.definition.workflow_id, parameters, mode)
+        self.active_context = context
         try:
             self.result_queue = self.executor.run_async(self.definition, context)
         except RuntimeError as error:
@@ -264,6 +297,17 @@ class WorkflowDetailPage(QScrollArea):
         self.folder_button.setVisible(bool(result.success and result.output_path))
         self.busy_changed.emit(False)
         self.ensureWidgetVisible(self.status_label)
+        if (self.textbook_step is not None and self.active_context is not None
+                and result.success and result.output_path
+                and self.active_context.parameters.get("step") == "prepare"):
+            self.inputs["term_code"].setText(str(self.active_context.parameters["term_code"]))
+            self.textbook_step.setCurrentIndex(self.textbook_step.findData("archive"))
+            QMessageBox.information(
+                self, "Next step: complete TSPLOAD, then archive",
+                "TSPLOAD.csv is ready. Complete TSPLOAD in Banner and verify that the "
+                "transactions applied successfully. Then use Review & run for step 2 "
+                "to archive this term's files. Files remain pending until you confirm.",
+            )
         if not result.success:
             QMessageBox.warning(self, "Workflow could not be completed",
                                 result.message + "\n\nTechnical details were written to the GUI log.")

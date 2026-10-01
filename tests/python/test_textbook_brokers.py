@@ -150,5 +150,16 @@ class TextbookBrokersTransformationTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), original_content)
 
 
+class TextbookBrokersLauncherContractTests(unittest.TestCase):
+    def test_gui_confirmation_is_guarded_and_marker_follows_archive_success(self) -> None:
+        launcher = (Path(__file__).resolve().parents[2] / "launcher/run_textbook_brokers.ps1").read_text()
+        self.assertIn("if ($BannerUploadConfirmed -and (-not $ArchiveOnly -or $PrepareOnly))", launcher)
+        self.assertIn("if (-not $uploadConfirmed) {\n    $uploadConfirmed = Read-YesNoResponse", launcher)
+        self.assertIn("if (-not $uploadConfirmed) {\n    Write-Log", launcher)
+        success = launcher.index('Write-Log "Textbook Brokers archival completed successfully."')
+        marker = launcher.index('Write-Output "HIGHERED_OUTPUT_PATH=$uploadedFilePath"')
+        self.assertLess(success, marker)
+
+
 if __name__ == "__main__":
     unittest.main()

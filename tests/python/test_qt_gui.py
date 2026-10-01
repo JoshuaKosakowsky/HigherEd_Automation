@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import tempfile
 import sys
 import time
@@ -21,7 +22,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton
 
 from app.gui.main import AutomationApplication
-from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode, WorkflowResult
+from app.gui.models import ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode, WorkflowResult
 from app.gui.pages.access_management import ProfileDialog
 from app.gui.pages.workflow_detail import WorkflowDetailPage
 from app.gui.services.access import (
@@ -351,6 +352,72 @@ class QtGuiTests(unittest.TestCase):
         page = window.current_page
         self.assertEqual(set(page.inputs), {"term_code"})
         self.assertIn("SFTP", page.definition.description)
+
+    def test_textbook_preparation_prompts_and_selects_archive_for_same_term(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("textbook_brokers"))
+        page = window.current_page
+        results = queue.Queue()
+        with patch.object(page, "_confirm", return_value=True), patch.object(window.executor, "run_async", return_value=results) as run:
+            page.inputs["term_code"].setText("202680")
+            page._run()
+        self.assertEqual(run.call_args.args[1].parameters["step"], "prepare")
+        self.assertFalse(page.form.isEnabled())
+        results.put(WorkflowResult(True, "Prepared", self.root / "TSPLOAD.csv"))
+        with patch.object(QMessageBox, "information") as prompt:
+            page._poll_result()
+        prompt.assert_called_once()
+        self.assertIn("Complete TSPLOAD", prompt.call_args.args[2])
+        self.assertEqual(page.textbook_step.currentData(), "archive")
+        self.assertEqual(page.inputs["term_code"].text(), "202680")
+        self.assertTrue(page.form.isEnabled())
+        self.assertIsNone(page.result_queue)
+
+    def test_textbook_no_pending_or_failure_does_not_offer_archive(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("textbook_brokers"))
+        page = window.current_page
+        for result in (WorkflowResult(True, "No pending files"), WorkflowResult(False, "Failed")):
+            page.active_context = WorkflowContext("textbook_brokers", {"term_code": "202680", "step": "prepare"})
+            page.result_queue = queue.Queue()
+            page.result_queue.put(result)
+            with patch.object(QMessageBox, "information") as prompt, patch.object(QMessageBox, "warning"):
+                page._poll_result()
+            prompt.assert_not_called()
+            self.assertEqual(page.textbook_step.currentData(), "prepare")
+
+    def test_textbook_archive_confirmation_defaults_to_no_and_cancel_never_runs(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("textbook_brokers"))
+        page = window.current_page
+        page.textbook_step.setCurrentIndex(page.textbook_step.findData("archive"))
+        with patch.object(page, "_confirm", return_value=True), patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as prompt, patch.object(window.executor, "run_async") as run:
+            page._run()
+        self.assertEqual(prompt.call_args.args[-1], QMessageBox.StandardButton.No)
+        self.assertIn("completed TSPLOAD", prompt.call_args.args[2])
+        run.assert_not_called()
+        self.assertIsNone(page.result_queue)
+
+    def test_textbook_archive_sends_confirmation_and_rechecks_access(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("textbook_brokers"))
+        page = window.current_page
+        page.inputs["term_code"].setText("202680")
+        page.textbook_step.setCurrentIndex(page.textbook_step.findData("archive"))
+        for authorized in (False, True):
+            with patch.object(page, "_confirm", return_value=True), patch.object(page, "authorize", side_effect=[True, authorized]), patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), patch.object(window.executor, "run_async", return_value=queue.Queue()) as run:
+                page._run()
+            if not authorized:
+                run.assert_not_called()
+            else:
+                context = run.call_args.args[1]
+                self.assertEqual(context.parameters["term_code"], "202680")
+                self.assertIs(context.parameters["banner_upload_confirmed"], True)
+                page.result_queue.put(WorkflowResult(True, "Archived", self.root / "uploaded.csv"))
+                with patch.object(QMessageBox, "information") as prompt:
+                    page._poll_result()
+                prompt.assert_not_called()
+        self.assertIsNone(page.result_queue)
 
     def test_production_defaults_to_test_and_cancel_does_not_run(self):
         definition = WorkflowDefinition("modes", "Modes", "Example", "Testing",

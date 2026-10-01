@@ -57,10 +57,13 @@ The integrated workflows are:
 - **Textbook Brokers**, using the existing PowerShell and WinSCP integration to
   download pending `finaid_*.csv` / `ia_*.csv` sources from the configured SFTP
   server and transform them into TSPLOAD. The GUI accepts the Banner term and
-  runs the launcher in non-interactive prepare-only mode. It does not confirm a
-  Banner upload or archive local or remote files. After the upload succeeds, run
-  `archive-textbook-brokers -TermCode <the same term>` from PowerShell to perform
-  the existing guarded archive step.
+  offers two steps: **Prepare TSPLOAD** and **Archive after TSPLOAD**. Successful
+  preparation prompts you to complete TSPLOAD in Banner and selects step 2.
+  Run step 2 only after verifying that the transactions applied successfully;
+  the GUI requires explicit confirmation (default No) before invoking the existing
+  guarded local/remote archive process. To resume after closing the app, select
+  step 2 with the same term. The PowerShell `archive-textbook-brokers` shortcut
+  remains available and still prompts for confirmation.
 - **Textbook Recon** has one Home Page entry. Select the monthly Brokers workbook
   with `IA Charge Report` and `FA Charge Report` tabs, then choose the Banner
   data source. Staff upload FRST and/or BOOK exports; administrators can also

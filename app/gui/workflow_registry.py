@@ -160,8 +160,9 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         name="Textbook Brokers",
         description=(
             "Downloads pending Finaid and IA files from the Textbook Brokers SFTP "
-            "server and creates a Banner-ready TSPLOAD.csv file. Source files are "
-            "not moved or archived until the separate archive step."
+            "server and creates a Banner-ready TSPLOAD.csv file in step 1. "
+            "After completing TSPLOAD in Banner, use step 2 to confirm successful "
+            "transaction loading and archive the pending local and remote files."
         ),
         category="Payments",
         runner=run_textbook_brokers,

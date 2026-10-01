@@ -18,7 +18,13 @@ NO_PENDING_MARKER = "HIGHERED_NO_PENDING_FILES=1"
 
 
 def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
-    """Download pending SFTP sources and create the Banner-ready TSPLOAD file."""
+    """Prepare TSPLOAD or archive pending files after explicit upload confirmation."""
+    step = context.parameters.get("step", "prepare")
+    if step not in ("prepare", "archive"):
+        raise ValueError("Select a valid Textbook Brokers workflow step.")
+    archive = step == "archive"
+    if archive and context.parameters.get("banner_upload_confirmed") is not True:
+        raise ValueError("Confirm that TSPLOAD completed and transactions applied before archiving.")
     if sys.platform != "win32":
         raise ValueError(
             "Textbook Brokers SFTP processing is Windows-only. Run it on your work PC."
@@ -44,7 +50,7 @@ def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
                 str(WORKFLOW_SCRIPT),
                 "-TermCode",
                 term_code,
-                "-PrepareOnly",
+                *(["-ArchiveOnly", "-BannerUploadConfirmed"] if archive else ["-PrepareOnly"]),
             ],
             cwd=PROJECT_ROOT,
             capture_output=True,
@@ -55,7 +61,13 @@ def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        logger.error("Textbook Brokers SFTP preparation exceeded its 300-second timeout.")
+        logger.error("Textbook Brokers %s exceeded its 300-second timeout.", step)
+        if archive:
+            return WorkflowResult(
+                False,
+                "Textbook Brokers archival timed out. Some files may have moved. "
+                "Check the workflow log and pending/archive folders before retrying.",
+            )
         return WorkflowResult(
             False,
             "Textbook Brokers did not finish in time. Files may have downloaded, but "
@@ -67,13 +79,19 @@ def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
     if completed.stderr:
         logger.warning("Textbook Brokers diagnostics: %s", completed.stderr.strip())
     if completed.returncode != 0:
+        if archive:
+            return WorkflowResult(
+                False,
+                "Textbook Brokers archival could not complete. Some files may have moved. "
+                "Check the workflow log and pending/archive folders before retrying.",
+            )
         return WorkflowResult(
             False,
             "Textbook Brokers could not download or prepare the files. Nothing was "
             "archived. Open the GUI log folder for details or contact your administrator.",
         )
 
-    if NO_PENDING_MARKER in completed.stdout.splitlines():
+    if not archive and NO_PENDING_MARKER in completed.stdout.splitlines():
         return WorkflowResult(
             True,
             "No pending Finaid or IA files were found on the Textbook Brokers SFTP "
@@ -83,19 +101,32 @@ def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
     output_path = _extract_output_path(completed.stdout)
     if output_path is None:
         logger.error("Textbook Brokers completed without an output-path marker.")
+        if archive:
+            return WorkflowResult(
+                False,
+                "The archive launcher returned without identifying the archived TSPLOAD file. "
+                "Check the workflow log and archive folders before retrying.",
+            )
         return WorkflowResult(
             False,
             "Textbook Brokers finished without identifying the prepared TSPLOAD file. "
             "Nothing was archived. Open the GUI log folder for details.",
         )
 
+    if archive:
+        return WorkflowResult(
+            True,
+            f"Archived the pending local and remote source files and TSPLOAD output for term {term_code}.",
+            output_path=output_path,
+        )
+
     return WorkflowResult(
         success=True,
         message=(
             "Downloaded the pending Finaid and IA files from the Textbook Brokers "
-            "SFTP server and created TSPLOAD.csv. After the Banner upload succeeds, "
-            f"run archive-textbook-brokers -TermCode {term_code} from PowerShell to "
-            "archive the pending files."
+            "SFTP server and created TSPLOAD.csv. Complete TSPLOAD in Banner and verify "
+            f"that the transactions applied for term {term_code}, then run step 2, "
+            "Archive after TSPLOAD, for the same term."
         ),
         output_path=output_path,
     )
