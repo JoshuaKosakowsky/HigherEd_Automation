@@ -12,6 +12,7 @@ first configured in a new Insights environment.
 | [Contact information](contact_information/README.md) | Preferred university email and primary phone lookup | `OS_Checks.sql` |
 | [Sponsors](sponsors/README.md) | Sponsored-student contracts and student/sponsor balances | `sponsored_student_summary.sql` |
 | [Loans](loans/README.md) | Students grouped by Summer enrollment band with selected institutional-loan activity | `all_enrollment_load_categories_institutional_loans_summer.sql` plus three category-specific reports |
+| [Holds](holds/README.md) | Students owing an all-term net balance without an active PP hold, with past-due amount and contact information | `deliquent_student_accounts.sql` |
 
 ## Shared operating principles
 
