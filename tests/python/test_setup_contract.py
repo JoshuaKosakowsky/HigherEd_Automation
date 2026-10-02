@@ -22,13 +22,17 @@ class SetupPowerShellContractTests(unittest.TestCase):
             'Write-Host "Required Python packages are available."',
             self.setup,
         )
-        self.assertIn("from PySide6.QtWidgets import QApplication, QWidget", self.setup)
-        self.assertIn("window = QWidget()", self.setup)
+        self.assertIn("from app.gui.runtime_check import verify_qt_runtime", self.setup)
 
     def test_setup_creates_qt_window_and_processes_events(self) -> None:
-        self.assertLess(self.setup.index("window.show()"), self.setup.index("app.processEvents()"))
-        self.assertIn("window.close()", self.setup)
+        self.assertIn("verify_qt_runtime(show_window=True)", self.setup)
         self.assertNotIn("Set-GuiTkRuntimeEnvironment", self.setup)
+
+    def test_gui_repair_redownloads_the_requirements_pin(self) -> None:
+        self.assertIn("[switch]$RepairGui", self.setup)
+        self.assertIn('"--force-reinstall", "--no-cache-dir"', self.setup)
+        self.assertIn("$guiRequirement[0]", self.setup)
+        self.assertIn("^PySide6-Essentials==", self.setup)
 
     def test_setup_installs_shortcuts_before_reporting_completion(self) -> None:
         shortcut_step = self.setup.index(

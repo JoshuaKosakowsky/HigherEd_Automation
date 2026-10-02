@@ -111,3 +111,43 @@ Local settings, cancellation state, and logs are stored under:
 ```text
 %LOCALAPPDATA%\HigherEdAutomation
 ```
+
+## If an RDC download does not open a confirmation
+
+RDC and JPMLB use the same watcher. If JPMLB still prompts, check the RDC
+download before reinstalling the watcher:
+
+- The PDF must be in the folder shown by the latest `Watcher started for:`
+  log entry. The watcher uses the Windows Downloads known folder; the browser
+  can be configured to save elsewhere. Subfolders are not watched.
+- The complete filename must match
+  `Submission_Confirmation_MM_DD_YYYY_HH_MM_SS.pdf`. Browser duplicates such as
+  `... (1).pdf` and other bank-provided names are ignored.
+- A previously cancelled, unchanged file will not prompt again. Restarting
+  the watcher preserves that cancellation state.
+- The log can show a file-readiness failure, invalid PDF signature, or an
+  error while preparing the confirmation. On restart, the initial catch-up
+  scan considers only files modified within the last seven days by default.
+
+Read the log under the affected employee's Windows account:
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\HigherEdAutomation\report-filing\report-filing.log" -Tail 60
+```
+
+If neither RDC nor JPMLB prompts, check the scheduled task:
+
+```powershell
+Get-ScheduledTask -TaskName "HigherEd Automation - Cashier Report Filing Watcher" |
+    Select-Object TaskName, State
+Get-ScheduledTaskInfo -TaskName "HigherEd Automation - Cashier Report Filing Watcher" |
+    Select-Object LastRunTime, LastTaskResult
+```
+
+These commands inspect status only. A long-running watcher can have an
+in-progress task result; that alone is not a failure. Preserve the log before
+rerunning `setup-report-watcher`, which restarts the watcher and can present
+confirmations for recent matching downloads.
+
+The desktop application's Qt plugin error is separate: RDC uses Windows Forms
+and does not require PySide6 to display its confirmation.

@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$RepairGui
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -330,6 +332,25 @@ then run .\setup.ps1 again.
 
     Write-SetupStep "Verifying the installation"
 
+    if ($RepairGui) {
+        # pip's normal install trusts existing package metadata even when DLLs
+        # have disappeared. Re-download the pinned GUI package and dependencies.
+        $guiRequirement = @(
+            Get-Content -LiteralPath $RequirementsFile |
+                Where-Object { $_ -match '^PySide6-Essentials==\S+$' }
+        )
+        if ($guiRequirement.Count -ne 1) {
+            throw "requirements.txt must contain one pinned PySide6-Essentials version."
+        }
+        Invoke-CheckedCommand `
+            -Command $VenvPython `
+            -Arguments @(
+                "-m", "pip", "install", "--force-reinstall", "--no-cache-dir",
+                $guiRequirement[0]
+            ) `
+            -FailureMessage "The desktop runtime could not be repaired. Close automation programs and check your internet connection."
+    }
+
     $verificationCode = @"
 import dotenv
 import keyring
@@ -337,21 +358,16 @@ import numpy
 import openpyxl
 import pandas
 import requests
-from PySide6.QtWidgets import QApplication, QWidget
+from app.gui.runtime_check import verify_qt_runtime
 from playwright.sync_api import sync_playwright
 
-app = QApplication([])
-window = QWidget()
-window.show()
-app.processEvents()
-window.close()
-app.quit()
+verify_qt_runtime(show_window=True)
 "@
 
     Invoke-CheckedCommand `
         -Command $VenvPython `
         -Arguments @("-c", $verificationCode) `
-        -FailureMessage "One or more required Python packages could not be imported."
+        -FailureMessage "Package or desktop runtime verification failed. For a Qt/plugin error, close automation programs and run .\setup.ps1 -RepairGui. If it persists, preserve the diagnostic output above for IT."
 
     Write-Host "Required Python packages are available." -ForegroundColor Green
 

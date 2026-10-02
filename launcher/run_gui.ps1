@@ -43,13 +43,33 @@ Open PowerShell in this repository and run:
 "@
     }
 
-    & $pythonExecutable -c "from PySide6.QtWidgets import QApplication" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw "The desktop interface needs an update. Run .\setup.ps1 from this repository to install PySide6."
-    }
-
     Push-Location $projectRoot
     try {
+        $diagnosticsDirectory = Join-Path $env:LOCALAPPDATA "HigherEdAutomation"
+        New-Item -ItemType Directory -Path $diagnosticsDirectory -Force | Out-Null
+        $diagnosticsPath = Join-Path $diagnosticsDirectory "gui-runtime-check.log"
+        # Validate native plugin initialization before starting pythonw, whose
+        # startup errors would otherwise be invisible to the employee.
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell 5.1 treats redirected native stderr as error
+            # records. Qt's useful debug messages are not themselves failures.
+            $ErrorActionPreference = "Continue"
+            & $pythonExecutable -m app.gui.runtime_check *> $diagnosticsPath
+            $runtimeExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($runtimeExitCode -ne 0) {
+            throw @"
+The desktop runtime could not start. Close automation programs, open PowerShell in this repository, and run:
+    .\setup.ps1 -RepairGui
+
+Diagnostic log for IT: $diagnosticsPath
+"@
+        }
+
         if ($Console) {
             & $pythonExecutable -m app.gui.main
             if ($LASTEXITCODE -ne 0) {

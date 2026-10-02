@@ -672,17 +672,18 @@ class GuiPowerShellContractTests(unittest.TestCase):
         setup = (project_root / "setup.ps1").read_text(encoding="utf-8")
         requirements = (project_root / "requirements.txt").read_text(encoding="utf-8")
 
-        self.assertIn("app = QApplication([])", setup)
-        self.assertIn("app.processEvents()", setup)
+        self.assertIn("verify_qt_runtime(show_window=True)", setup)
         self.assertIn("PySide6-Essentials==6.10.2", requirements)
         self.assertNotIn("tkinterdnd2", requirements)
 
     def test_launcher_checks_qt_before_launch(self) -> None:
-        runtime_call = self.launcher.index("from PySide6.QtWidgets import QApplication")
+        runtime_call = self.launcher.index("-m app.gui.runtime_check")
         gui_launch = self.launcher.index("-m app.gui.main")
 
         self.assertLess(runtime_call, gui_launch)
         self.assertNotIn("Set-GuiTkRuntimeEnvironment", self.launcher)
+        self.assertIn("gui-runtime-check.log", self.launcher)
+        self.assertIn(".\\setup.ps1 -RepairGui", self.launcher)
 
 
 if __name__ == "__main__":

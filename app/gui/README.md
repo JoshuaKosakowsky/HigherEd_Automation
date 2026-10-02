@@ -28,8 +28,11 @@ layout; accent colors remain limited.
   pipeline configuration. They do not reimplement processing rules.
 - `launcher/run_gui.ps1` starts the app with the repository virtual environment.
 - Setup installs pinned `PySide6-Essentials` and verifies a real Qt window.
-  The GUI launcher checks Qt availability; the obsolete Tcl/Tk helper and its
-  dedicated tests have been removed.
+  The GUI launcher verifies native plugin initialization using
+  `app.gui.runtime_check` before starting windowed Python. Diagnostics go to
+  `%LOCALAPPDATA%\HigherEdAutomation\gui-runtime-check.log`.
+  Run `setup.ps1 -RepairGui` to re-download the pinned GUI runtime when files
+  are missing or damaged. See the root README's Qt troubleshooting instructions.
 - `shared/user_settings.py` reads the same per-user JSON written by `setup.ps1`.
   The home page greets the employee by first name and uses `User` when settings
   are unavailable or invalid.

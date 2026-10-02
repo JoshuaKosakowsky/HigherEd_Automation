@@ -191,6 +191,39 @@ Confirm that the computer is connected to the internet and rerun:
 
 Setup is safe to rerun and will reuse a valid existing environment.
 
+### The desktop app cannot find the Qt Windows platform plugin
+
+If setup fails at step 4 with `Could not find the Qt platform plugin "windows"`,
+close automation programs and run this command from the updated repository:
+
+```powershell
+.\setup.ps1 -RepairGui
+```
+
+This re-downloads and reinstalls the GUI package at the version pinned in
+`requirements.txt`, including its matching dependencies. Ordinary setup can
+report "already satisfied" even when a package's DLL files are missing.
+Setup then checks the plugin location and initializes a real Qt window.
+The desktop launcher also checks native Qt initialization before opening the
+hidden application and writes diagnostics to
+`%LOCALAPPDATA%\HigherEdAutomation\gui-runtime-check.log`.
+
+If repair still fails, give IT the setup output and that log. They show the
+plugin location, inherited Qt environment settings, and plugin loading errors.
+IT can check for quarantined DLLs, conflicting Qt settings, or missing runtime
+dependencies; do not disable endpoint protection or download individual DLLs.
+
+Each laptop needs its own setup-created `.venv`; do not copy an environment
+from another computer. If the repository is in OneDrive, keep it available
+locally using **Always keep on this device**. A successful install followed by
+missing files needs investigation rather than repeated reinstallations.
+
+The report watcher uses PowerShell/Windows Forms independently of Qt. For an
+RDC failure, check the exact downloaded filename, the employee's access to the
+Daily Closing destination, and
+`%LOCALAPPDATA%\HigherEdAutomation\report-filing\report-filing.log`. See the
+[watcher instructions](workflows/report_filing/README.md).
+
 ### A workflow cannot find its input
 
 Read the missing-file path shown in the error. Confirm that the input filename
