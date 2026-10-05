@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "rules": {
+    "FEIT": {"status": "excluded", "reason": "Transportation fee; confirmed by report owner."},
+    "CFEE": {"status": "excluded", "reason": "Card payment convenience fee; confirmed by report owner."},
+    "FEAS": {
+      "status": "review",
+      "reason": "Mines describes this mandatory fee as supporting USG/GSG student government activities/functions, not fraternity membership. CRA's student-association exclusion is not limited to fraternities; confirm whether this student-government fee falls within it before certification. Included in the historical example.",
+      "institution_source_url": "https://bursar.mines.edu/fees/",
+      "tax_guidance_url": "https://www.canada.ca/en/revenue-agency/services/tax/technical-information/income-tax/income-tax-folios-index/series-1-individuals/folio-2-students/income-tax-folio-s1-f2-c2-tuition-tax-credit.html"
+    },
+    "HLTH": {"status": "review", "reason": "Health insurance was included in the example; confirm its treatment separately from health services."}
+  }
+}

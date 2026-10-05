@@ -83,6 +83,12 @@ step requires confirmation that TSPLOAD applied successfully in Banner. File inp
 a typed or pasted path, the Browse button, or a file dropped from Explorer.
 Existing command-line workflows remain available.
 
+Canadian TL11A [source-data preparation](workflows/canadian_tax/README.md) is
+available by command line for one CWID and tax year. It extracts account,
+enrollment and program data and records fee-review rules and the published
+annual USD/CAD rate. Payment allocation and final certificate preparation
+remain review steps; this workflow does not fill a PDF.
+
 ### Optional PowerShell shortcuts
 
 The shortcuts are the normal way to run the automation tools on computers that

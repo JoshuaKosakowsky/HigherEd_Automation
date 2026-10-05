@@ -42,6 +42,7 @@ logs/**
 # JSON data
 # Detail-code data is generated locally and may contain operational metadata.
 detail_codes.json
+data/canadian_tax/
 config/gui_access.json
 
 # Allow public examples that belong to the application. The live GUI access
