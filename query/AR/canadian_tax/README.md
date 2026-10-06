@@ -12,6 +12,7 @@ Run it using [the workflow instructions](../../../workflows/canadian_tax/README.
 | Transactions | `TBRACCD`, `TBBDETC`, `STVTERM` | One account transaction, including full history |
 | Enrollment | `SFRSTCR`, `STVRSTS`, `SSBSECT`, `SOBPTRM` | One registration per term/CRN, including dropped rows |
 | Programs | `SGBSTDN` | Latest effective program record for each candidate term; retain ties |
+| Payment applications | `TBRAPPL` | One raw application record; link payment/charge transaction numbers locally |
 | Payment application inventory | `information_schema.columns` | Discover visible `TBRAPPL` columns without reading student applications |
 
 The SQL templates are executed by the Python workflow. They are not standalone
@@ -30,7 +31,14 @@ Section dates and part-of-term dates remain separate. Compare the latter with
 the part-of-term information used in SFARSTS, and compare the program code,
 degree and level with SGASTDN. Dates describe schedules, not actual attendance;
 credit hours alone do not prove CRA full-time attendance or qualifying courses.
-Program labels and full-time months are not derived in this step. `SGBSTDN`
+Prepared enrollment checks each course for at least 21 consecutive scheduled
+days, counting both start and end dates. It uses section dates, or a complete
+part-of-term date pair when section dates are incomplete. Conflicting, invalid
+or missing dates require review. Dropped/non-counting registrations do not pass
+the duration check as enrolled courses. The report owner confirmed Summer
+counts; a qualifying duration does not independently establish full-time
+attendance. No full-time credit-hour threshold or certificate month total is
+inferred in this step. Program labels are not derived. `SGBSTDN`
 primary-program fields must first be confirmed against SGASTDN, especially for
 students with multiple curricula.
 
@@ -45,10 +53,15 @@ students with multiple curricula.
 3. Reconcile registration/section/part-of-term and program data to the forms
    above. Duplicated transaction or registration keys fail extraction rather
    than multiplying amounts. Latest-effective program ties remain visible.
-4. Review the payment-application inventory. No mapping of applications to
-   eligible charges is assumed, and the refund allocation workflow is not
-   reused as a Canadian tax rule.
-5. Approve fee rules and reconcile a paid eligible USD amount before applying
+4. Reconcile `payment_applications.csv` and its prepared transaction links.
+   Applications retain original signed amounts, identifiers, versions, direct
+   payment/reapplication flags and dates, including records outside the tax
+   year. Missing references or unexpected transaction types are flagged;
+   duplicated application IDs fail. Repeated payment/charge pairs with distinct
+   IDs remain separate. Neither `DISTINCT` nor grouping hides reapplications.
+   Confirm which application rows currently count before summing them. The
+   refund allocation workflow is not reused as a Canadian tax rule.
+5. Apply the owner's fee policy and reconcile a paid retained USD amount before applying
    the exchange rate. An account balance of zero does not prove every charge
    was paid by eligible funding.
 
@@ -59,20 +72,13 @@ freshness or a single database snapshot across the sequential queries.
 
 ## Eligibility and exchange policy
 
-`config/institutions/mines/tl11a_detail_codes.json` contains the initial
-owner-confirmed FEIT and CFEE exclusions. All other charge codes start in
-`review` unless explicitly approved as `eligible` or `excluded`, with a reason.
-FEAS and HLTH have explicit review notes. The historical example included FEAS.
-[Mines describes FEAS](https://bursar.mines.edu/fees/) as a mandatory fee
-supporting USG/GSG student government activities/functions, not fraternity
-membership. The TL11A student-association exclusion is not limited to
-fraternities, so this description does not by itself establish eligibility.
-FEAS remains in review pending confirmation of how that exclusion applies to
-this student-government fee. Its rule records both the institutional source
-and [CRA guidance](https://www.canada.ca/en/revenue-agency/services/tax/technical-information/income-tax/income-tax-folios-index/series-1-individuals/folio-2-students/income-tax-folio-s1-f2-c2-tuition-tax-credit.html)
-(paragraph 2.37 identifies the student-association exclusion). Health insurance
-also needs a separate determination from health services. The historical worksheet is
-reference evidence, not an approved detail-code policy.
+`config/institutions/mines/tl11a_detail_codes.json` records the report owner's
+October 5, 2026 direction: **exclude FEIT and CFEE only; retain all other charge
+codes**, including FEAS and HLTH. The `*` rule is the default for charge codes;
+an explicit code rule takes precedence. The `eligible` label records inclusion
+under that operational policy, not an independent CRA eligibility ruling.
+Missing or unknown Banner charge/payment types still require review. Custom
+rule files without `*` retain the previous unknown-code review behavior.
 
 Payments, including scholarships, stay separate from charge eligibility. Do not
 subtract scholarship income from tuition as a blanket rule. Refunds, reversals,

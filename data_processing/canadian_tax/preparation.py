@@ -24,7 +24,7 @@ def validate_inputs(cwid: str, tax_year: int) -> None:
 
 def render_query(name: str, cwid: str, tax_year: int) -> str:
     validate_inputs(cwid, tax_year)
-    if name not in {"identity", "transactions", "enrollment", "programs"}:
+    if name not in {"identity", "transactions", "enrollment", "programs", "payment_applications"}:
         raise ValueError("Unknown TL11A extract.")
     scope = (QUERY_DIRECTORY / "tl11a_scope.sql").read_text(encoding="utf-8")
     scope = scope.replace("__CWID__", f"'{cwid}'").replace("__TAX_YEAR__", str(tax_year))
@@ -56,7 +56,7 @@ def load_rules(path: Path = DEFAULT_RULES) -> dict[str, dict[str, str]]:
     if not isinstance(rules, dict):
         raise ValueError("TL11A rules must be a detail-code mapping.")
     for code, rule in rules.items():
-        if (not re.fullmatch(r"[A-Z0-9]{1,4}", code)
+        if ((code != "*" and not re.fullmatch(r"[A-Z0-9]{1,4}", code))
                 or not isinstance(rule, dict)
                 or rule.get("status") not in {"eligible", "excluded", "review"}
                 or not isinstance(rule.get("reason"), str) or not rule["reason"].strip()):
@@ -95,7 +95,7 @@ def prepare_transactions(
         if kind == "P":
             status, reason = "payment", "Payment source; allocation to eligible tuition remains unverified. Scholarships are not automatically subtracted."
         elif kind == "C":
-            rule = rules.get(code, {"status": "review", "reason": "No approved eligibility rule for this charge code."})
+            rule = rules.get(code, rules.get("*", {"status": "review", "reason": "No approved eligibility rule for this charge code."}))
             status, reason = rule["status"], rule["reason"]
         else:
             status, reason = "review", "Missing or unknown Banner charge/payment indicator."
@@ -114,3 +114,80 @@ def summarize_codes(frame: pd.DataFrame) -> pd.DataFrame:
         transaction_count=("tran_number", "size"),
         net_source_amount_usd=("amount_usd", "sum"),
     ).reset_index()
+
+
+def prepare_payment_applications(
+    frame: pd.DataFrame, transactions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Link raw applications without treating them as final paid tuition."""
+    required = {"pidm", "application_id", "payment_tran_number", "charge_tran_number", "application_amount_usd"}
+    if not required.issubset(frame.columns):
+        raise ValueError("Payment application extract is missing required columns.")
+    if frame[["pidm", "application_id"]].isna().any().any() or frame.duplicated(["pidm", "application_id"]).any():
+        raise ValueError("Payment application identifiers are missing or duplicated.")
+    columns = ["pidm", "tran_number", "term_code", "detail_code", "type_ind", "effective_date", "eligibility_status"]
+    if not set(columns).issubset(transactions.columns):
+        raise ValueError("Prepared transactions are missing application-link columns.")
+    if transactions.duplicated(["pidm", "tran_number"]).any():
+        raise ValueError("Transaction identifiers are duplicated; application links would multiply.")
+    result = frame.copy()
+    result["application_amount_usd"] = [money(value) for value in frame.application_amount_usd]
+    for role in ("payment", "charge"):
+        source = transactions[columns].rename(columns={
+            column: f"{role}_{column}" for column in columns if column != "pidm"
+        })
+        result = result.merge(source, how="left", on=["pidm", f"{role}_tran_number"], validate="many_to_one", sort=False)
+    result["application_review_status"] = [
+        "missing_transaction" if pd.isna(pay) or pd.isna(charge)
+        else "linked" if pay == "P" and charge == "C"
+        else "review_transaction_types"
+        for pay, charge in zip(result.payment_type_ind, result.charge_type_ind)
+    ]
+    return result
+
+
+def prepare_enrollment(frame: pd.DataFrame) -> pd.DataFrame:
+    """Check each course's scheduled duration; do not infer full-time status."""
+    columns = ["section_start_date", "section_end_date", "part_of_term_start_date", "part_of_term_end_date"]
+    if not set(columns + ["counts_in_enrollment"]).issubset(frame.columns):
+        raise ValueError("Enrollment extract is missing duration-check columns.")
+    result = frame.copy()
+    days, statuses = [], []
+    for row in frame.to_dict("records"):
+        parsed = []
+        invalid = False
+        for column in columns:
+            value = row[column]
+            if pd.isna(value) or value == "":
+                parsed.append(None)
+                continue
+            try:
+                timestamp = pd.to_datetime(value, utc=True)
+                if pd.isna(timestamp):
+                    invalid = True
+                    parsed.append(None)
+                else:
+                    parsed.append(timestamp.date())
+            except (TypeError, ValueError, OverflowError):
+                invalid = True
+                parsed.append(None)
+        start, end, part_start, part_end = parsed
+        conflict = (start is not None and part_start is not None and start != part_start
+                    or end is not None and part_end is not None and end != part_end)
+        # Use a complete date pair; do not mix a section start with a part end.
+        if start is None or end is None:
+            start, end = part_start, part_end
+        length = (end - start).days + 1 if start is not None and end is not None else None
+        days.append(length)
+        if invalid or conflict or length is None or length <= 0:
+            status = "review_dates"
+        elif str(row["counts_in_enrollment"]).strip().upper() == "N":
+            status = "not_enrolled"
+        elif str(row["counts_in_enrollment"]).strip().upper() != "Y":
+            status = "review_enrollment_status"
+        else:
+            status = "meets_minimum" if length >= 21 else "below_minimum"
+        statuses.append(status)
+    result["scheduled_duration_days"] = pd.array(days, dtype="Int64")
+    result["course_duration_status"] = statuses
+    return result

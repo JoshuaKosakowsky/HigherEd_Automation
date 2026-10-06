@@ -85,7 +85,8 @@ Existing command-line workflows remain available.
 
 Canadian TL11A [source-data preparation](workflows/canadian_tax/README.md) is
 available by command line for one CWID and tax year. It extracts account,
-enrollment and program data and records fee-review rules and the published
+payment-application, enrollment and program data, checks course durations,
+and records fee rules and the published
 annual USD/CAD rate. Payment allocation and final certificate preparation
 remain review steps; this workflow does not fill a PDF.
 

@@ -16,7 +16,8 @@ from app.gui import APP_VERSION
 from data_processing.canadian_tax.exchange_rates import fetch_annual_rate
 from data_processing.canadian_tax.preparation import (
     DEFAULT_RULES, QUERY_DIRECTORY, REPOSITORY_ROOT, load_rules,
-    prepare_transactions, render_query, summarize_codes, validate_extract, validate_inputs,
+    prepare_enrollment, prepare_payment_applications, prepare_transactions,
+    render_query, summarize_codes, validate_extract, validate_inputs,
 )
 from shared.insights.client import InsightsClient
 from shared.insights.config import load_department_profiles
@@ -37,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
 def extract_data(client: InsightsClient, cwid: str, tax_year: int) -> dict[str, pd.DataFrame]:
     validate_inputs(cwid, tax_year)
     frames = {}
-    for name in ("identity", "transactions", "enrollment", "programs"):
+    for name in ("identity", "transactions", "enrollment", "programs", "payment_applications"):
         frame = client.run_sql(render_query(name, cwid, tax_year))
         validate_extract(frame, tax_year)
         if name == "identity" and len(frame) != 1:
@@ -106,6 +107,10 @@ def main() -> int:
     }
     if not arguments.schema_only:
         frames["transactions_prepared"] = prepare_transactions(frames["transactions"], rules)
+        frames["payment_applications_prepared"] = prepare_payment_applications(
+            frames["payment_applications"], frames["transactions_prepared"],
+        )
+        frames["enrollment_prepared"] = prepare_enrollment(frames["enrollment"])
         frames["detail_code_review"] = summarize_codes(frames["transactions_prepared"])
         print("Fetching the published Bank of Canada annual USD/CAD rate.")
         rate, response = fetch_annual_rate(arguments.tax_year)
@@ -115,10 +120,15 @@ def main() -> int:
             eligible_paid_usd=None, eligible_paid_cad=None,
             row_counts={name: len(frame) for name, frame in frames.items()},
             query_hashes={name: hashlib.sha256(render_query(name, arguments.cwid, arguments.tax_year).encode()).hexdigest()
-                          for name in ("identity", "transactions", "enrollment", "programs")},
+                          for name in ("identity", "transactions", "enrollment", "programs", "payment_applications")},
+            enrollment_policy={
+                "minimum_consecutive_days": 21,
+                "duration_convention": "Scheduled start and end dates are inclusive.",
+                "summer_policy": "Report owner confirmed Summer counts; no credit-hour full-time threshold is inferred from course duration.",
+            },
             review_required=[
-                "Confirm all charge-code eligibility rules, including FEAS and HLTH.",
-                "Verify Banner payment applications, scholarships, refunds and reversals before calculating eligible tuition paid.",
+                "Fee exclusions are FEIT/CFEE only under the report owner's policy; verify application treatment before calculating retained tuition paid.",
+                "Reconcile payment application signs, direct-payment/reapplication flags, scholarships, refunds and reversals before summing applications.",
                 "Reconcile program and session dates to SGASTDN/SFARSTS; confirm full-time attendance and qualifying courses.",
                 "Review cross-year payments and the appropriate rate year; no transaction posting date is assumed to be payment date.",
                 "Sequential Insights extracts reflect warehouse data, not a guaranteed atomic or live Banner snapshot.",
@@ -129,6 +139,12 @@ def main() -> int:
             manifest["review_required"].append("No registration rows returned for the requested year's candidate terms.")
         if frames["programs"].empty or frames["programs"].duplicated(["pidm", "term_code"]).any():
             manifest["review_required"].append("Program records are missing or tied at the latest effective term.")
+        if frames["payment_applications"].empty:
+            manifest["review_required"].append("No payment application records returned; do not infer paid tuition from zero balances.")
+        elif frames["payment_applications_prepared"].application_review_status.ne("linked").any():
+            manifest["review_required"].append("Some payment applications have missing transaction links or unexpected charge/payment types.")
+        if frames["enrollment_prepared"].course_duration_status.isin(["review_dates", "below_minimum", "review_enrollment_status"]).any():
+            manifest["review_required"].append("Some courses have unverified dates/enrollment or are shorter than three weeks.")
     write_package(output, frames, manifest)
     print(f"Data package saved. Required schema columns missing: {missing}.")
     if not arguments.schema_only:

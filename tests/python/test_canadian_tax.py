@@ -16,7 +16,8 @@ from data_processing.canadian_tax.exchange_rates import (
     convert_usd_to_cad, fetch_annual_rate, parse_annual_rate,
 )
 from data_processing.canadian_tax.preparation import (
-    QUERY_DIRECTORY, load_rules, money, prepare_transactions,
+    QUERY_DIRECTORY, load_rules, money, prepare_enrollment,
+    prepare_payment_applications, prepare_transactions,
     render_query, summarize_codes, validate_extract, validate_inputs,
 )
 from workflows.canadian_tax.run_tl11a_data import build_parser, extract_data, main, write_package
@@ -35,7 +36,7 @@ class CanadianTaxPreparationTests(unittest.TestCase):
             with self.subTest(year=year), self.assertRaises(ValueError):
                 validate_inputs("SYNTHETIC001", year)
 
-    def test_preserve_source_and_signed_amounts_and_flag_unknown_rules(self) -> None:
+    def test_preserve_source_and_signs_under_owner_exclusion_policy(self) -> None:
         source = pd.DataFrame([
             {"pidm": 1, "tran_number": n, "term_code": "202510",
              "detail_code": code, "type_ind": kind, "amount_usd": value}
@@ -49,12 +50,44 @@ class CanadianTaxPreparationTests(unittest.TestCase):
         prepared = prepare_transactions(source, load_rules())
         self.assertNotIn("eligibility_status", source)
         self.assertEqual(prepared.eligibility_status.tolist(),
-                         ["excluded", "excluded", "review", "review", "payment", "review", "review"])
+                         ["excluded", "excluded", "eligible", "eligible", "payment", "eligible", "review"])
         self.assertEqual(prepared.amount_usd.iloc[5], Decimal("-40"))
         summary = summarize_codes(prepared)
         unknown = summary[(summary.detail_code == "NEW1") & (summary.type_ind == "C")].iloc[0]
         self.assertEqual(unknown.net_source_amount_usd, Decimal("960"))
         self.assertEqual(unknown.transaction_count, 2)
+
+    def test_custom_rules_without_default_still_require_unknown_code_review(self) -> None:
+        source = pd.DataFrame([{"pidm": 1, "tran_number": 1, "term_code": "202510",
+                                "detail_code": "NEW1", "type_ind": "C", "amount_usd": "100"}])
+        self.assertEqual(prepare_transactions(source, {}).eligibility_status.iloc[0], "review")
+
+    def test_course_duration_boundaries_dropped_missing_and_conflicting_dates(self) -> None:
+        rows = []
+        for start, end, part_start, part_end, enrolled in [
+            ("2025-05-01", "2025-05-21", "2025-05-01", "2025-05-21", "Y"),
+            ("2025-05-01", "2025-05-20", "2025-05-01", "2025-05-20", "Y"),
+            ("2025-05-01", "2025-05-21", "2025-05-01", "2025-05-21", "N"),
+            (None, None, "2025-05-01", "2025-05-21", "Y"),
+            (None, None, None, None, "Y"),
+            ("2025-05-01", "2025-05-21", "2025-05-02", "2025-05-21", "Y"),
+            ("bad-date", "2025-05-21", "2025-05-01", "2025-05-21", "Y"),
+            ("NaT", "2025-05-21", "2025-05-01", "2025-05-21", "Y"),
+            ("2025-05-21", "2025-05-01", None, None, "Y"),
+            ("2025-05-01", "2025-05-21", None, None, None),
+        ]:
+            rows.append(dict(section_start_date=start, section_end_date=end,
+                             part_of_term_start_date=part_start, part_of_term_end_date=part_end,
+                             counts_in_enrollment=enrolled))
+        source = pd.DataFrame(rows)
+        result = prepare_enrollment(source)
+        self.assertEqual(result.course_duration_status.tolist(), [
+            "meets_minimum", "below_minimum", "not_enrolled", "meets_minimum",
+            "review_dates", "review_dates", "review_dates", "review_dates", "review_dates", "review_enrollment_status",
+        ])
+        self.assertEqual(result.scheduled_duration_days.iloc[0], 21)
+        self.assertEqual(result.scheduled_duration_days.iloc[1], 20)
+        self.assertNotIn("course_duration_status", source)
 
     def test_reject_duplicate_transactions_and_invalid_amounts(self) -> None:
         row = {"pidm": 1, "tran_number": 1, "term_code": "202510",
@@ -165,7 +198,7 @@ class CanadianTaxQueryExecutionTests(unittest.TestCase):
         self.fields = re.findall(r"\('(saturn|taismgr)', '(\w+)', '(\w+)'\)", schema)
         tables = {}
         for schema_name, table, suffix in self.fields:
-            kind = "NUMERIC" if suffix in {"pidm", "tran_number", "amount", "balance", "credit_hr", "bill_hr"} else "TEXT"
+            kind = "NUMERIC" if suffix in {"pidm", "tran_number", "amount", "balance", "credit_hr", "bill_hr", "surrogate_id", "version", "pay_tran_number", "chg_tran_number"} else "TEXT"
             tables.setdefault((schema_name, table), []).append(f"{table}_{suffix} {kind}")
         for (schema_name, table), columns in tables.items():
             self.db.execute(f"CREATE TABLE {schema_name}.{table} ({', '.join(columns)})")
@@ -186,6 +219,10 @@ class CanadianTaxQueryExecutionTests(unittest.TestCase):
                                           (4, "202480", "TU01", -50, "2024-08-01")]:
             self.insert("taismgr", "tbraccd", pidm=1, tran_number=n, term_code=term,
                         detail_code=code, amount=amount, effective_date=date)
+        for key, charge, amount, reapplied in [(10, 1, 1000, "N"), (11, 2, 30, "N"), (12, 1, -100, "Y")]:
+            self.insert("taismgr", "tbrappl", pidm=1, surrogate_id=key, version=1,
+                        pay_tran_number=3, chg_tran_number=charge, amount=amount,
+                        direct_pay_ind="N", reappl_ind=reapplied, activity_date="2026-01-01")
         self.insert("saturn", "stvrsts", code="RE", incl_sect_enrl="Y")
         self.insert("saturn", "stvrsts", code="DD", incl_sect_enrl="N")
         for crn, status in [(101, "RE"), (102, "DD")]:
@@ -222,6 +259,35 @@ class CanadianTaxQueryExecutionTests(unittest.TestCase):
         self.assertEqual(frame.section_start_date.iloc[0], "2025-01-14")
         self.assertEqual(frame.part_of_term_start_date.iloc[0], "2025-01-10")
 
+    def test_application_extract_preserves_signed_rows_and_links_scholarships(self) -> None:
+        frames = extract_data(self.client, "SYNTHETIC001", 2025)
+        raw = frames["payment_applications"]
+        self.assertEqual(len(raw), 3)
+        self.assertEqual(raw.application_amount_usd.tolist(), [1000, 30, -100])
+        self.assertTrue(raw.application_activity_date.eq("2026-01-01").all())
+        prepared = prepare_payment_applications(raw, prepare_transactions(frames["transactions"], load_rules()))
+        self.assertEqual(prepared.application_review_status.tolist(), ["linked"] * 3)
+        self.assertEqual(prepared.payment_detail_code.tolist(), ["SCH1"] * 3)
+        self.assertEqual(prepared.charge_eligibility_status.tolist(), ["eligible", "excluded", "eligible"])
+        self.assertEqual(prepared.application_amount_usd.iloc[2], Decimal("-100"))
+        self.assertEqual(prepared.reapplication_ind.iloc[2], "Y")
+        self.assertNotIn("application_review_status", raw)
+
+    def test_missing_or_unexpected_application_references_are_visible(self) -> None:
+        self.insert("taismgr", "tbrappl", pidm=1, surrogate_id=13, pay_tran_number=999, chg_tran_number=1, amount=5)
+        self.insert("taismgr", "tbrappl", pidm=1, surrogate_id=14, pay_tran_number=1, chg_tran_number=2, amount=5)
+        frames = extract_data(self.client, "SYNTHETIC001", 2025)
+        prepared = prepare_payment_applications(frames["payment_applications"], prepare_transactions(frames["transactions"], load_rules()))
+        self.assertEqual(prepared.application_review_status.tolist()[-2:], ["missing_transaction", "review_transaction_types"])
+
+    def test_duplicate_application_ids_fail_but_empty_extract_stays_empty(self) -> None:
+        frames = extract_data(self.client, "SYNTHETIC001", 2025)
+        transactions = prepare_transactions(frames["transactions"], load_rules())
+        raw = frames["payment_applications"]
+        with self.assertRaisesRegex(ValueError, "identifiers are missing or duplicated"):
+            prepare_payment_applications(pd.concat([raw, raw.iloc[:1]]), transactions)
+        self.assertTrue(prepare_payment_applications(raw.iloc[:0], transactions).empty)
+
     def test_program_is_term_effective_and_keeps_cross_year_term(self) -> None:
         frame = extract_data(self.client, "SYNTHETIC001", 2025)["programs"]
         self.assertEqual(frame.program_code.tolist(), ["OLD", "NEW"])
@@ -244,9 +310,9 @@ class CanadianTaxQueryExecutionTests(unittest.TestCase):
 
     def test_schema_inventory_covers_every_referenced_banner_column(self) -> None:
         expected = {f"{table}_{suffix}" for _, table, suffix in self.fields}
-        for name in ("identity", "transactions", "enrollment", "programs"):
+        for name in ("identity", "transactions", "enrollment", "programs", "payment_applications"):
             query = render_query(name, "SYNTHETIC001", 2025)
-            used = set(re.findall(r"\b(?:spriden|stvterm|tbraccd|tbbdetc|sfrstcr|stvrsts|ssbsect|sobptrm|sgbstdn)_\w+", query))
+            used = set(re.findall(r"\b(?:spriden|stvterm|tbraccd|tbrappl|tbbdetc|sfrstcr|stvrsts|ssbsect|sobptrm|sgbstdn)_\w+", query))
             self.assertFalse(used - expected)
 
     def test_schema_query_reports_missing_fields_and_cli_stops_before_student_queries(self) -> None:
@@ -285,6 +351,10 @@ class CanadianTaxQueryExecutionTests(unittest.TestCase):
             self.assertIsNone(manifest["eligible_paid_usd"])
             self.assertEqual(manifest["exchange_rate"]["cad_per_usd"], "1.3978")
             self.assertEqual(manifest["row_counts"]["transactions"], 4)
+            self.assertEqual(manifest["row_counts"]["payment_applications"], 3)
+            self.assertEqual(manifest["enrollment_policy"]["minimum_consecutive_days"], 21)
+            self.assertTrue((output / "payment_applications_prepared.csv").exists())
+            self.assertTrue((output / "enrollment_prepared.csv").exists())
             self.assertTrue((output / "detail_code_review.csv").exists())
 
 
