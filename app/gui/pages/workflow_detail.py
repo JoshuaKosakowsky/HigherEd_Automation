@@ -40,6 +40,7 @@ class WorkflowDetailPage(QScrollArea):
         self.inputs = {}
         self.manual_banner_widgets = []
         self.recon_source = None
+        self.refund_source = None
         self.textbook_step = None
         self.setWidgetResizable(True)
         body = QWidget()
@@ -81,12 +82,12 @@ class WorkflowDetailPage(QScrollArea):
             control.setAccessibleName(parameter.label)
             self.inputs[parameter.key] = control
             form_layout.addWidget(control)
-            if parameter.key in ("frst_file", "book_file") and definition.workflow_id == "textbook_recon_manual":
+            if self._is_manual_source_parameter(parameter.key):
                 self.manual_banner_widgets.extend((field_label, control))
             if parameter.help_text:
                 help_label = label(parameter.help_text, "muted")
                 form_layout.addWidget(help_label)
-                if parameter.key in ("frst_file", "book_file") and definition.workflow_id == "textbook_recon_manual":
+                if self._is_manual_source_parameter(parameter.key):
                     self.manual_banner_widgets.append(help_label)
             form_layout.addSpacing(8)
             if parameter.key == "brokers_file" and definition.workflow_id == "textbook_recon_manual":
@@ -97,6 +98,15 @@ class WorkflowDetailPage(QScrollArea):
                 if is_administrator:
                     self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
                 form_layout.addWidget(self.recon_source)
+                form_layout.addSpacing(8)
+            if parameter.key == "target_term" and definition.workflow_id == "refund_review":
+                form_layout.addWidget(label("Refund data source", "field"))
+                self.refund_source = QComboBox()
+                self.refund_source.setAccessibleName("Refund data source")
+                self.refund_source.addItem("Drop, browse, or enter source file paths", MANUAL_SOURCE)
+                if is_administrator:
+                    self.refund_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
+                form_layout.addWidget(self.refund_source)
                 form_layout.addSpacing(8)
         if definition.workflow_id == "textbook_brokers":
             form_layout.addWidget(label("Workflow step", "field"))
@@ -121,9 +131,9 @@ class WorkflowDetailPage(QScrollArea):
         self.production_warning = label(definition.production_warning, "warning")
         form_layout.addWidget(self.production_warning)
         self.mode.currentIndexChanged.connect(self._update_production_warning)
-        if self.recon_source is not None:
-            self.recon_source.currentIndexChanged.connect(self._update_recon_source)
-            self._update_recon_source()
+        if self._source_control is not None:
+            self._source_control.currentIndexChanged.connect(self._update_source)
+            self._update_source()
         self._update_production_warning()
         layout.addWidget(self.form)
         self.error = label("", "error")
@@ -155,14 +165,25 @@ class WorkflowDetailPage(QScrollArea):
         self.timer.setInterval(100)
         self.timer.timeout.connect(self._poll_result)
 
+    @property
+    def _source_control(self) -> QComboBox | None:
+        return self.refund_source if self.refund_source is not None else self.recon_source
+
+    def _is_manual_source_parameter(self, key: str) -> bool:
+        return (
+            self.definition.workflow_id == "textbook_recon_manual" and key in ("frst_file", "book_file")
+        ) or (
+            self.definition.workflow_id == "refund_review" and key in ("transaction_file", "context_file")
+        )
+
     def _update_production_warning(self) -> None:
         self.production_warning.setVisible(
             self.mode.currentData() == WorkflowMode.PRODUCTION.value or
-            (self.recon_source is not None and self.recon_source.currentData() == SQL_SOURCE)
+            (self._source_control is not None and self._source_control.currentData() == SQL_SOURCE)
         )
 
-    def _update_recon_source(self) -> None:
-        manual = self.recon_source.currentData() == MANUAL_SOURCE
+    def _update_source(self) -> None:
+        manual = self._source_control.currentData() == MANUAL_SOURCE
         for widget in self.manual_banner_widgets:
             widget.setVisible(manual)
         self._update_production_warning()
@@ -173,13 +194,13 @@ class WorkflowDetailPage(QScrollArea):
             for key, control in self.inputs.items()
         }
         definitions = self.definition.parameters
-        if self.recon_source is not None:
-            source = self.recon_source.currentData()
+        if self._source_control is not None:
+            source = self._source_control.currentData()
             if source == SQL_SOURCE:
                 definitions = tuple(parameter for parameter in definitions
-                                    if parameter.key not in ("frst_file", "book_file"))
+                                    if not self._is_manual_source_parameter(parameter.key))
             parsed = parse_parameters(definitions, values)
-            parsed["banner_source"] = source
+            parsed["refund_source" if self.refund_source is not None else "banner_source"] = source
             return parsed
         parsed = parse_parameters(definitions, values)
         if self.textbook_step is not None:
@@ -199,9 +220,9 @@ class WorkflowDetailPage(QScrollArea):
         summary = QWidget()
         form = QFormLayout(summary)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        if self.recon_source is not None:
-            source_label = "Run SQL from PROD Insights" if context.parameters["banner_source"] == SQL_SOURCE else "Upload BOOK/FRST files manually"
-            form.addRow(label("Banner data source", "field"), label(source_label))
+        if self._source_control is not None:
+            source_label = "Run SQL from PROD Insights" if self._source_control.currentData() == SQL_SOURCE else self._source_control.currentText()
+            form.addRow(label("Refund data source" if self.refund_source is not None else "Banner data source", "field"), label(source_label))
         if self.textbook_step is not None:
             form.addRow(label("Workflow step", "field"), label(self.textbook_step.currentText()))
         for parameter in self.definition.parameters:
@@ -241,7 +262,7 @@ class WorkflowDetailPage(QScrollArea):
             self.ensureWidgetVisible(self.error)
             return
         value = self.mode.currentData()
-        mode = (WorkflowMode.PRODUCTION if parameters.get("banner_source") == SQL_SOURCE else
+        mode = (WorkflowMode.PRODUCTION if (parameters.get("banner_source") == SQL_SOURCE or parameters.get("refund_source") == SQL_SOURCE) else
                 WorkflowMode(value) if value else None)
         context = WorkflowContext(self.definition.workflow_id, parameters, mode)
         if not self._confirm(context) or not self.authorize():

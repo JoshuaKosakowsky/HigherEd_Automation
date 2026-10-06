@@ -115,6 +115,47 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(captured[0].parameters["banner_source"], "sql")
         self.assertNotIn("frst_file", captured[0].parameters)
 
+    def test_refund_admin_source_selection_and_manual_validation(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("refund_review"))
+        page = window.current_page
+        self.assertEqual(page.refund_source.count(), 2)
+        self.assertEqual(page.refund_source.currentData(), "manual")
+        with self.assertRaisesRegex(ValueError, "was not found"):
+            page._parse_parameters()
+        transaction = self.root / "transactions.csv"
+        context = self.root / "context.xlsx"
+        transaction.touch()
+        context.touch()
+        page.inputs["transaction_file"].setText(str(transaction))
+        page.inputs["context_file"].setText(str(context))
+        parsed = page._parse_parameters()
+        self.assertEqual(parsed["refund_source"], "manual")
+        self.assertEqual(parsed["transaction_file"], transaction)
+        page.refund_source.setCurrentIndex(page.refund_source.findData("sql"))
+        self.assertTrue(page.inputs["transaction_file"].isHidden())
+        self.assertTrue(page.inputs["context_file"].isHidden())
+        self.assertTrue(page.production_warning.isVisible())
+        captured = []
+        with patch.object(page, "_confirm", side_effect=lambda context: captured.append(context) or False):
+            page._run()
+        self.assertEqual(captured[0].mode, WorkflowMode.PRODUCTION)
+        self.assertEqual(captured[0].parameters["refund_source"], "sql")
+        self.assertNotIn("transaction_file", captured[0].parameters)
+        self.assertNotIn("context_file", captured[0].parameters)
+        page.refund_source.setCurrentIndex(0)
+        self.assertFalse(page.inputs["transaction_file"].isHidden())
+        self.assertTrue(page.production_warning.isHidden())
+
+    def test_refund_is_admin_only_even_with_explicit_staff_grant(self):
+        self.payload["views"]["analyst"]["workflows"] = ["refund_review"]
+        self.write_policy()
+        window = self.open_app("STAFF")
+        self.assertEqual(window.visible_workflows, ())
+        with patch.object(QMessageBox, "warning"):
+            window.show_workflow(get_workflow("refund_review"))
+        self.assertFalse(isinstance(window.current_page, WorkflowDetailPage))
+
     def test_staff_recon_offers_only_manual_files(self):
         self.payload["views"]["analyst"]["workflows"] = ["textbook_recon_manual"]
         self.write_policy()

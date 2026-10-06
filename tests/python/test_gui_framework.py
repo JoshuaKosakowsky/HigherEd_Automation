@@ -8,7 +8,7 @@ import unittest
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.gui.models import (
     WorkflowContext,
@@ -404,6 +404,57 @@ class RefundReviewAdapterTests(unittest.TestCase):
             self.assertEqual(result.output_path, output_file)
             self.assertIn("2 account(s)", result.message)
             self.assertIn("does not approve or issue refunds", result.message)
+
+    def test_sql_uses_existing_batched_pipeline_and_cleans_extracts(self):
+        context = WorkflowContext("refund_review", {
+            "refund_source": "sql", "target_term": "202680",
+            "output_file": Path(self._testMethodName + ".xlsx"),
+        }, WorkflowMode.PRODUCTION)
+        profile = MagicMock()
+        client = MagicMock()
+        with (
+            patch("app.gui.services.refunds.load_access_configuration") as policy,
+            patch("app.gui.services.refunds.get_shared_gui_access_path"),
+            patch("app.gui.services.refunds.get_current_login", return_value="ADMIN"),
+            patch("app.gui.services.refunds.load_department_profiles", return_value={"PROD": profile}),
+            patch("app.gui.services.refunds.build_authenticated_client", return_value=(client, "cached")) as authenticate,
+            patch("app.gui.services.refunds.run_refund_pipeline", return_value=(context.parameters["output_file"], [object()])) as pipeline,
+        ):
+            policy.return_value.is_administrator.return_value = True
+            result = run_refund_review(context)
+        arguments = pipeline.call_args.kwargs
+        self.assertEqual(arguments["extract_settings"].batch_count, 20)
+        self.assertEqual(arguments["extract_settings"].target_term, "202680")
+        self.assertEqual(arguments["extract_settings"].run_date, arguments["parameters"].run_date)
+        self.assertFalse(arguments["extract_settings"].extract_directory.exists())
+        self.assertEqual(arguments["transaction_template_path"].name, "refund_transactions_extract.sql")
+        self.assertEqual(arguments["context_template_path"].name, "refund_context_extract.sql")
+        self.assertIs(arguments["client"], client)
+        authenticate.assert_called_once_with(profile.settings, browser="chrome")
+        client.__exit__.assert_called_once()
+        self.assertTrue(result.success)
+
+    def test_sql_rejects_non_admin_test_mode_and_missing_prod_profile(self):
+        context = WorkflowContext("refund_review", {
+            "refund_source": "sql", "target_term": "202680",
+            "output_file": Path(self._testMethodName + ".xlsx"),
+        }, WorkflowMode.TEST)
+        with (
+            patch("app.gui.services.refunds.load_access_configuration") as policy,
+            patch("app.gui.services.refunds.get_shared_gui_access_path"),
+            patch("app.gui.services.refunds.get_current_login", return_value="STAFF"),
+            patch("app.gui.services.refunds.load_department_profiles", return_value={"PROD": None}),
+            patch("app.gui.services.refunds.build_authenticated_client") as authenticate,
+        ):
+            policy.return_value.is_administrator.return_value = False
+            with self.assertRaisesRegex(ValueError, "Only an administrator"):
+                run_refund_review(context)
+            policy.return_value.is_administrator.return_value = True
+            with self.assertRaisesRegex(ValueError, "requires the PROD"):
+                run_refund_review(context)
+            with self.assertRaisesRegex(ValueError, "PROD is not configured"):
+                run_refund_review(replace(context, mode=WorkflowMode.PRODUCTION))
+            authenticate.assert_not_called()
 
     def test_adapter_refuses_to_overwrite_an_existing_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

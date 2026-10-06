@@ -52,11 +52,15 @@ The integrated workflows are:
 - **Student Testing Population**, using its existing typed Python configuration
   and pipeline. It does not have a run-level TEST or PROD switch: the workflow
   creates balanced TEST/PROD assignments inside the result workbook.
-- **Refund Review**, using the existing manual-download Python pipeline. An
-  administrator selects the matching transaction and account-context exports
-  from Insights. The app calculates and formats the review locally; it does not
-  approve or issue refunds. API extraction, resuming batches, and single-account
-  API validation remain available through the existing PowerShell launcher.
+- **Refund Review** is administrator-only. Choose **Drop, browse, or enter
+  source file paths** for matching transaction and account-context XLSX/CSV
+  exports, or **Run SQL from PROD Insights** to extract both inputs directly
+  using the configured PROD connection and existing 20-batch refund pipeline.
+  SQL mode requires no input files and shows a production warning in the review
+  dialog. Temporary extracts are removed after the run. Both options calculate
+  and format the review in Python; neither approves or issues refunds, and
+  existing output workbooks are never overwritten. Resuming batches and
+  single-account API validation remain available through the PowerShell launcher.
 - **Textbook Brokers**, using the existing PowerShell and WinSCP integration to
   download pending `finaid_*.csv` / `ia_*.csv` sources from the configured SFTP
   server and transform them into TSPLOAD. The GUI accepts the Banner term and
@@ -317,7 +321,7 @@ dialogs intentionally omit tracebacks and secrets.
 
 The next useful migration steps are:
 
-1. decide whether Refund Review API extraction and batch-resume controls belong
+1. decide whether Refund Review batch-resume controls belong
    in the GUI after the manual workflow has been operationally validated;
 2. explicitly approve workflows for the AR/Analyst and Cashier views;
 3. integrate Historical Trends after confirming its role and input/output selection;

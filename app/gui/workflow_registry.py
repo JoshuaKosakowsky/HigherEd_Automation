@@ -80,12 +80,17 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         workflow_id="refund_review",
         name="Refund Review",
         description=(
-            "Calculates a read-only refund review workbook from the transaction "
-            "and account-context files downloaded from Insights. It does not "
+            "Calculates a read-only refund review workbook from uploaded Insights "
+            "files or direct Insights SQL extraction. It does not "
             "approve or issue refunds."
         ),
         category="Accounts Receivable",
         runner=run_refund_review,
+        administrator_only=True,
+        production_warning=(
+            "Run SQL reads production student account data from PROD Insights "
+            "and creates a review workbook. It does not approve or issue refunds."
+        ),
         parameters=(
             ParameterDefinition(
                 key="target_term",
