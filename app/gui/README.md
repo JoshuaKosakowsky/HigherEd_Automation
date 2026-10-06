@@ -58,8 +58,16 @@ The integrated workflows are:
   using the configured PROD connection and existing 20-batch refund pipeline.
   Oversized results automatically subdivide by account and, for a single
   account's transaction history, by transaction number. Each part and the
-  recombined batch must pass completeness checks before being saved. The GUI
-  log records subdivision progress without account identifiers.
+  recombined batch must pass completeness checks before being saved. Subdivision
+  narrows account selection before full-balance aggregation and joins; transaction
+  slices leave full-account eligibility unchanged. The GUI log records per-query,
+  extraction, calculation, and workbook timings without account identifiers.
+  **Cancel run** stops at the next safe checkpoint. Closing the window during
+  Refund Review offers to cancel and close once it stops. An active Insights
+  request must return or time out first (the client uses a 120-second request
+  timeout); cancellation does not terminate a query already running on the
+  server. Cancelled runs publish no workbook. Output is staged and moved into
+  place only after completion.
   SQL mode requires no input files and shows a production warning in the review
   dialog. Temporary extracts are removed after the run. Both options calculate
   and format the review in Python; neither approves or issues refunds, and
@@ -310,7 +318,8 @@ existing shortcut or `.\launcher\run_gui.ps1 -Console`. No policy migration is
 needed for an existing shared schema-3 policy.
 
 The interface refreshes access when opening pages and before starting a run.
-While a workflow runs, navigation and window closing are blocked. Completion
+While a workflow runs, navigation is blocked; Refund Review supports the safe
+cancellation described above, while other workflows still block window closing. Completion
 provides Open result and Open output folder actions; failures retain log access.
 
 Run the automated suite with:

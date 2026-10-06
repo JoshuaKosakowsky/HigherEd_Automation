@@ -4,6 +4,7 @@ import json
 import logging
 import subprocess
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from datetime import date
@@ -40,6 +41,7 @@ from app.gui.services.textbook_brokers import (
     run_textbook_brokers,
 )
 from data_processing.refunds.extract import RefundExtractError, TruncatedRefundExtractError
+from shared.cancellation import CancellationToken, WorkflowCancelled
 from app.gui import theme
 from app.gui.workflow_registry import get_workflow, get_workflows
 from shared.banner.term import get_banner_term
@@ -669,6 +671,73 @@ class WorkflowExecutorTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.log_path, self.log_path)
         self.assertFalse(executor.is_running)
+
+    def test_cancel_waits_for_running_step_and_returns_cancelled_result(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def runner(context):
+            entered.set()
+            release.wait(timeout=2)
+            context.cancellation.check()
+            return WorkflowResult(True, "Completed")
+
+        definition = WorkflowDefinition("refund_review", "Refund Review", "Synthetic", "Testing", runner, cancellable=True)
+        executor = WorkflowExecutor(self.logger, self.log_path)
+        self.assertFalse(executor.cancel())
+        results = executor.run_async(definition, WorkflowContext("refund_review", {}))
+        self.assertTrue(entered.wait(timeout=2))
+        self.assertTrue(executor.cancel())
+        self.assertTrue(executor.is_running)
+        release.set()
+        result = results.get(timeout=2)
+        self.assertTrue(result.cancelled)
+        self.assertFalse(result.success)
+        self.assertIsNone(result.output_path)
+        self.assertFalse(executor.is_running)
+        self.assertFalse(executor.cancel())
+        repeated = executor.run_async(
+            replace(definition, runner=lambda context: context.cancellation.check() or WorkflowResult(True, "Completed")),
+            WorkflowContext("refund_review", {}),
+        ).get(timeout=2)
+        self.assertTrue(repeated.success)
+
+    def test_request_error_after_cancellation_is_reported_as_cancelled(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def runner(context):
+            entered.set()
+            release.wait(timeout=2)
+            raise RuntimeError("Synthetic request timeout")
+
+        executor = WorkflowExecutor(self.logger, self.log_path)
+        definition = WorkflowDefinition("refund_review", "Refund Review", "Synthetic", "Testing", runner, cancellable=True)
+        results = executor.run_async(definition, WorkflowContext("refund_review", {}))
+        self.assertTrue(entered.wait(timeout=2))
+        self.assertTrue(executor.cancel())
+        release.set()
+        result = results.get(timeout=2)
+        self.assertTrue(result.cancelled)
+        self.assertNotIn("timeout", result.message)
+
+    def test_non_cancellable_workflow_keeps_existing_run_behavior(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def runner(context):
+            self.assertIsNone(context.cancellation)
+            entered.set()
+            release.wait(timeout=2)
+            return WorkflowResult(True, "Completed")
+
+        executor = WorkflowExecutor(self.logger, self.log_path)
+        definition = WorkflowDefinition("other", "Other", "Synthetic", "Testing", runner)
+        results = executor.run_async(definition, WorkflowContext("other", {}))
+        self.assertTrue(entered.wait(timeout=2))
+        self.assertFalse(executor.cancel())
+        release.set()
+        self.assertTrue(results.get(timeout=2).success)
 
     def test_worker_hides_unexpected_exception_details(self) -> None:
         def fail(context: WorkflowContext) -> WorkflowResult:

@@ -192,6 +192,14 @@ has been configured. It does not require manual downloads:
 .\launcher\run_refunds.ps1 -TargetTerm 202680
 ```
 
+The GUI also supports **Cancel run**, or cancelling and closing from the window
+close button. Cancellation waits for an in-flight request to return or time out,
+checks between account calculations and workbook stages, and discards staged
+output before publication. A successfully published workbook remains available
+if cancellation is requested after the publication step. Other workflows retain
+their existing close restrictions. Query and processing timings appear in the
+GUI log and launcher progress output.
+
 ## Recover from failures
 
 The following recovery options apply only to API/batched mode. If authentication
@@ -206,10 +214,16 @@ The API extractor automatically subdivides truncated transaction and context
 batches by disjoint PIDM ranges. If a single account's transaction history is
 still too large, it subdivides by transaction number. This handles Insights'
 response row limit without changing the initial `-BatchCount` or account scope.
+PIDM bounds apply inside candidate selection, before full-account balance
+aggregation and history joins. Transaction-number bounds apply to the final
+transaction extract, so they never alter full-account eligibility. Smaller
+queries therefore avoid rebuilding the entire original batch on every retry.
 Every part passes the row-count guard, and recombined totals must match the
-parent batch before the completed batch is cached. Progress is printed by the
+parent batch before the completed batch is cached. Each filtered query retains
+its own row-count guard. Progress is printed by the
 launcher and written to the GUI log without account identifiers. Subdivision
-is bounded; an indivisible result or a changing population stops extraction
+is bounded; an indivisible result or a population change that breaks count
+reconciliation stops extraction
 with a descriptive error rather than accepting incomplete data.
 
 Only complete top-level batches are cached; a failed subdivided batch is

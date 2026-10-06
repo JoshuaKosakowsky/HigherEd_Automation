@@ -19,6 +19,8 @@ from shared.mines_paths import get_shared_gui_access_path
 
 def run_refund_review(context: WorkflowContext) -> WorkflowResult:
     """Create a review using the existing download or batched SQL pipeline."""
+    if context.cancellation:
+        context.cancellation.check()
     source = context.parameters.get("refund_source", "manual")
     if source not in ("manual", "sql"):
         raise ValueError("Choose manual files or Insights SQL for Refund Review.")
@@ -56,6 +58,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
                 output_file=output_file,
                 client=client,
                 progress=logging.getLogger("highered_automation.gui").info,
+                cancellation=context.cancellation,
             )
     else:
         transaction_file = Path(context.parameters["transaction_file"])
@@ -67,6 +70,8 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
             transaction_file=transaction_file,
             context_file=context_file,
             output_file=output_file,
+            cancellation=context.cancellation,
+            progress=logging.getLogger("highered_automation.gui").info,
         )
 
     return WorkflowResult(

@@ -24,6 +24,8 @@ from data_processing.refunds.extract import (
     render_manual_extract_sql,
 )
 from data_processing.refunds.ingest import read_refund_download
+from data_processing.refunds.pipeline import _create_review
+from shared.cancellation import CancellationToken, WorkflowCancelled
 from data_processing.refunds.terms import derive_target_term, fiscal_year_start, previous_term
 
 
@@ -738,8 +740,10 @@ class CappedRefundSQLClient:
         self.database = sqlite3.connect(":memory:")
         self.database.execute("CREATE TABLE transactions (pidm INTEGER, tran_number INTEGER)")
         self.database.executemany("INSERT INTO transactions VALUES (?, ?)", transactions)
+        self.database.execute("CREATE VIEW transaction_source AS SELECT pidm AS tbraccd_pidm, tran_number AS tbraccd_tran_number FROM transactions")
         self.database.execute("CREATE TABLE context (pidm INTEGER, authorization INTEGER)")
         self.database.executemany("INSERT INTO context VALUES (?, ?)", context or [(1, 1)])
+        self.database.execute("CREATE VIEW context_source AS SELECT pidm AS tbraccd_pidm, authorization FROM context")
         self.limit = limit
         self.calls = []
 
@@ -760,12 +764,13 @@ class RefundSubdivisionTests(unittest.TestCase):
         self.transaction_template = self.root / "transactions.sql"
         self.context_template = self.root / "context.sql"
         self.transaction_template.write_text(
-            "SELECT COUNT(*) OVER () AS extract_row_count, pidm, tran_number "
-            "FROM transactions ORDER BY pidm, tran_number;", encoding="utf-8",
+            "SELECT COUNT(*) OVER () AS extract_row_count, t.tbraccd_pidm AS pidm, "
+            "t.tbraccd_tran_number AS tran_number FROM transaction_source t "
+            "WHERE __PIDM_FILTER__ AND __TRANSACTION_FILTER__ ORDER BY pidm, tran_number;", encoding="utf-8",
         )
         self.context_template.write_text(
-            "SELECT COUNT(*) OVER () AS extract_row_count, pidm, authorization "
-            "FROM context ORDER BY pidm, authorization;", encoding="utf-8",
+            "SELECT COUNT(*) OVER () AS extract_row_count, t.tbraccd_pidm AS pidm, authorization "
+            "FROM context_source t WHERE __PIDM_FILTER__ ORDER BY pidm, authorization;", encoding="utf-8",
         )
         self.settings = ExtractSettings("202680", 1, self.root / "cache")
         self.messages = []
@@ -826,13 +831,53 @@ class RefundSubdivisionTests(unittest.TestCase):
         client = self.client(rows)
         transactions, _ = self.extract(client)
         self.assert_transactions(transactions, rows)
-        self.assertTrue(any("source.tran_number <=" in sql for sql in client.calls))
+        self.assertTrue(any("t.tbraccd_tran_number <=" in sql for sql in client.calls))
 
     def test_sparse_negative_ranges_preserve_boundary_rows(self):
         rows = sorted([(pidm, number) for pidm in (-100, -1, 20, 100000) for number in (1, 20, 9999)])
         client = self.client(rows, limit=2)
         transactions, _ = self.extract(client)
         self.assert_transactions(transactions, rows)
+
+    def test_narrowed_queries_do_not_rebuild_the_full_batch_each_time(self):
+        rows = [(i // 100 + 1, i % 100 + 1) for i in range(37322)]
+        client = self.client(rows)
+        visits = [0]
+
+        def visit(value):
+            visits[0] += 1
+            return value
+
+        client.database.create_function("visit", 1, visit)
+        self.transaction_template.write_text(
+            self.transaction_template.read_text().replace(
+                "t.tbraccd_tran_number AS tran_number", "visit(t.tbraccd_tran_number) AS tran_number"
+            ), encoding="utf-8",
+        )
+        transactions, _ = self.extract(client)
+        self.assert_transactions(transactions, rows)
+        transaction_calls = sum("transaction_source" in sql for sql in client.calls)
+        self.assertLess(visits[0], len(rows) * transaction_calls // 4)
+        self.assertTrue(any("rows in" in message for message in self.messages))
+
+    def test_cancel_after_query_prevents_subdivision_and_cache_write(self):
+        token = CancellationToken()
+        client = self.client([(i + 1, 1) for i in range(4000)])
+        original = client.run_sql
+
+        def cancel_on_return(sql):
+            frame = original(sql)
+            token.request()
+            return frame
+
+        with patch.object(client, "run_sql", side_effect=cancel_on_return):
+            with self.assertRaises(WorkflowCancelled):
+                extract_refund_data(
+                    client, self.settings, transaction_template_path=self.transaction_template,
+                    context_template_path=self.context_template, cancellation=token,
+                )
+        self.assertEqual(len(client.calls), 1)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
 
     def test_context_batches_also_subdivide_without_dropping_duplicate_authorizations(self):
         context = [(i + 1, 1) for i in range(3000)] + [(3000, 1)]
@@ -871,7 +916,7 @@ class RefundSubdivisionTests(unittest.TestCase):
         original = client.run_sql
 
         def fail_right(sql):
-            if "source.pidm >" in sql:
+            if "t.tbraccd_pidm >=" in sql:
                 raise RuntimeError("Synthetic connection failure")
             return original(sql)
 
@@ -892,7 +937,7 @@ class RefundSubdivisionTests(unittest.TestCase):
             return original(sql)
 
         with patch.object(client, "run_sql", side_effect=change_population):
-            with self.assertRaisesRegex(RefundExtractError, "population changed"):
+            with self.assertRaisesRegex(RefundExtractError, "Recombined transactions batch"):
                 self.extract(client)
         self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
 
@@ -933,6 +978,68 @@ class RefundSubdivisionTests(unittest.TestCase):
         self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
 
 
+class RefundCancellationTests(unittest.TestCase):
+    def test_cancellation_before_allocation_prevents_calculation(self):
+        token = CancellationToken()
+        token.request()
+        with patch("data_processing.refunds.allocation._allocate_account") as allocate:
+            with self.assertRaises(WorkflowCancelled):
+                allocate_refunds(pd.DataFrame(), pd.DataFrame(), RefundParameters("202680", date(2026, 10, 6)), cancellation=token)
+        allocate.assert_not_called()
+
+    def test_cancellation_during_export_discards_staged_output(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "review.xlsx"
+            token = CancellationToken()
+
+            def cancel_export(report, staged, **kwargs):
+                staged.write_bytes(b"synthetic staged output")
+                token.request()
+                return staged
+
+            with (
+                patch("data_processing.refunds.pipeline.allocate_refunds", return_value=pd.DataFrame()),
+                patch("data_processing.refunds.pipeline.export_refund_report", side_effect=cancel_export),
+            ):
+                with self.assertRaises(WorkflowCancelled):
+                    _create_review(pd.DataFrame(), pd.DataFrame(), RefundParameters("202680", date(2026, 10, 6)), output, None, token)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_publication_preserves_output_and_rejects_late_cancellation(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "review.xlsx"
+            token = CancellationToken()
+            report = pd.DataFrame(columns=REPORT_COLUMNS)
+            messages = []
+            with patch("data_processing.refunds.pipeline.allocate_refunds", return_value=report):
+                created, _ = _create_review(pd.DataFrame(), pd.DataFrame(), RefundParameters("202680", date(2026, 10, 6)), output, messages.append, token)
+            self.assertEqual(created, output)
+            self.assertTrue(output.exists())
+            self.assertFalse(token.request())
+            self.assertTrue(any("calculation completed in" in message for message in messages))
+            self.assertTrue(any("workbook created in" in message for message in messages))
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
+    def test_failed_export_leaves_existing_output_untouched(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "review.xlsx"
+            output.write_bytes(b"existing review")
+
+            def fail_export(report, staged, **kwargs):
+                staged.write_bytes(b"incomplete")
+                raise OSError("Synthetic save failure")
+
+            with (
+                patch("data_processing.refunds.pipeline.allocate_refunds", return_value=pd.DataFrame()),
+                patch("data_processing.refunds.pipeline.export_refund_report", side_effect=fail_export),
+            ):
+                with self.assertRaises(OSError):
+                    _create_review(pd.DataFrame(), pd.DataFrame(), RefundParameters("202680", date(2026, 10, 6)), output, None, CancellationToken())
+            self.assertEqual(output.read_bytes(), b"existing review")
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
+
 class RefundExtractTests(unittest.TestCase):
     def test_ed_hold_end_date_cutoff_matches_all_sql_paths(self) -> None:
         root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
@@ -961,6 +1068,24 @@ class RefundExtractTests(unittest.TestCase):
                 (root / f"refund_{name}_manual.sql").read_text(encoding="utf-8"),
                 render_manual_extract_sql(template),
             )
+
+    def test_filters_narrow_candidate_queries_and_history_without_changing_balances(self):
+        root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
+        sql = render_extract_sql(
+            (root / "refund_transactions_extract.sql").read_text(),
+            ExtractSettings("202680", 20, Path("unused")), 0,
+            pidm_range=(100, 200), transaction_range=(10, 20),
+        )
+        candidates, rest = sql.split("account_balances AS MATERIALIZED", 1)
+        self.assertEqual(candidates.count("t.tbraccd_pidm >= 100 AND t.tbraccd_pidm <= 200"), 4)
+        self.assertIn("i.spriden_pidm >= 100 AND i.spriden_pidm <= 200", candidates)
+        balances, history = rest.split("s.target_term AS extract_target_term", 1)
+        self.assertNotIn("t.tbraccd_tran_number >=", balances)
+        self.assertIn("WHERE t.tbraccd_tran_number >= 10 AND t.tbraccd_tran_number <= 20", history)
+        for bounds in (("bad", 10), (1.5, 2), (20, 10)):
+            with self.subTest(bounds=bounds):
+                with self.assertRaises(ValueError):
+                    render_extract_sql("SELECT __PIDM_FILTER__", ExtractSettings("202680", 1, Path("unused")), 0, pidm_range=bounds)
 
     def test_row_count_guard_detects_api_truncation(self) -> None:
         frame = pd.DataFrame({"extract_row_count": [3, 3], "pidm": [1, 2]})

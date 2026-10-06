@@ -39,6 +39,7 @@ candidate_pidms AS MATERIALIZED (
     WHERE p.cwid_filter IS NULL
       AND t.tbraccd_term_code = p.target_term
       AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
+      AND __PIDM_FILTER__
 
     UNION
 
@@ -56,6 +57,7 @@ candidate_pidms AS MATERIALIZED (
           AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
       ))
       AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
+      AND __PIDM_FILTER__
 
     UNION
 
@@ -73,6 +75,7 @@ candidate_pidms AS MATERIALIZED (
           AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
       ))
       AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
+      AND __PIDM_FILTER__
 
     UNION
 
@@ -86,6 +89,7 @@ candidate_pidms AS MATERIALIZED (
       AND t.tbraccd_balance < 0
       AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
       AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
+      AND __PIDM_FILTER__
 
     UNION
 
@@ -96,6 +100,7 @@ candidate_pidms AS MATERIALIZED (
       AND i.spriden_change_ind IS NULL
       AND i.spriden_id = TRIM(p.cwid_filter)
       AND MOD(ABS(i.spriden_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
+      AND __IDENTITY_PIDM_FILTER__
 ),
 account_balances AS MATERIALIZED (
     /* Full history for selected accounts only. Positive balances are out of scope.

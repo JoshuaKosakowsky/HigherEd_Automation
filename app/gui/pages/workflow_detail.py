@@ -142,6 +142,9 @@ class WorkflowDetailPage(QScrollArea):
         actions = QHBoxLayout()
         self.run_button = button("Review & run  →", self._run, "primary")
         actions.addWidget(self.run_button)
+        self.cancel_button = button("Cancel run", self._cancel)
+        self.cancel_button.hide()
+        actions.addWidget(self.cancel_button)
         actions.addStretch()
         actions.addWidget(button("Open log folder", lambda: self._open(self.executor.log_directory)))
         layout.addLayout(actions)
@@ -288,6 +291,8 @@ class WorkflowDetailPage(QScrollArea):
             self.error.setText(str(error))
             self.error.show()
             return
+        self.cancel_button.setVisible(self.definition.cancellable)
+        self.cancel_button.setEnabled(True)
         self.form.setEnabled(False)
         self.run_button.setEnabled(False)
         self.back_button.setEnabled(False)
@@ -299,6 +304,18 @@ class WorkflowDetailPage(QScrollArea):
         self.busy_changed.emit(True)
         self.timer.start()
 
+    def _cancel(self) -> None:
+        if self.result_queue is None or not self.definition.cancellable:
+            return
+        if self.executor.cancel():
+            self.cancel_button.setEnabled(False)
+            self.status_label.setText(
+                "Cancelling… Waiting for the current request or processing step to stop safely. "
+                "No further queries will start and no review workbook will be published."
+            )
+        else:
+            self.status_label.setText("The run is finishing. Waiting for its final result…")
+
     def _poll_result(self) -> None:
         if self.result_queue is None:
             return
@@ -309,10 +326,11 @@ class WorkflowDetailPage(QScrollArea):
         self.result_queue = None
         self.timer.stop()
         self.progress.hide()
+        self.cancel_button.hide()
         self.form.setEnabled(True)
         self.run_button.setEnabled(True)
         self.back_button.setEnabled(True)
-        self.status_label.setText(("Completed\n" if result.success else "Could not complete\n") + result.message)
+        self.status_label.setText(("Cancelled\n" if result.cancelled else "Completed\n" if result.success else "Could not complete\n") + result.message)
         self.output_path = result.output_path
         self.output_button.setVisible(bool(result.success and result.output_path))
         self.folder_button.setVisible(bool(result.success and result.output_path))
@@ -329,7 +347,7 @@ class WorkflowDetailPage(QScrollArea):
                 "transactions applied successfully. Then use Review & run for step 2 "
                 "to archive this term's files. Files remain pending until you confirm.",
             )
-        if not result.success:
+        if not result.success and not result.cancelled:
             QMessageBox.warning(self, "Workflow could not be completed",
                                 result.message + "\n\nTechnical details were written to the GUI log.")
 

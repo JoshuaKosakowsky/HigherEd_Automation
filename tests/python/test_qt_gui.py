@@ -476,6 +476,74 @@ class QtGuiTests(unittest.TestCase):
         self.assertIsNone(page.result_queue)
         page.close()
 
+    def start_synthetic_refund(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("refund_review"))
+        page = window.current_page
+        page.refund_source.setCurrentIndex(page.refund_source.findData("sql"))
+        results = queue.Queue()
+        self.assertTrue(page.cancel_button.isHidden())
+        with patch.object(page, "_confirm", return_value=True), patch.object(window.executor, "run_async", return_value=results):
+            page._run()
+        return window, page, results
+
+    def test_refund_cancel_returns_navigation_without_error_dialog(self):
+        window, page, results = self.start_synthetic_refund()
+        self.assertFalse(page.cancel_button.isHidden())
+        self.assertFalse(page.back_button.isEnabled())
+        with patch.object(window.executor, "cancel", return_value=True) as cancel:
+            QTest.mouseClick(page.cancel_button, Qt.MouseButton.LeftButton)
+        cancel.assert_called_once()
+        self.assertFalse(page.cancel_button.isEnabled())
+        self.assertIn("Cancelling", page.status_label.text())
+        results.put(WorkflowResult(False, "Workflow cancelled. No output was published.", cancelled=True))
+        with patch.object(QMessageBox, "warning") as warning:
+            page._poll_result()
+        warning.assert_not_called()
+        self.assertFalse(window._busy)
+        self.assertTrue(page.cancel_button.isHidden())
+        self.assertTrue(page.back_button.isEnabled())
+        self.assertTrue(page.form.isEnabled())
+        self.assertTrue(page.output_button.isHidden())
+        self.assertIn("Cancelled", page.status_label.text())
+        window.show_home()
+        self.assertIsNot(window.current_page, page)
+
+    def test_refund_close_can_cancel_and_close_after_result(self):
+        window, page, results = self.start_synthetic_refund()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), patch.object(window.executor, "cancel", return_value=True) as cancel:
+            self.assertFalse(window.close())
+        cancel.assert_called_once()
+        self.assertTrue(window._close_after_cancel)
+        results.put(WorkflowResult(False, "Cancelled", cancelled=True))
+        page._poll_result()
+        self.qt.processEvents()
+        self.assertFalse(window.isVisible())
+
+    def test_refund_close_decline_leaves_run_active(self):
+        window, page, results = self.start_synthetic_refund()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No), patch.object(window.executor, "cancel") as cancel:
+            self.assertFalse(window.close())
+        cancel.assert_not_called()
+        self.assertFalse(window._close_after_cancel)
+        self.assertTrue(window._busy)
+        results.put(WorkflowResult(False, "Cancelled", cancelled=True))
+        page._poll_result()
+
+    def test_refund_close_when_run_finishes_during_confirmation(self):
+        window, page, results = self.start_synthetic_refund()
+
+        def finish_while_prompt_is_open(*args, **kwargs):
+            results.put(WorkflowResult(True, "Done", self.root / "review.xlsx"))
+            page._poll_result()
+            return QMessageBox.StandardButton.Yes
+
+        with patch.object(QMessageBox, "question", side_effect=finish_while_prompt_is_open), patch.object(window.executor, "cancel") as cancel:
+            self.assertFalse(window.close())
+        cancel.assert_not_called()
+        self.qt.processEvents()
+        self.assertFalse(window.isVisible())
+
     def test_running_workflow_blocks_close_and_navigation(self):
         window = self.open_app()
         original = window.current_page

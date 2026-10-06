@@ -86,6 +86,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         ),
         category="Accounts Receivable",
         runner=run_refund_review,
+        cancellable=True,
         administrator_only=True,
         production_warning=(
             "Run SQL reads production student account data from PROD Insights "

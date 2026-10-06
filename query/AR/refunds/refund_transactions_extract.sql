@@ -30,6 +30,8 @@ INNER JOIN taismgr.tbraccd t
     ON t.tbraccd_pidm = s.pidm
 LEFT JOIN taismgr.tbbdetc d
     ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+-- Range filtering retrieves history slices without narrowing account balances.
+WHERE __TRANSACTION_FILTER__
 ORDER BY
     t.tbraccd_pidm,
     t.tbraccd_tran_number;

@@ -7,6 +7,9 @@ import json
 from pathlib import Path
 import re
 from typing import Protocol
+from time import perf_counter
+
+from shared.cancellation import CancellationToken
 
 import pandas as pd
 
@@ -22,6 +25,9 @@ TEMPLATE_TOKENS = {
     "__RUN_DATE__",
     "__TARGET_TERM_OVERRIDE__",
     "__CWID_FILTER__",
+    "__PIDM_FILTER__",
+    "__IDENTITY_PIDM_FILTER__",
+    "__TRANSACTION_FILTER__",
 }
 MAX_SUBDIVISION_DEPTH = 64
 PARTITION_COLUMNS = {
@@ -67,13 +73,29 @@ class ExtractSettings:
             raise ValueError("CWID may contain only letters, digits, underscores, and hyphens.")
 
 
-def _scope_sql(settings: ExtractSettings) -> str:
+def _range_filter(column: str, bounds: tuple[int | None, int | None]) -> str:
+    low, high = bounds
+    if any(value is not None and type(value) is not int for value in bounds):
+        raise ValueError("Extraction ranges must use integer boundaries.")
+    if low is not None and high is not None and low > high:
+        raise ValueError("Extraction range boundaries are reversed.")
+    parts = []
+    if low is not None:
+        parts.append(f"{column} >= {low}")
+    if high is not None:
+        parts.append(f"{column} <= {high}")
+    return " AND ".join(parts) or "TRUE"
+
+
+def _scope_sql(settings: ExtractSettings, pidm_range: tuple[int | None, int | None]) -> str:
     # Settings validate literals before native SQL is sent to Insights.
     return (
         (QUERY_DIRECTORY / "refund_scope.sql").read_text(encoding="utf-8")
         .replace("__RUN_DATE__", f"DATE '{settings.run_date.isoformat()}'")
         .replace("__TARGET_TERM_OVERRIDE__", f"'{settings.target_term}'")
         .replace("__CWID_FILTER__", f"'{settings.cwid.strip()}'" if settings.cwid else "NULL")
+        .replace("__PIDM_FILTER__", _range_filter("t.tbraccd_pidm", pidm_range))
+        .replace("__IDENTITY_PIDM_FILTER__", _range_filter("i.spriden_pidm", pidm_range))
     )
 
 
@@ -86,6 +108,8 @@ def render_manual_extract_sql(template: str) -> str:
         .replace("__CWID_FILTER__", "NULL")
         .replace("__BATCH_COUNT__", "1")
         .replace("__BATCH_INDEX__", "0")
+        .replace("__PIDM_FILTER__", "TRUE")
+        .replace("__IDENTITY_PIDM_FILTER__", "TRUE")
     )
     header = (
         "/* MANUAL WEBSITE EXPORT: download the complete result as XLSX or CSV.\n"
@@ -95,17 +119,24 @@ def render_manual_extract_sql(template: str) -> str:
     )
     # The template's API-only introduction is misleading in a runnable export.
     body = re.sub(r"\A\s*/\*.*?\*/\s*", "", template, count=1, flags=re.DOTALL)
-    return header + body.replace("__REFUND_SCOPE_SQL__", scope)
+    return header + body.replace("__REFUND_SCOPE_SQL__", scope).replace("__TRANSACTION_FILTER__", "TRUE")
 
 
-def render_extract_sql(template: str, settings: ExtractSettings, batch_index: int) -> str:
+def render_extract_sql(
+    template: str, settings: ExtractSettings, batch_index: int, *,
+    pidm_range: tuple[int | None, int | None] = (None, None),
+    transaction_range: tuple[int | None, int | None] = (None, None),
+) -> str:
     """Render one validated extraction batch from a repository SQL template."""
     if not 0 <= batch_index < settings.batch_count:
         raise ValueError("Batch index is outside the configured batch count.")
     rendered = (
-        template.replace("__REFUND_SCOPE_SQL__", _scope_sql(settings))
+        template.replace("__REFUND_SCOPE_SQL__", _scope_sql(settings, pidm_range))
         .replace("__BATCH_COUNT__", str(settings.batch_count))
         .replace("__BATCH_INDEX__", str(batch_index))
+        .replace("__PIDM_FILTER__", _range_filter("t.tbraccd_pidm", pidm_range))
+        .replace("__IDENTITY_PIDM_FILTER__", _range_filter("i.spriden_pidm", pidm_range))
+        .replace("__TRANSACTION_FILTER__", _range_filter("t.tbraccd_tran_number", transaction_range))
     )
     unresolved = sorted(token for token in TEMPLATE_TOKENS if token in rendered)
     if unresolved:
@@ -180,14 +211,13 @@ def _validate_complete_result(
     return result.drop(columns=["extract_row_count"])
 
 
-def _render_partition_sql(sql: str, label: str, predicates: tuple[str, ...]) -> str:
-    """Partition the final rows, leaving account selection and history intact."""
+def _render_partition_sql(sql: str, label: str) -> str:
+    """Add range guards to an already filtered extraction query."""
     transaction_bounds = (
         "MIN(source.tran_number) OVER () AS extract_tran_min,\n"
         "    MAX(source.tran_number) OVER () AS extract_tran_max,\n"
         if label == "transactions" else ""
     )
-    where = " AND ".join(predicates) or "TRUE"
     order = "source.pidm, source.tran_number" if label == "transactions" else "source.pidm"
     return (
         "WITH refund_extract_source AS MATERIALIZED (\n"
@@ -198,19 +228,32 @@ def _render_partition_sql(sql: str, label: str, predicates: tuple[str, ...]) -> 
         "    MAX(source.pidm) OVER () AS extract_pidm_max,\n"
         f"    {transaction_bounds}source.*\n"
         "FROM refund_extract_source source\n"
-        f"WHERE {where}\nORDER BY {order};"
+        f"ORDER BY {order};"
     )
 
 
 def _complete_partition(
-    client: SQLClient, sql: str, label: str, batch_index: int,
-    *, predicates: tuple[str, ...] = (), depth: int = 0,
-    location: str | None = None, root_count: int | None = None,
+    client: SQLClient, template: str, label: str, batch_index: int,
+    *, settings: ExtractSettings, depth: int = 0,
+    pidm_range: tuple[int | None, int | None] = (None, None),
+    transaction_range: tuple[int | None, int | None] = (None, None),
+    location: str | None = None, cancellation: CancellationToken | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     """Bisect disjoint integer ranges until each result passes the count guard."""
     location = location or str(batch_index + 1)
-    raw = _normalized_result(client.run_sql(_render_partition_sql(sql, label, predicates)))
+    if cancellation:
+        cancellation.check()
+    sql = render_extract_sql(
+        template, settings, batch_index, pidm_range=pidm_range,
+        transaction_range=transaction_range,
+    )
+    started = perf_counter()
+    raw = _normalized_result(client.run_sql(_render_partition_sql(sql, label)))
+    if progress:
+        progress(f"{label.capitalize()} batch {location} query returned {len(raw):,} rows in {perf_counter() - started:.1f}s.")
+    if cancellation:
+        cancellation.check()
     required = PARTITION_COLUMNS if label == "transactions" else PARTITION_COLUMNS - {
         "extract_tran_min", "extract_tran_max",
     }
@@ -218,17 +261,10 @@ def _complete_partition(
         raise ValueError("Insights result lacks automatic-subdivision count or range guards.")
     expected = _row_count(raw, "extract_partition_row_count")
     source_count = _row_count(raw, "extract_row_count")
-    if root_count is None:
-        if expected != source_count:
-            raise RefundExtractError(
-                f"Insights returned conflicting {label} row-count guards. "
-                "No incomplete batch was saved."
-            )
-        root_count = source_count
-    elif not raw.empty and source_count != root_count:
+    if expected != source_count:
         raise RefundExtractError(
-            f"Insights {label} population changed during automatic subdivision. "
-            "No incomplete batch was saved. Start a fresh extraction."
+            f"Insights returned conflicting {label} row-count guards. "
+            "No incomplete batch was saved."
         )
     frame = raw.drop(columns=list(PARTITION_COLUMNS & set(raw.columns)))
     frame["extract_row_count"] = raw["extract_partition_row_count"]
@@ -266,15 +302,16 @@ def _complete_partition(
                 "A single account or transaction cannot be subdivided further. "
                 "No incomplete batch was saved. Contact the automation administrator."
             ) from None
-        parts = [
-            _complete_partition(
-                client, sql, label, batch_index,
-                predicates=(*predicates, f"source.{column} {operator} {midpoint}"),
-                depth=depth + 1, location=f"{location}.{child}", root_count=root_count,
-                progress=progress,
-            )
-            for child, operator in ((1, "<="), (2, ">"))
-        ]
+        bounds = pidm_range if column == "pidm" else transaction_range
+        parts = []
+        for child, child_bounds in ((1, (bounds[0], midpoint)), (2, (midpoint + 1, bounds[1]))):
+            parts.append(_complete_partition(
+                client, template, label, batch_index, settings=settings,
+                pidm_range=child_bounds if column == "pidm" else pidm_range,
+                transaction_range=child_bounds if column == "tran_number" else transaction_range,
+                depth=depth + 1, location=f"{location}.{child}", progress=progress,
+                cancellation=cancellation,
+            ))
         combined = pd.concat(parts, ignore_index=True)
         if len(combined) != expected:
             raise RefundExtractError(
@@ -320,6 +357,7 @@ def extract_refund_data(
     transaction_template_path: Path,
     context_template_path: Path,
     progress: Callable[[str], None] | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run or resume every flat Insights extraction batch."""
     _prepare_manifest(settings)
@@ -333,6 +371,8 @@ def extract_refund_data(
             ("transactions", transaction_template, transaction_frames),
             ("context", context_template, context_frames),
         ):
+            if cancellation:
+                cancellation.check()
             path = settings.extract_directory / f"{label}_{batch_index:03d}.csv"
             if settings.resume and path.exists():
                 frame = _read_cached(path)
@@ -341,9 +381,11 @@ def extract_refund_data(
                 if progress:
                     progress(f"Extracting {label} batch {batch_index + 1}/{settings.batch_count}...")
                 frame = _complete_partition(
-                    client, render_extract_sql(template, settings, batch_index), label,
-                    batch_index, progress=progress,
+                    client, template, label, batch_index, settings=settings,
+                    progress=progress, cancellation=cancellation,
                 )
+                if cancellation:
+                    cancellation.check()
                 _write_atomic(frame, path)
                 source = "Insights"
             frames.append(frame)

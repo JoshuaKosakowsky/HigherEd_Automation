@@ -16,6 +16,7 @@ from data_processing.shared.xlsx_output_format import (
     style_header_row,
 )
 
+from shared.cancellation import CancellationToken
 from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS
 
 
@@ -170,8 +171,12 @@ COUNT_COLUMNS = {
 }
 
 
-def export_refund_report(report: pd.DataFrame, output_file: Path) -> Path:
+def export_refund_report(
+    report: pd.DataFrame, output_file: Path, *, cancellation: CancellationToken | None = None,
+) -> Path:
     """Write plain worksheets by refund method, keeping account totals as context."""
+    if cancellation:
+        cancellation.check()
     missing = [column for column in REPORT_COLUMNS if column not in report.columns]
     if missing:
         raise ValueError(f"Refund report is missing columns: {', '.join(missing)}")
@@ -180,14 +185,20 @@ def export_refund_report(report: pd.DataFrame, output_file: Path) -> Path:
     workbook.remove(workbook.active)
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in report[REPORT_COLUMNS].to_dict("records"):
+        if cancellation:
+            cancellation.check()
         for sheet, tab_row in _tab_rows(row):
             grouped[sheet].append(tab_row)
 
     for sheet in REFUND_SHEETS:
+        if cancellation:
+            cancellation.check()
         worksheet = workbook.create_sheet(sheet)
         worksheet.freeze_panes = "A2"
         worksheet.append(WORKBOOK_COLUMNS)
         for row in grouped[sheet]:
+            if cancellation:
+                cancellation.check()
             worksheet.append([
                 None if pd.isna(row[header]) else row[header] for header in WORKBOOK_COLUMNS
             ])
@@ -214,5 +225,10 @@ def export_refund_report(report: pd.DataFrame, output_file: Path) -> Path:
                     )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_file)
+    if cancellation:
+        cancellation.check()
+    try:
+        workbook.save(output_file)
+    finally:
+        workbook.close()
     return output_file

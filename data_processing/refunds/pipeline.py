@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from time import perf_counter
+
+from shared.cancellation import CancellationToken
 
 import pandas as pd
 
@@ -10,6 +14,46 @@ from .export import export_refund_report
 from .extract import ExtractSettings, SQLClient, extract_refund_data, read_refund_extracts
 from .ingest import read_refund_download
 from .terms import RefundParameters
+
+
+def _create_review(
+    transactions: pd.DataFrame, context: pd.DataFrame,
+    parameters: RefundParameters, output_file: Path,
+    progress: Callable[[str], None] | None,
+    cancellation: CancellationToken | None,
+) -> tuple[Path, pd.DataFrame]:
+    if cancellation:
+        cancellation.check()
+    if progress:
+        progress(
+            f"Calculating refunds locally from {len(transactions):,} transactions "
+            f"for {transactions['pidm'].nunique() if not transactions.empty else 0:,} accounts..."
+        )
+    started = perf_counter()
+    report = allocate_refunds(transactions, context, parameters, cancellation=cancellation)
+    if progress:
+        progress(f"Refund calculation completed in {perf_counter() - started:.1f}s.")
+    if cancellation:
+        cancellation.check()
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    started = perf_counter()
+    # Stage on the same filesystem: cancellation or a failed save leaves no
+    # partial workbook under the staff-selected output filename.
+    with TemporaryDirectory(prefix=".refund-review-", dir=output_file.parent) as directory:
+        staged = export_refund_report(report, Path(directory) / output_file.name, cancellation=cancellation)
+
+        def publish() -> None:
+            if cancellation and output_file.exists():
+                raise ValueError("The output workbook already exists. Choose a new filename.")
+            staged.replace(output_file)
+
+        if cancellation:
+            cancellation.publish(publish)
+        else:
+            publish()
+    if progress:
+        progress(f"Refund workbook created in {perf_counter() - started:.1f}s.")
+    return output_file, report
 
 
 def run_refund_pipeline(
@@ -22,8 +66,12 @@ def run_refund_pipeline(
     client: SQLClient | None = None,
     offline: bool = False,
     progress: Callable[[str], None] | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """Extract Banner rows, calculate locally, and export the review workbook."""
+    if cancellation:
+        cancellation.check()
+    started = perf_counter()
     if offline:
         transactions, context = read_refund_extracts(extract_settings)
     else:
@@ -35,15 +83,12 @@ def run_refund_pipeline(
             transaction_template_path=transaction_template_path,
             context_template_path=context_template_path,
             progress=progress,
+            cancellation=cancellation,
         )
 
     if progress:
-        progress(
-            f"Calculating refunds locally from {len(transactions):,} transactions "
-            f"for {transactions['pidm'].nunique() if not transactions.empty else 0:,} accounts..."
-        )
-    report = allocate_refunds(transactions, context, parameters)
-    return export_refund_report(report, output_file), report
+        progress(f"Refund extraction completed in {perf_counter() - started:.1f}s.")
+    return _create_review(transactions, context, parameters, output_file, progress, cancellation)
 
 
 def run_refund_download_pipeline(
@@ -53,22 +98,21 @@ def run_refund_download_pipeline(
     context_file: Path,
     output_file: Path,
     progress: Callable[[str], None] | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """Calculate the report from two manually downloaded Insights results."""
+    if cancellation:
+        cancellation.check()
     transactions = read_refund_download(
         transaction_file,
         label="Transaction",
         expected_target_term=parameters.target_term,
     )
+    if cancellation:
+        cancellation.check()
     context = read_refund_download(
         context_file,
         label="Context",
         expected_target_term=parameters.target_term,
     )
-    if progress:
-        progress(
-            f"Calculating refunds locally from {len(transactions):,} transactions "
-            f"for {transactions['pidm'].nunique() if not transactions.empty else 0:,} accounts..."
-        )
-    report = allocate_refunds(transactions, context, parameters)
-    return export_refund_report(report, output_file), report
+    return _create_review(transactions, context, parameters, output_file, progress, cancellation)

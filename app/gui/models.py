@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from shared.cancellation import CancellationToken
+
 
 class WorkflowMode(str, Enum):
     """Execution environments for workflows that have an environment choice."""
@@ -45,6 +47,7 @@ class WorkflowContext:
     workflow_id: str
     parameters: Mapping[str, Any]
     mode: WorkflowMode | None = None
+    cancellation: CancellationToken | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,7 @@ class WorkflowResult:
     message: str
     output_path: Path | None = None
     log_path: Path | None = None
+    cancelled: bool = False
 
 
 WorkflowRunner = Callable[[WorkflowContext], WorkflowResult]
@@ -71,6 +75,7 @@ class WorkflowDefinition:
         "This process will create or transmit production output."
     )
     administrator_only: bool = False
+    cancellable: bool = False
 
     @property
     def default_mode(self) -> WorkflowMode | None:

@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
@@ -57,6 +57,7 @@ class AutomationApplication(QMainWindow):
         self.access_error = None
         self.current_page = None
         self._busy = False
+        self._close_after_cancel = False
         self.setWindowTitle(APP_NAME)
         self.resize(1180, 820)
         self.setMinimumSize(900, 640)
@@ -240,6 +241,8 @@ class AutomationApplication(QMainWindow):
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
+        if not busy and self._close_after_cancel:
+            QTimer.singleShot(0, self.close)
         self.home_button.setEnabled(not busy)
         self.access_button.setEnabled(not busy)
         self.connections_button.setEnabled(not busy)
@@ -267,7 +270,25 @@ class AutomationApplication(QMainWindow):
 
     def closeEvent(self, event) -> None:
         if self._busy or self.executor.is_running:
-            QMessageBox.warning(self, "Workflow is running", "Keep this window open until the workflow finishes.")
+            page = self.current_page
+            if isinstance(page, WorkflowDetailPage) and page.definition.cancellable and page.result_queue is not None:
+                if not self._close_after_cancel:
+                    answer = QMessageBox.question(
+                        self, "Cancel Refund Review and close?",
+                        "Cancel this run and close after the current request or processing "
+                        "step stops safely? An active Insights request may need to return "
+                        "or time out first. A workbook already published remains available.",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    if answer == QMessageBox.StandardButton.Yes:
+                        self._close_after_cancel = True
+                        page._cancel()
+                        # The result timer can finish the run while the modal
+                        # confirmation is open. Recheck after this close event.
+                        QTimer.singleShot(0, self.close)
+            else:
+                QMessageBox.warning(self, "Workflow is running", "Keep this window open until the workflow finishes.")
             event.ignore()
             return
         self.logger.info("Application closed")

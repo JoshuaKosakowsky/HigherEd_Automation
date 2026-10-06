@@ -10,6 +10,7 @@ from typing import Any, Iterable
 import pandas as pd
 
 from .terms import RefundParameters, fiscal_year_start
+from shared.cancellation import CancellationToken
 
 
 CENT = Decimal("0.01")
@@ -1104,17 +1105,21 @@ def allocate_refunds(
     parameters: RefundParameters,
     *,
     legacy_third_party_cwids: Iterable[str] = (),
+    cancellation: CancellationToken | None = None,
 ) -> pd.DataFrame:
     """Calculate the refund review report from flat Banner extracts."""
+    if cancellation:
+        cancellation.check()
     transactions = _normalize_columns(transaction_frame)
     context = _normalize_columns(context_frame)
     _validate_columns(transactions, TRANSACTION_COLUMNS, "Transaction")
     _validate_columns(context, CONTEXT_COLUMNS, "Context")
 
-    normalized_transactions = [
-        _normalize_transaction(row, source_id)
-        for source_id, row in enumerate(transactions.to_dict("records"), start=1)
-    ]
+    normalized_transactions = []
+    for source_id, row in enumerate(transactions.to_dict("records"), start=1):
+        if cancellation and source_id % 500 == 1:
+            cancellation.check()
+        normalized_transactions.append(_normalize_transaction(row, source_id))
     transactions_by_pidm: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in normalized_transactions:
         transactions_by_pidm[row["pidm"]].append(row)
@@ -1126,6 +1131,8 @@ def allocate_refunds(
     legacy = {str(cwid).strip().upper() for cwid in legacy_third_party_cwids if str(cwid).strip()}
     report_rows = []
     for pidm, account_transactions in transactions_by_pidm.items():
+        if cancellation:
+            cancellation.check()
         result = _allocate_account(
             account_transactions,
             context_by_pidm.get(pidm, []),
