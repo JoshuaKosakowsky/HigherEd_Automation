@@ -167,12 +167,22 @@ workbook destination. The picker uses
 the explicit list in `shared/insights/query_catalog.py`; it never accepts an
 arbitrary SQL path. Available reports include current and previous calendar
 month transaction and payment activity, the existing historical loan activity
-draft, contact lookup, Parent PLUS sample, sponsored student summary, refund
+draft, contact lookup, Parent PLUS sample, sponsored student summary,
+delinquent student accounts, refund
 review SQL, the two manual refund extracts, the Banner term sample, four
 institutional-loan enrollment reports, and two SHIP Fall exceptions. The loan
 and SHIP reports prompt for a six-digit Banner term. The SHIP reports require a
 Fall term ending in `80`. The term is validated and inserted as a quoted SQL
 literal; no raw free-form SQL is accepted from the interface.
+
+Choose **Holds — Delinquent student accounts** for the delinquency outreach
+review workbook. It needs no term input and exports all-term net balance,
+past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the
+account. Active PP accounts are included with `Hold = PP` for manual Transact
+review before deciding whether to send outreach; Insights cannot identify
+Transact payment-arrangement errors. See
+[`query/AR/holds/README.md`](../../query/AR/holds/README.md) for the balance and
+hold-date definitions and first-run reconciliation requirements.
 
 The previous-month reports preserve the existing activity columns and payment
 detail-code list while selecting feed dates from the first of the previous

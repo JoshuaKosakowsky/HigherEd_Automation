@@ -110,6 +110,13 @@ QUERIES: tuple[InsightsQuery, ...] = (
         "Current and previous term sponsor/student account summary; reconcile before operational use.",
     ),
     InsightsQuery(
+        "deliquent_student_accounts", "Holds", "Delinquent student accounts",
+        "AR/holds/deliquent_student_accounts.sql",
+        "Balances and contacts for delinquency outreach review. Excludes any CO hold; "
+        "includes PP accounts with an active Hold indicator. Review PP accounts "
+        "in Transact before deciding whether to send outreach.",
+    ),
+    InsightsQuery(
         "refund_review", "Refunds", "Refund review SQL (large)",
         "AR/refunds/Refunds.sql",
         "Full candidate review with allocation calculations. May exceed API timeout; review only, no refunds issued.",

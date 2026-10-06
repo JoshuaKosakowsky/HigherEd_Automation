@@ -250,6 +250,43 @@ class InsightsConnectionServiceTests(unittest.TestCase):
         self.assertEqual(build.call_args.args[0].base_url, "https://prod.example.edu")
         self.assertEqual(client.run_sql_file.call_args.args[0].name, "sponsored_student_summary.sql")
 
+    def test_delinquency_report_exports_balances_contacts_and_pp_indicator(self):
+        query = get_query("deliquent_student_accounts")
+        self.assertIsNone(query.term_variable)
+        client = MagicMock()
+        client.__enter__.return_value = client
+        columns = ["CWID", "First Name", "Last Name", "Amt", "Past Due Amt",
+                   "Preferred Email", "Preferred Phone", "Hold"]
+        client.run_sql_file.return_value = pd.DataFrame([
+            ["TEST-1", "Synthetic", "Student", 100, 50,
+             "student@example.invalid", "(303) 5550101", "PP"],
+            ["TEST-2", "Synthetic", "Student", 75, 0, None, None, None],
+        ], columns=columns)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "delinquency.xlsx"
+            with patch(
+                "app.gui.services.insights.build_authenticated_client",
+                return_value=(client, "cached session"),
+            ):
+                result = run_insights_connection(WorkflowContext(
+                    "insights_query_export",
+                    {"action": "query_export", "query_id": query.query_id,
+                     "output_path": str(output)},
+                    WorkflowMode.TEST,
+                ))
+            self.assertTrue(result.success, result.message)
+            workbook = pd.read_excel(output)
+            self.assertEqual(list(workbook.columns), columns)
+            self.assertEqual(workbook["CWID"].tolist(), ["TEST-1", "TEST-2"])
+            self.assertEqual(workbook["Amt"].tolist(), [100, 75])
+            self.assertEqual(workbook["Past Due Amt"].tolist(), [50, 0])
+            self.assertEqual(workbook.loc[0, "Preferred Email"], "student@example.invalid")
+            self.assertEqual(workbook.loc[0, "Preferred Phone"], "(303) 5550101")
+            self.assertEqual(workbook.loc[0, "Hold"], "PP")
+            self.assertTrue(pd.isna(workbook.loc[1, "Hold"]))
+        client.run_sql_file.assert_called_once_with(query.sql_path)
+        client.run_sql.assert_not_called()
+
     def test_unknown_query_is_rejected_before_authentication(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "activity.xlsx"

@@ -6,6 +6,12 @@ The report returns `CWID`, `First Name`, `Last Name`, `Amt`, `Past Due Amt`,
 `Preferred Email`, `Preferred Phone`, and `Hold`, with the largest net balance first.
 The filename retains the requested spelling, `deliquent`.
 
+In the app, open **Connections**, select TEST or PROD, choose
+**Holds — Delinquent student accounts**, and click **Run selected query and
+save Excel**. No term input is required. Choose an approved workbook destination;
+an existing workbook will not be overwritten. This uses the existing
+administrator-only Insights export access.
+
 This list supports outreach about upcoming late fees or collections. Accounts
 with any `CO` hold record are excluded because they are already in collections
 and should not receive these delinquency communications.
