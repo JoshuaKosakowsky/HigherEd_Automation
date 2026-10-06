@@ -411,6 +411,7 @@ Write-Log "Error directory: $errorDirectory"
 
 if (-not $ArchiveOnly) {
     try {
+        Write-Output 'HIGHERED_PROGRESS={"stage":"Downloading pending Textbook Brokers files"}'
         $transferResults = @(
             Receive-TextbookBrokersFiles `
                 -Connection $config.Connection `
@@ -581,6 +582,7 @@ else {
             $pythonArguments += $readyFile.LocalPath
         }
 
+        Write-Output 'HIGHERED_PROGRESS={"stage":"Transforming pending files into TSPLOAD.csv"}'
         Write-Log (
             "Starting Textbook Brokers transformation for {0} source file(s)." -f `
                 $readySourceFiles.Count
@@ -756,6 +758,7 @@ try {
     # ARCHIVE FILES ON THE TEXTBOOK BROKERS SFTP SERVER
     # ------------------------------------------------------------
 
+    Write-Output 'HIGHERED_PROGRESS={"stage":"Archiving confirmed remote source files"}'
     $remoteArchiveResults = @(
         Move-TextbookBrokersRemoteSourceFiles `
             -Connection $config.Connection `
@@ -795,7 +798,14 @@ try {
     $completedLocalMoves = @()
 
     try {
+        $progressCompleted = 0
         foreach ($operation in $localMoveOperations) {
+            $progressPayload = @{
+                stage = 'Archiving confirmed local files'
+                completed = $progressCompleted
+                total = $localMoveOperations.Count
+            } | ConvertTo-Json -Compress
+            Write-Output "HIGHERED_PROGRESS=$progressPayload"
             Write-Log (
                 "Moving local {0}: {1} -> {2}" -f `
                     $operation.Description,
@@ -808,6 +818,7 @@ try {
                 -Destination $operation.DestinationPath
 
             $completedLocalMoves += $operation
+            $progressCompleted++
 
             if (Test-Path -LiteralPath $operation.SourcePath) {
                 throw (

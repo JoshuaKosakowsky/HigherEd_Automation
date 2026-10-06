@@ -193,7 +193,11 @@ has been configured. It does not require manual downloads:
 ```
 
 The GUI also supports **Cancel run**, or cancelling and closing from the window
-close button. Cancellation waits for an in-flight request to return or time out,
+close button. Its shared progress display shows extraction batches and partitions,
+transaction normalization, completed account calculations, worksheet creation,
+formatting, saving, and publication. Percentages describe the current stage;
+unknown totals use an activity bar. Elapsed time remains visible throughout.
+Cancellation waits for an in-flight request to return or time out,
 checks between account calculations and workbook stages, and discards staged
 output before publication. A successfully published workbook remains available
 if cancellation is requested after the publication step. Other workflows retain

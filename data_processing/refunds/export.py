@@ -17,6 +17,7 @@ from data_processing.shared.xlsx_output_format import (
 )
 
 from shared.cancellation import CancellationToken
+from shared.progress import ProgressReporter
 from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS
 
 
@@ -173,6 +174,7 @@ COUNT_COLUMNS = {
 
 def export_refund_report(
     report: pd.DataFrame, output_file: Path, *, cancellation: CancellationToken | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> Path:
     """Write plain worksheets by refund method, keeping account totals as context."""
     if cancellation:
@@ -184,11 +186,15 @@ def export_refund_report(
     workbook = Workbook()
     workbook.remove(workbook.active)
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
-    for row in report[REPORT_COLUMNS].to_dict("records"):
+    if progress_reporter:
+        progress_reporter.report("Grouping refund delivery and review tabs", completed=0, total=len(report))
+    for completed, row in enumerate(report[REPORT_COLUMNS].to_dict("records"), 1):
         if cancellation:
             cancellation.check()
         for sheet, tab_row in _tab_rows(row):
             grouped[sheet].append(tab_row)
+        if progress_reporter and (completed % 100 == 0 or completed == len(report)):
+            progress_reporter.report("Grouping refund delivery and review tabs", completed=completed, total=len(report))
 
     for sheet in REFUND_SHEETS:
         if cancellation:
@@ -196,12 +202,18 @@ def export_refund_report(
         worksheet = workbook.create_sheet(sheet)
         worksheet.freeze_panes = "A2"
         worksheet.append(WORKBOOK_COLUMNS)
-        for row in grouped[sheet]:
+        if progress_reporter:
+            progress_reporter.report(f"Writing {sheet} worksheet", completed=0, total=len(grouped[sheet]))
+        for completed, row in enumerate(grouped[sheet], 1):
             if cancellation:
                 cancellation.check()
             worksheet.append([
                 None if pd.isna(row[header]) else row[header] for header in WORKBOOK_COLUMNS
             ])
+            if progress_reporter and (completed % 100 == 0 or completed == len(grouped[sheet])):
+                progress_reporter.report(f"Writing {sheet} worksheet", completed=completed, total=len(grouped[sheet]))
+        if progress_reporter:
+            progress_reporter.report(f"Formatting {sheet} worksheet")
         apply_default_font(worksheet)
         style_header_row(worksheet)
         format_table_columns(
@@ -228,6 +240,8 @@ def export_refund_report(
     if cancellation:
         cancellation.check()
     try:
+        if progress_reporter:
+            progress_reporter.report("Saving refund workbook")
         workbook.save(output_file)
     finally:
         workbook.close()

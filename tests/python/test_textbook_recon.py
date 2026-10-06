@@ -18,6 +18,7 @@ from data_processing.textbook_brokers.recon import (
     GREEN_TAB_DARK, GREEN_TAB_LIGHT, _banner_rows, _broker_rows,
     _write_recon, build_recon,
 )
+from shared.progress import ProgressReporter
 
 
 class TextbookReconTests(unittest.TestCase):
@@ -71,6 +72,7 @@ class TextbookReconTests(unittest.TestCase):
 
     def test_python_creates_complete_workbook_with_native_pivots(self) -> None:
         output = self.root / "recon.xlsx"
+        updates = []
         counts = build_recon(
             brokers=self._brokers(),
             frst=self._banner("FRST", [("90000001", "Able, Ada", 15),
@@ -78,7 +80,12 @@ class TextbookReconTests(unittest.TestCase):
                                        ("90000004", "Dove, Dee", 3)]),
             book=self._banner("BOOK", [("90000003", "Cedar, Cy", 7)]),
             output=output, month="2026-07",
+            progress_reporter=ProgressReporter(updates.append),
         )
+        stages = [update.stage for update in updates]
+        self.assertIn("Reading IA Textbook Brokers charges", stages)
+        self.assertIn("Reading BOOK Banner transactions", stages)
+        self.assertEqual(stages[-1], "Saving reconciliation workbook")
         self.assertEqual(counts, {"IA": 3, "FA": 1})
         result = load_workbook(output)
         self.assertEqual(result.sheetnames, [

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from app.gui.models import WorkflowContext, WorkflowResult
+from app.gui.services.process import run_process
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -19,6 +20,7 @@ NO_PENDING_MARKER = "HIGHERED_NO_PENDING_FILES=1"
 
 def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
     """Prepare TSPLOAD or archive pending files after explicit upload confirmation."""
+    context.progress.report("Validating Textbook Brokers setup")
     step = context.parameters.get("step", "prepare")
     if step not in ("prepare", "archive"):
         raise ValueError("Select a valid Textbook Brokers workflow step.")
@@ -39,8 +41,9 @@ def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
 
     term_code = str(context.parameters["term_code"])
     logger = logging.getLogger("highered_automation.gui")
+    context.progress.report("Archiving confirmed Textbook Brokers files" if archive else "Starting Textbook Brokers download and transformation")
     try:
-        completed = subprocess.run(
+        completed = run_process(
             [
                 powershell,
                 "-NoLogo",
@@ -53,12 +56,9 @@ def run_textbook_brokers(context: WorkflowContext) -> WorkflowResult:
                 *(["-ArchiveOnly", "-BannerUploadConfirmed"] if archive else ["-PrepareOnly"]),
             ],
             cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            errors="replace",
             creationflags=subprocess.CREATE_NO_WINDOW,
             timeout=300,
-            check=False,
+            progress_reporter=context.progress,
         )
     except subprocess.TimeoutExpired:
         logger.error("Textbook Brokers %s exceeded its 300-second timeout.", step)

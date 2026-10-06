@@ -26,6 +26,7 @@ from data_processing.refunds.extract import (
 from data_processing.refunds.ingest import read_refund_download
 from data_processing.refunds.pipeline import _create_review
 from shared.cancellation import CancellationToken, WorkflowCancelled
+from shared.progress import ProgressReporter
 from data_processing.refunds.terms import derive_target_term, fiscal_year_start, previous_term
 
 
@@ -71,6 +72,7 @@ class RefundAllocationTests(unittest.TestCase):
         previous_term_override: str | None = None,
         run_date: date = date(2099, 8, 31),
         expected_rows: int = 1,
+        progress_reporter: ProgressReporter | None = None,
     ) -> dict[str, object]:
         transaction_rows = []
         occupied: set[int] = set()
@@ -113,6 +115,7 @@ class RefundAllocationTests(unittest.TestCase):
             pd.DataFrame(transaction_rows, columns=TRANSACTION_COLUMNS),
             pd.DataFrame(context_rows, columns=CONTEXT_COLUMNS),
             RefundParameters(target_term, run_date, previous_term_override),
+            progress_reporter=progress_reporter,
         )
         self.assertEqual(len(result), expected_rows)
         if expected_rows == 0:
@@ -143,6 +146,16 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
         self.assertIn("FDPL", str(row["balance_sources"]))
         self.assertNotIn("PAYA", str(row["balance_sources"]))
+
+    def test_calculation_progress_counts_accounts_without_identifiers(self):
+        updates = []
+        row = self.report(self.worked_example(), progress_reporter=ProgressReporter(updates.append))
+        self.assert_split(row, "500.00", "1500.00")
+        calculations = [update for update in updates if update.stage == "Calculating refunds by account"]
+        self.assertEqual([(update.completed, update.total) for update in calculations], [(0, 1), (1, 1)])
+        normalized = [update for update in updates if update.stage == "Normalizing refund transactions"]
+        self.assertEqual(normalized[-1].completed, len(self.worked_example()))
+        self.assertTrue(all("TEST-1" not in update.stage for update in updates))
 
     def test_cross_fy_title_iv_uses_200_give_and_receive_cap(self) -> None:
         row = self.report([
@@ -816,6 +829,19 @@ class RefundSubdivisionTests(unittest.TestCase):
         pd.testing.assert_frame_equal(resumed, transactions)
         offline, _ = read_refund_extracts(self.settings)
         pd.testing.assert_frame_equal(offline, transactions)
+
+    def test_extraction_progress_counts_only_complete_batches_and_names_partitions(self):
+        updates = []
+        client = self.client([(i + 1, 1) for i in range(4000)])
+        extract_refund_data(
+            client, self.settings, transaction_template_path=self.transaction_template,
+            context_template_path=self.context_template, progress_reporter=ProgressReporter(updates.append),
+        )
+        query_updates = [update for update in updates if "batch/partition" in update.stage]
+        self.assertTrue(any("1.1" in update.stage for update in query_updates))
+        self.assertTrue(all(update.completed == 0 for update in query_updates if "transactions" in update.stage))
+        completed = [update for update in updates if update.stage == "Extracting refund data — complete batches"]
+        self.assertEqual([(update.completed, update.total) for update in completed], [(1, 2), (2, 2)])
 
     def test_multiple_account_splits_include_all_rows_once(self):
         rows = [(i // 100 + 1, i % 100 + 1) for i in range(37322)]

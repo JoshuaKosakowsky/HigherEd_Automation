@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from shared.cancellation import CancellationToken
+from shared.progress import ProgressReporter
 
 
 class WorkflowMode(str, Enum):
@@ -48,6 +49,7 @@ class WorkflowContext:
     parameters: Mapping[str, Any]
     mode: WorkflowMode | None = None
     cancellation: CancellationToken | None = field(default=None, compare=False, repr=False)
+    progress: ProgressReporter = field(default_factory=ProgressReporter, compare=False, repr=False)
 
 
 @dataclass(frozen=True)

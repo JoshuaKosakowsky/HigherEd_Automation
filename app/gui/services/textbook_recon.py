@@ -14,6 +14,7 @@ from data_processing.textbook_brokers.recon import BANNER_HEADERS, MONTH_PATTERN
 from shared.insights.config import load_department_profiles
 from shared.insights.session_auth import build_authenticated_client
 from shared.mines_paths import get_shared_gui_access_path
+from shared.progress import ProgressReporter
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -73,7 +74,9 @@ def _render_sql(month: str, batch: int | None = None) -> str:
             .replace("__BATCH_FILTER__", batch_filter))
 
 
-def _run_complete_query(client, month: str) -> pd.DataFrame:
+def _run_complete_query(client, month: str, progress_reporter: ProgressReporter | None = None) -> pd.DataFrame:
+    if progress_reporter:
+        progress_reporter.report("Extracting Banner reconciliation transactions")
     initial = client.run_sql(_render_sql(month))
     if initial.empty:
         return initial
@@ -84,11 +87,15 @@ def _run_complete_query(client, month: str) -> pd.DataFrame:
         return initial
     batches = []
     for index in range(32):
+        if progress_reporter:
+            progress_reporter.report("Extracting Banner reconciliation batches", completed=index, total=32)
         part = client.run_sql(_render_sql(month, index))
         if not part.empty:
             if "extract_row_count" not in part or len(part) != int(part["extract_row_count"].iloc[0]):
                 raise ValueError(f"Insights truncated recon batch {index + 1}. The workbook was not created.")
         batches.append(part)
+        if progress_reporter:
+            progress_reporter.report("Extracting Banner reconciliation batches", completed=index + 1, total=32)
     combined = pd.concat(batches, ignore_index=True)
     if len(combined) != expected:
         raise ValueError("Insights batch totals differ from the complete query count. The workbook was not created.")
@@ -128,6 +135,7 @@ def run_manual_recon(context: WorkflowContext) -> WorkflowResult:
         brokers=brokers,
         frst=Path(frst) if frst else None,
         book=Path(book) if book else None, output=output, month=month,
+        progress_reporter=context.progress,
     )
     return WorkflowResult(True, f"Created IA and FA recon tabs from manual extracts ({counts['IA']} IA and {counts['FA']} FA student IDs). Open in Excel to refresh the PivotTables.", output)
 
@@ -145,21 +153,25 @@ def run_sql_recon(context: WorkflowContext) -> WorkflowResult:
     profile = load_department_profiles()[WorkflowMode.PRODUCTION.value]
     if profile is None:
         raise ValueError("Insights PROD is not configured.")
+    context.progress.report("Connecting to PROD Insights — complete browser sign-in if prompted")
     client, _ = build_authenticated_client(profile.settings, browser="chrome")
     with client:
-        frame = _run_complete_query(client, month)
+        frame = _run_complete_query(client, month, context.progress)
     with tempfile.TemporaryDirectory(prefix="tbb-recon-") as directory:
         inputs = {}
         for code in ("FRST", "BOOK"):
+            context.progress.report(f"Preparing {code} reconciliation extract")
             path = Path(directory) / f"{code}.xlsx"
             _normalized_banner(frame, code).to_excel(path, index=False)
             inputs[code] = path
-        counts = build_recon(brokers=brokers, frst=inputs["FRST"], book=inputs["BOOK"], output=output, month=month)
+        counts = build_recon(brokers=brokers, frst=inputs["FRST"], book=inputs["BOOK"], output=output, month=month,
+                             progress_reporter=context.progress)
     return WorkflowResult(True, f"Created {month} recon from Insights ({counts['IA']} IA and {counts['FA']} FA student IDs). Open in Excel to refresh the PivotTables.", output)
 
 
 def run_recon(context: WorkflowContext) -> WorkflowResult:
     """Dispatch the single GUI workflow after validating its Banner source."""
+    context.progress.report("Validating textbook reconciliation inputs")
     source = context.parameters.get("banner_source")
     if source == MANUAL_SOURCE:
         return run_manual_recon(context)

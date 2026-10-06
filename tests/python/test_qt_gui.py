@@ -12,7 +12,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -33,6 +33,8 @@ from app.gui.services.execution import WorkflowExecutor
 from app.gui.services.parameters import parse_parameters
 from app.gui.theme import apply_theme
 from app.gui.workflow_registry import get_workflow
+from app.gui.progress import WorkflowProgressWidget
+from shared.progress import ProgressUpdate
 
 
 class QtGuiTests(unittest.TestCase):
@@ -87,6 +89,8 @@ class QtGuiTests(unittest.TestCase):
             window.show_workflow(workflow)
             self.qt.processEvents()
             self.assertEqual(set(window.current_page.inputs), {p.key for p in workflow.parameters})
+            self.assertIsInstance(window.current_page.progress, WorkflowProgressWidget)
+            self.assertEqual(window.current_page.progress.bar.accessibleName(), "Current stage progress")
         window.show_access_management()
         self.assertEqual(window.current_page.table.rowCount(), 2)
         window.show_home()
@@ -543,6 +547,46 @@ class QtGuiTests(unittest.TestCase):
         cancel.assert_not_called()
         self.qt.processEvents()
         self.assertFalse(window.isVisible())
+
+    def test_shared_progress_tracks_any_workflow_and_stops_on_success(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("setup_report_watcher"))
+        page = window.current_page
+        results = queue.Queue()
+        with patch.object(page, "_confirm", return_value=True), patch.object(window.executor, "run_async", return_value=results):
+            page._run()
+        self.assertFalse(page.progress.isHidden())
+        self.assertEqual(page.progress.bar.maximum(), 0)
+        with patch.object(WorkflowExecutor, "progress_snapshot", new_callable=PropertyMock, return_value=ProgressUpdate("Registering tasks", 2, 5)):
+            page._poll_result()
+        self.assertEqual(page.progress.bar.value(), 40)
+        self.assertIn("2 of 5 completed", page.progress.stage_label.text())
+        self.assertIn("Registering tasks", page.progress.stage_label.accessibleName())
+        self.assertIn("2 of 5", page.progress.bar.accessibleDescription())
+        self.assertEqual(page.progress.bar.focusPolicy(), Qt.FocusPolicy.StrongFocus)
+        results.put(WorkflowResult(True, "Done"))
+        page._poll_result()
+        self.assertEqual(page.progress.bar.value(), 100)
+        self.assertEqual(page.progress.stage_label.text(), "Completed")
+        self.assertFalse(page.timer.isActive())
+
+    def test_progress_elapsed_time_and_stop_do_not_claim_completion(self):
+        widget = WorkflowProgressWidget()
+        self.addCleanup(widget.close)
+        with patch("app.gui.progress.monotonic", return_value=100):
+            widget.start()
+        with patch("app.gui.progress.monotonic", return_value=161):
+            widget.refresh(ProgressUpdate("Reading accounts", 1, 4))
+            self.assertEqual(widget.time_label.text(), "Elapsed: 01:01")
+            widget.finish(success=False, cancelled=True)
+        self.assertEqual(widget.bar.value(), 25)
+        self.assertIn("Cancelled during: Reading accounts", widget.stage_label.text())
+        with patch("app.gui.progress.monotonic", return_value=200):
+            widget.start()
+            widget.finish(success=False, cancelled=False)
+        self.assertEqual(widget.bar.maximum(), 100)
+        self.assertEqual(widget.bar.value(), 0)
+        self.assertIn("Stopped", widget.stage_label.text())
 
     def test_running_workflow_blocks_close_and_navigation(self):
         window = self.open_app()

@@ -11,6 +11,7 @@ from pathlib import Path
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowResult
 from data_processing.refunds.extract import RefundExtractError
 from shared.cancellation import CancellationToken, WorkflowCancelled
+from shared.progress import ProgressReporter, ProgressUpdate
 
 
 def friendly_error_message(error: Exception) -> str:
@@ -43,6 +44,11 @@ class WorkflowExecutor:
         self._lock = threading.Lock()
         self._running = False
         self._cancellation: CancellationToken | None = None
+        self._progress = ProgressReporter()
+
+    @property
+    def progress_snapshot(self) -> ProgressUpdate | None:
+        return self._progress.snapshot
 
     def cancel(self) -> bool:
         with self._lock:
@@ -67,7 +73,9 @@ class WorkflowExecutor:
                 raise RuntimeError("Another workflow is already running.")
             self._running = True
             self._cancellation = CancellationToken() if definition.cancellable else None
-            context = replace(context, cancellation=self._cancellation)
+            self._progress = ProgressReporter()
+            self._progress.report("Starting workflow")
+            context = replace(context, cancellation=self._cancellation, progress=self._progress)
 
         results: queue.Queue[WorkflowResult] = queue.Queue(maxsize=1)
         worker = threading.Thread(

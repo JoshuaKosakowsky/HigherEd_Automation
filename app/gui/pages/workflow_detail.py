@@ -9,11 +9,12 @@ from typing import Callable
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
+    QLineEdit, QMessageBox, QPlainTextEdit,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
 from app.gui.models import ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode
+from app.gui.progress import WorkflowProgressWidget
 from app.gui.services.drag_drop import FileInput
 from app.gui.services.execution import WorkflowExecutor
 from app.gui.services.parameters import parse_parameters
@@ -148,10 +149,7 @@ class WorkflowDetailPage(QScrollArea):
         actions.addStretch()
         actions.addWidget(button("Open log folder", lambda: self._open(self.executor.log_directory)))
         layout.addLayout(actions)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setTextVisible(False)
-        self.progress.hide()
+        self.progress = WorkflowProgressWidget(self)
         layout.addWidget(self.progress)
         self.status_label = label("Ready when you are. Review your inputs before starting.", "status")
         layout.addWidget(self.status_label)
@@ -299,9 +297,10 @@ class WorkflowDetailPage(QScrollArea):
         self.output_button.hide()
         self.folder_button.hide()
         self.output_path = None
-        self.progress.show()
+        self.progress.start()
         self.status_label.setText("Running… Keep this window open. Your result will appear here.")
         self.busy_changed.emit(True)
+        self.ensureWidgetVisible(self.progress)
         self.timer.start()
 
     def _cancel(self) -> None:
@@ -319,13 +318,14 @@ class WorkflowDetailPage(QScrollArea):
     def _poll_result(self) -> None:
         if self.result_queue is None:
             return
+        self.progress.refresh(self.executor.progress_snapshot)
         try:
             result = self.result_queue.get_nowait()
         except queue.Empty:
             return
         self.result_queue = None
         self.timer.stop()
-        self.progress.hide()
+        self.progress.finish(success=result.success, cancelled=result.cancelled)
         self.cancel_button.hide()
         self.form.setEnabled(True)
         self.run_button.setEnabled(True)

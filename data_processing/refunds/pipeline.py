@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 
 from shared.cancellation import CancellationToken
+from shared.progress import ProgressReporter
 
 import pandas as pd
 
@@ -21,6 +22,7 @@ def _create_review(
     parameters: RefundParameters, output_file: Path,
     progress: Callable[[str], None] | None,
     cancellation: CancellationToken | None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     if cancellation:
         cancellation.check()
@@ -30,7 +32,8 @@ def _create_review(
             f"for {transactions['pidm'].nunique() if not transactions.empty else 0:,} accounts..."
         )
     started = perf_counter()
-    report = allocate_refunds(transactions, context, parameters, cancellation=cancellation)
+    report = allocate_refunds(transactions, context, parameters, cancellation=cancellation,
+                              progress_reporter=progress_reporter)
     if progress:
         progress(f"Refund calculation completed in {perf_counter() - started:.1f}s.")
     if cancellation:
@@ -40,13 +43,16 @@ def _create_review(
     # Stage on the same filesystem: cancellation or a failed save leaves no
     # partial workbook under the staff-selected output filename.
     with TemporaryDirectory(prefix=".refund-review-", dir=output_file.parent) as directory:
-        staged = export_refund_report(report, Path(directory) / output_file.name, cancellation=cancellation)
+        staged = export_refund_report(report, Path(directory) / output_file.name, cancellation=cancellation,
+                                      progress_reporter=progress_reporter)
 
         def publish() -> None:
             if cancellation and output_file.exists():
                 raise ValueError("The output workbook already exists. Choose a new filename.")
             staged.replace(output_file)
 
+        if progress_reporter:
+            progress_reporter.report("Publishing completed refund workbook")
         if cancellation:
             cancellation.publish(publish)
         else:
@@ -67,12 +73,15 @@ def run_refund_pipeline(
     offline: bool = False,
     progress: Callable[[str], None] | None = None,
     cancellation: CancellationToken | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """Extract Banner rows, calculate locally, and export the review workbook."""
     if cancellation:
         cancellation.check()
     started = perf_counter()
     if offline:
+        if progress_reporter:
+            progress_reporter.report("Reading cached refund extracts")
         transactions, context = read_refund_extracts(extract_settings)
     else:
         if client is None:
@@ -84,11 +93,12 @@ def run_refund_pipeline(
             context_template_path=context_template_path,
             progress=progress,
             cancellation=cancellation,
+            progress_reporter=progress_reporter,
         )
 
     if progress:
         progress(f"Refund extraction completed in {perf_counter() - started:.1f}s.")
-    return _create_review(transactions, context, parameters, output_file, progress, cancellation)
+    return _create_review(transactions, context, parameters, output_file, progress, cancellation, progress_reporter)
 
 
 def run_refund_download_pipeline(
@@ -99,10 +109,13 @@ def run_refund_download_pipeline(
     output_file: Path,
     progress: Callable[[str], None] | None = None,
     cancellation: CancellationToken | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """Calculate the report from two manually downloaded Insights results."""
     if cancellation:
         cancellation.check()
+    if progress_reporter:
+        progress_reporter.report("Reading refund transaction download")
     transactions = read_refund_download(
         transaction_file,
         label="Transaction",
@@ -110,9 +123,11 @@ def run_refund_download_pipeline(
     )
     if cancellation:
         cancellation.check()
+    if progress_reporter:
+        progress_reporter.report("Reading refund account-context download")
     context = read_refund_download(
         context_file,
         label="Context",
         expected_target_term=parameters.target_term,
     )
-    return _create_review(transactions, context, parameters, output_file, progress, cancellation)
+    return _create_review(transactions, context, parameters, output_file, progress, cancellation, progress_reporter)

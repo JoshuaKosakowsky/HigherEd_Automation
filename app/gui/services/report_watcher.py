@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from app.gui.models import WorkflowContext, WorkflowResult
+from app.gui.services.process import run_process
 from shared.user_settings import read_automation_user_settings
 
 
@@ -18,6 +19,7 @@ SETUP_SCRIPT = PROJECT_ROOT / "setup" / "setup_report_filing_watcher.ps1"
 
 def run_setup_report_watcher(context: WorkflowContext) -> WorkflowResult:
     """Install through the proven PowerShell entry point without elevation."""
+    context.progress.report("Validating report watcher setup")
     if sys.platform != "win32":
         raise ValueError("Report watcher setup is Windows-only. Run it on your work PC.")
     if read_automation_user_settings() is None:
@@ -31,17 +33,15 @@ def run_setup_report_watcher(context: WorkflowContext) -> WorkflowResult:
         raise ValueError("Windows PowerShell could not be found on this computer.")
 
     logger = logging.getLogger("highered_automation.gui")
+    context.progress.report("Installing report watcher for the current Windows user")
     try:
-        completed = subprocess.run(
+        completed = run_process(
             [powershell, "-NoLogo", "-NoProfile", "-NonInteractive",
              "-File", str(SETUP_SCRIPT)],
             cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            errors="replace",
             creationflags=subprocess.CREATE_NO_WINDOW,
             timeout=120,
-            check=False,
+            progress_reporter=context.progress,
         )
     except subprocess.TimeoutExpired:
         logger.error("Report watcher installer exceeded its 120-second timeout.")

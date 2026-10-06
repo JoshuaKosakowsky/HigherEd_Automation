@@ -26,7 +26,7 @@ def run_population_testing(context: WorkflowContext) -> WorkflowResult:
         sample_fraction=float(context.parameters["sample_percent"]) / 100,
         staff_names=tuple(context.parameters["staff_names"]),
     )
-    created_file = run_population_testing_pipeline(config)
+    created_file = run_population_testing_pipeline(config, progress_reporter=context.progress)
 
     return WorkflowResult(
         success=True,

@@ -11,6 +11,7 @@ import pandas as pd
 
 from .terms import RefundParameters, fiscal_year_start
 from shared.cancellation import CancellationToken
+from shared.progress import ProgressReporter
 
 
 CENT = Decimal("0.01")
@@ -1106,20 +1107,27 @@ def allocate_refunds(
     *,
     legacy_third_party_cwids: Iterable[str] = (),
     cancellation: CancellationToken | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> pd.DataFrame:
     """Calculate the refund review report from flat Banner extracts."""
     if cancellation:
         cancellation.check()
+    if progress_reporter:
+        progress_reporter.report("Preparing refund transactions and account context")
     transactions = _normalize_columns(transaction_frame)
     context = _normalize_columns(context_frame)
     _validate_columns(transactions, TRANSACTION_COLUMNS, "Transaction")
     _validate_columns(context, CONTEXT_COLUMNS, "Context")
 
     normalized_transactions = []
+    if progress_reporter:
+        progress_reporter.report("Normalizing refund transactions", completed=0, total=len(transactions))
     for source_id, row in enumerate(transactions.to_dict("records"), start=1):
         if cancellation and source_id % 500 == 1:
             cancellation.check()
         normalized_transactions.append(_normalize_transaction(row, source_id))
+        if progress_reporter and (source_id % 500 == 0 or source_id == len(transactions)):
+            progress_reporter.report("Normalizing refund transactions", completed=source_id, total=len(transactions))
     transactions_by_pidm: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in normalized_transactions:
         transactions_by_pidm[row["pidm"]].append(row)
@@ -1130,7 +1138,10 @@ def allocate_refunds(
 
     legacy = {str(cwid).strip().upper() for cwid in legacy_third_party_cwids if str(cwid).strip()}
     report_rows = []
-    for pidm, account_transactions in transactions_by_pidm.items():
+    total_accounts = len(transactions_by_pidm)
+    if progress_reporter:
+        progress_reporter.report("Calculating refunds by account", completed=0, total=total_accounts)
+    for completed, (pidm, account_transactions) in enumerate(transactions_by_pidm.items(), 1):
         if cancellation:
             cancellation.check()
         result = _allocate_account(
@@ -1141,7 +1152,11 @@ def allocate_refunds(
         )
         if result is not None:
             report_rows.append(result)
+        if progress_reporter:
+            progress_reporter.report("Calculating refunds by account", completed=completed, total=total_accounts)
 
+    if progress_reporter:
+        progress_reporter.report("Sorting refund review results")
     report_rows.sort(key=lambda row: (
         row["last_name"] or "",
         row["first_name"] or "",

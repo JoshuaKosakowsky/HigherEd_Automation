@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from shared.progress import ProgressReporter
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.pivot.cache import CacheDefinition, CacheField, CacheSource, WorksheetSource
@@ -349,6 +350,7 @@ def _make_workbook() -> Workbook:
 def build_recon(
     *, brokers: Path, frst: Path | None, book: Path | None,
     output: Path, month: str | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> dict[str, int]:
     """Create a complete recon workbook and native PivotTables from Python."""
     paths = [brokers, *(path for path in (frst, book) if path)]
@@ -360,12 +362,20 @@ def build_recon(
         raise ValueError("Provide at least one Banner extract.")
     if month is not None and not MONTH_PATTERN.fullmatch(month):
         raise ValueError("Recon month must be YYYY-MM.")
+    if progress_reporter:
+        progress_reporter.report("Creating reconciliation workbook layout")
     workbook = _make_workbook()
     counts = {}
     for kind, banner_path in (("IA", frst), ("FA", book)):
         source_name, source_pivot_name, code, banner_pivot_name, recon_name = RECON_SHEETS[kind]
+        if progress_reporter:
+            progress_reporter.report(f"Reading {kind} Textbook Brokers charges")
         source_rows, broker_totals = _broker_rows(brokers, kind)
+        if progress_reporter:
+            progress_reporter.report(f"Reading {code} Banner transactions")
         banner_headers, banner_rows, banner_totals = _banner_rows(banner_path, code, month)
+        if progress_reporter:
+            progress_reporter.report(f"Matching and writing {kind} reconciliation")
         _replace_data(workbook[source_name], source_rows, 10 if kind == "IA" else 12)
         banner_width = len(BANNER_HEADERS)
         output_headers = BANNER_HEADERS
@@ -396,6 +406,8 @@ def build_recon(
     output.parent.mkdir(parents=True, exist_ok=True)
     created = False
     try:
+        if progress_reporter:
+            progress_reporter.report("Saving reconciliation workbook")
         with output.open("xb") as stream:
             created = True
             workbook.save(stream)

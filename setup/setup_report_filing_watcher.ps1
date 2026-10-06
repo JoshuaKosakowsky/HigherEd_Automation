@@ -38,6 +38,7 @@ foreach ($requiredPath in @(
     }
 }
 
+Write-Output 'HIGHERED_PROGRESS={"stage":"Loading report watcher configuration"}'
 . $userSettingsScript
 $userSettings = Read-AutomationUserSettings
 Import-Module $modulePath -Force
@@ -65,6 +66,7 @@ $actionArguments = (
     '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "{0}"' -f `
         $launcherPath
 )
+Write-Output 'HIGHERED_PROGRESS={"stage":"Configuring the current-user watcher task"}'
 $action = New-ScheduledTaskAction `
     -Execute $powerShellExecutable `
     -Argument $actionArguments
@@ -103,12 +105,14 @@ if ($null -ne $existingTask) {
         -ErrorAction SilentlyContinue
 }
 
+Write-Output 'HIGHERED_PROGRESS={"stage":"Registering the report watcher task"}'
 Register-ScheduledTask `
     -TaskName $taskName `
     -InputObject $task `
     -Force |
     Out-Null
 
+Write-Output 'HIGHERED_PROGRESS={"stage":"Starting the report watcher"}'
 Start-ScheduledTask -TaskName $taskName
 
 Write-Host ""

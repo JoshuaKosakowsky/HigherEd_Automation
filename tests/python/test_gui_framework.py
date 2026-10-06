@@ -349,6 +349,7 @@ class PopulationTestingAdapterTests(unittest.TestCase):
                 result = run_population_testing(context)
 
             config = pipeline.call_args.args[0]
+            self.assertIs(pipeline.call_args.kwargs["progress_reporter"], context.progress)
             self.assertEqual(config.input_file, source)
             self.assertEqual(config.output_file, output)
             self.assertEqual(config.sample_fraction, 0.3)
@@ -513,7 +514,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
                 create=True,
             ),
             patch(
-                "app.gui.services.textbook_brokers.subprocess.run",
+                "app.gui.services.textbook_brokers.run_process",
                 return_value=completed,
             ) as run,
         ):
@@ -537,6 +538,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
         )
         self.assertEqual(run.call_args.kwargs["cwd"], TEXTBOOK_PROJECT_ROOT)
         self.assertEqual(run.call_args.kwargs["timeout"], 300)
+        self.assertIs(run.call_args.kwargs["progress_reporter"], context.progress)
         self.assertNotIn("shell", run.call_args.kwargs)
 
     def test_adapter_failure_never_claims_files_were_archived(self) -> None:
@@ -553,7 +555,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
                 create=True,
             ),
             patch(
-                "app.gui.services.textbook_brokers.subprocess.run",
+                "app.gui.services.textbook_brokers.run_process",
                 return_value=subprocess.CompletedProcess([], 1, "", "failed"),
             ),
         ):
@@ -576,7 +578,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
                 create=True,
             ),
             patch(
-                "app.gui.services.textbook_brokers.subprocess.run",
+                "app.gui.services.textbook_brokers.run_process",
                 return_value=subprocess.CompletedProcess(
                     [], 0, "HIGHERED_NO_PENDING_FILES=1\n", ""
                 ),
@@ -596,7 +598,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
                     "term_code": "202680", "step": "archive",
                     "banner_upload_confirmed": confirmation,
                 })
-                with patch("app.gui.services.textbook_brokers.subprocess.run") as run:
+                with patch("app.gui.services.textbook_brokers.run_process") as run:
                     with self.assertRaisesRegex(ValueError, "Confirm.*TSPLOAD"):
                         run_textbook_brokers(context)
                     run.assert_not_called()
@@ -618,7 +620,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
                 patch("app.gui.services.textbook_brokers.sys.platform", "win32"),
                 patch("app.gui.services.textbook_brokers.shutil.which", return_value="powershell.exe"),
                 patch("app.gui.services.textbook_brokers.subprocess.CREATE_NO_WINDOW", 0, create=True),
-                patch("app.gui.services.textbook_brokers.subprocess.run") as run,
+                patch("app.gui.services.textbook_brokers.run_process") as run,
             ):
                 if isinstance(completed, Exception):
                     run.side_effect = completed
@@ -637,7 +639,7 @@ class TextbookBrokersAdapterTests(unittest.TestCase):
                     self.assertIn("before retrying", result.message)
 
     def test_unknown_step_cannot_launch_process(self) -> None:
-        with patch("app.gui.services.textbook_brokers.subprocess.run") as run:
+        with patch("app.gui.services.textbook_brokers.run_process") as run:
             with self.assertRaisesRegex(ValueError, "valid.*step"):
                 run_textbook_brokers(WorkflowContext("textbook_brokers", {"step": "unknown"}))
             run.assert_not_called()

@@ -24,6 +24,8 @@ layout; accent colors remain limited.
   displays the workflow warning and requires an explicit Run in production action.
 - `services/execution.py` runs one task at a time on a worker thread and converts
   exceptions into staff-safe messages while preserving tracebacks in the log.
+- `shared/progress.py` supplies toolkit-independent progress updates;
+  `progress.py` renders them in one shared Qt widget for all workflows.
 - workflow-specific service adapters translate form values into existing
   pipeline configuration. They do not reimplement processing rules.
 - `launcher/run_gui.ps1` starts the app with the repository virtual environment.
@@ -318,6 +320,20 @@ existing shortcut or `.\launcher\run_gui.ps1 -Console`. No policy migration is
 needed for an existing shared schema-3 policy.
 
 The interface refreshes access when opening pages and before starting a run.
+Every registered workflow uses the same progress display: current stage,
+completed/total counts when known, percentage **of that stage**, and elapsed
+time. Stages without a known total use an activity bar rather than an estimated
+percentage or ETA. Progress remains visible on completion, cancellation, or
+failure. The native Qt bar is keyboard focusable and exposes an accessible name
+and description; visible stage/count text and elapsed time provide the same
+information without relying on animation or color.
+
+Refund Review reports extraction batches/partitions, transaction normalization,
+completed account calculations, worksheet writing/formatting, saving, and
+publication. Other Python workflows report their real processing stages.
+Textbook Brokers and Report Watcher setup stream explicit launcher progress
+messages while PowerShell runs; ordinary logs are not interpreted as progress.
+
 While a workflow runs, navigation is blocked; Refund Review supports the safe
 cancellation described above, while other workflows still block window closing. Completion
 provides Open result and Open output folder actions; failures retain log access.
@@ -339,6 +355,41 @@ Qt licensing notices and source information are in
 
 The GUI writes technical details to `logs/gui/gui_YYYYMMDD.log`. Staff-facing
 dialogs intentionally omit tracebacks and secrets.
+
+## Reporting workflow progress
+
+Every runner receives a fresh, thread-safe `context.progress` reporter. Call it
+before a blocking stage and after units of real work complete:
+
+```python
+context.progress.report("Connecting to source system")  # Unknown total: activity bar.
+context.progress.report("Processing files", completed=0, total=len(files))
+for completed, file in enumerate(files, 1):
+    process_file(file)
+    context.progress.report("Processing files", completed=completed, total=len(files))
+context.progress.report("Saving workbook")
+```
+
+Pass `context.progress` into the existing processing API as the optional
+`progress_reporter` argument. Those APIs import only `shared.progress`, never
+Qt. Existing command-line callers can omit it. Counts must be integers with
+`0 <= completed <= total`; provide both or neither. Counts describe the current
+stage and can restart at zero in a new stage. Zero of zero represents a completed
+empty stage. Only the final successful workflow result marks the entire run
+complete. Workflows without detailed reporting still get the shared starting
+indicator, elapsed time, and final state automatically.
+
+The executor keeps only the latest update, and the GUI reads it on its existing
+100 ms timer. Worker threads must not update widgets. Stage text should describe
+work, never include student/account identifiers, sensitive records, credentials,
+or SQL. It is displayed as plain text.
+
+Windows adapters share `services/process.py`. Launchers emit a dedicated JSON
+line, for example `HIGHERED_PROGRESS={"stage":"Downloading files"}`, optionally
+with integer `completed` and `total` fields. Both output streams are drained
+while the launcher runs. Invalid markers are ignored; existing output markers,
+diagnostics, exit codes, and timeouts are preserved. Use these explicit markers
+rather than parsing ordinary log messages as progress.
 
 ## Deployment boundary and next integrations
 

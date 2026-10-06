@@ -10,6 +10,7 @@ from typing import Protocol
 from time import perf_counter
 
 from shared.cancellation import CancellationToken
+from shared.progress import ProgressReporter
 
 import pandas as pd
 
@@ -239,6 +240,7 @@ def _complete_partition(
     transaction_range: tuple[int | None, int | None] = (None, None),
     location: str | None = None, cancellation: CancellationToken | None = None,
     progress: Callable[[str], None] | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> pd.DataFrame:
     """Bisect disjoint integer ranges until each result passes the count guard."""
     location = location or str(batch_index + 1)
@@ -249,6 +251,11 @@ def _complete_partition(
         transaction_range=transaction_range,
     )
     started = perf_counter()
+    if progress_reporter:
+        progress_reporter.report(
+            f"Extracting refund {label} — batch/partition {location}",
+            completed=batch_index * 2 + (label == "context"), total=settings.batch_count * 2,
+        )
     raw = _normalized_result(client.run_sql(_render_partition_sql(sql, label)))
     if progress:
         progress(f"{label.capitalize()} batch {location} query returned {len(raw):,} rows in {perf_counter() - started:.1f}s.")
@@ -311,6 +318,7 @@ def _complete_partition(
                 transaction_range=child_bounds if column == "tran_number" else transaction_range,
                 depth=depth + 1, location=f"{location}.{child}", progress=progress,
                 cancellation=cancellation,
+                progress_reporter=progress_reporter,
             ))
         combined = pd.concat(parts, ignore_index=True)
         if len(combined) != expected:
@@ -358,6 +366,7 @@ def extract_refund_data(
     context_template_path: Path,
     progress: Callable[[str], None] | None = None,
     cancellation: CancellationToken | None = None,
+    progress_reporter: ProgressReporter | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run or resume every flat Insights extraction batch."""
     _prepare_manifest(settings)
@@ -375,6 +384,8 @@ def extract_refund_data(
                 cancellation.check()
             path = settings.extract_directory / f"{label}_{batch_index:03d}.csv"
             if settings.resume and path.exists():
+                if progress_reporter:
+                    progress_reporter.report(f"Reading cached refund {label} batch {batch_index + 1}")
                 frame = _read_cached(path)
                 source = "cache"
             else:
@@ -383,12 +394,19 @@ def extract_refund_data(
                 frame = _complete_partition(
                     client, template, label, batch_index, settings=settings,
                     progress=progress, cancellation=cancellation,
+                    progress_reporter=progress_reporter,
                 )
                 if cancellation:
                     cancellation.check()
                 _write_atomic(frame, path)
                 source = "Insights"
             frames.append(frame)
+            if progress_reporter:
+                progress_reporter.report(
+                    "Extracting refund data — complete batches",
+                    completed=batch_index * 2 + 1 + (label == "context"),
+                    total=settings.batch_count * 2,
+                )
             if progress:
                 progress(
                     f"Loaded {len(frame):,} {label} rows for batch "

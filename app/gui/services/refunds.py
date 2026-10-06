@@ -21,6 +21,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
     """Create a review using the existing download or batched SQL pipeline."""
     if context.cancellation:
         context.cancellation.check()
+    context.progress.report("Validating Refund Review inputs")
     source = context.parameters.get("refund_source", "manual")
     if source not in ("manual", "sql"):
         raise ValueError("Choose manual files or Insights SQL for Refund Review.")
@@ -43,6 +44,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
         profile = load_department_profiles()[WorkflowMode.PRODUCTION.value]
         if profile is None:
             raise ValueError("Insights PROD is not configured.")
+        context.progress.report("Connecting to PROD Insights — complete browser sign-in if prompted")
         client, _ = build_authenticated_client(profile.settings, browser="chrome")
         with client, TemporaryDirectory(prefix="refund-review-") as directory:
             created_file, report = run_refund_pipeline(
@@ -59,6 +61,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
                 client=client,
                 progress=logging.getLogger("highered_automation.gui").info,
                 cancellation=context.cancellation,
+                progress_reporter=context.progress,
             )
     else:
         transaction_file = Path(context.parameters["transaction_file"])
@@ -72,6 +75,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
             output_file=output_file,
             cancellation=context.cancellation,
             progress=logging.getLogger("highered_automation.gui").info,
+            progress_reporter=context.progress,
         )
 
     return WorkflowResult(

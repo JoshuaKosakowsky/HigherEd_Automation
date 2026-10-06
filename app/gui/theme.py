@@ -127,6 +127,9 @@ def apply_theme(application: QApplication) -> None:
         QTableWidget::item {{ padding: 8px; }}
         QProgressBar {{ background: {PALE_BLUE}; border: none; border-radius: 4px; max-height: 7px; }}
         QProgressBar::chunk {{ background: {BLASTER_BLUE}; border-radius: 4px; }}
+        QProgressBar#workflowProgressBar {{ min-height: 24px; max-height: 30px; color: {DARK_BLUE}; }}
+        QProgressBar#workflowProgressBar::chunk {{ background: {LIGHT_BLUE}; }}
+        QProgressBar#workflowProgressBar:focus {{ border: 2px solid {DARK_BLUE}; }}
         QCheckBox {{ spacing: 9px; padding: 7px 0; }}
         QScrollBar:vertical {{ width: 12px; background: {PAGE}; }}
         QScrollBar::handle:vertical {{ background: {LIGHT_BLUE}; min-height: 30px; border-radius: 5px; }}

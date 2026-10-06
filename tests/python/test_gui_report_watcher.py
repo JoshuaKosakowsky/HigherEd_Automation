@@ -25,7 +25,7 @@ class ReportWatcherAdapterTests(unittest.TestCase):
 
     def test_mac_review_cannot_install_watcher(self):
         with patch("app.gui.services.report_watcher.sys.platform", "darwin"):
-            with patch("app.gui.services.report_watcher.subprocess.run") as run:
+            with patch("app.gui.services.report_watcher.run_process") as run:
                 with self.assertRaisesRegex(ValueError, "Windows-only"):
                     run_setup_report_watcher(self.context)
                 run.assert_not_called()
@@ -42,7 +42,7 @@ class ReportWatcherAdapterTests(unittest.TestCase):
             patch("app.gui.services.report_watcher.read_automation_user_settings", return_value=Mock()),
             patch("app.gui.services.report_watcher.shutil.which", return_value="C:/Windows/powershell.exe"),
             patch("app.gui.services.report_watcher.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True),
-            patch("app.gui.services.report_watcher.subprocess.run",
+            patch("app.gui.services.report_watcher.run_process",
                   return_value=subprocess.CompletedProcess([], returncode, "", ""),
                   side_effect=error) as run,
         ):
@@ -60,6 +60,7 @@ class ReportWatcherAdapterTests(unittest.TestCase):
         self.assertNotIn("shell", run.call_args.kwargs)
         self.assertEqual(run.call_args.kwargs["creationflags"], 0x08000000)
         self.assertEqual(run.call_args.kwargs["timeout"], 120)
+        self.assertIs(run.call_args.kwargs["progress_reporter"], self.context.progress)
         self.assertEqual(SETUP_SCRIPT, PROJECT_ROOT / "setup" / "setup_report_filing_watcher.ps1")
 
     def test_failed_installer_does_not_report_success(self):
