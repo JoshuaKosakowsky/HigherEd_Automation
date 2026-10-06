@@ -202,10 +202,22 @@ same term and batch count with `-Resume`:
 .\launcher\run_refunds.ps1 -TargetTerm 202680 -BatchCount 20 -Resume
 ```
 
-If a flat batch itself times out or the row-count guard reports truncation,
-increase `-BatchCount` and start a fresh extraction without `-Resume`. Changing
-the batch count changes every PIDM partition, so old batches cannot safely be
-mixed with the new run.
+The API extractor automatically subdivides truncated transaction and context
+batches by disjoint PIDM ranges. If a single account's transaction history is
+still too large, it subdivides by transaction number. This handles Insights'
+response row limit without changing the initial `-BatchCount` or account scope.
+Every part passes the row-count guard, and recombined totals must match the
+parent batch before the completed batch is cached. Progress is printed by the
+launcher and written to the GUI log without account identifiers. Subdivision
+is bounded; an indivisible result or a changing population stops extraction
+with a descriptive error rather than accepting incomplete data.
+
+Only complete top-level batches are cached; a failed subdivided batch is
+retried in full on `-Resume`. Existing compatible complete caches remain valid.
+If a query itself times out, increase `-BatchCount` and start a fresh extraction
+without `-Resume`. Changing the batch count changes every PIDM partition, so
+old batches cannot safely be mixed with the new run. Manual file downloads
+still require complete exports; they cannot be automatically subdivided.
 
 To recalculate an already complete extraction without Insights, use `-Offline`
 with the same term, batch count, extract directory, optional CWID, and run date

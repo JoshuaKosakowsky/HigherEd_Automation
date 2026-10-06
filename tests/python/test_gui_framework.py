@@ -39,6 +39,7 @@ from app.gui.services.textbook_brokers import (
     WORKFLOW_SCRIPT,
     run_textbook_brokers,
 )
+from data_processing.refunds.extract import RefundExtractError, TruncatedRefundExtractError
 from app.gui import theme
 from app.gui.workflow_registry import get_workflow, get_workflows
 from shared.banner.term import get_banner_term
@@ -430,6 +431,7 @@ class RefundReviewAdapterTests(unittest.TestCase):
         self.assertEqual(arguments["transaction_template_path"].name, "refund_transactions_extract.sql")
         self.assertEqual(arguments["context_template_path"].name, "refund_context_extract.sql")
         self.assertIs(arguments["client"], client)
+        self.assertTrue(callable(arguments["progress"]))
         authenticate.assert_called_once_with(profile.settings, browser="chrome")
         client.__exit__.assert_called_once()
         self.assertTrue(result.success)
@@ -689,6 +691,17 @@ class WorkflowExecutorTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertNotIn("internal-only detail", result.message)
         self.assertIn("could not be completed", result.message)
+
+    def test_refund_extraction_errors_are_actionable_without_cli_flags(self) -> None:
+        for error in (
+            RefundExtractError("The smallest partition is still truncated. No incomplete batch was saved."),
+            TruncatedRefundExtractError("transactions", "batch 1", 37322, 2000),
+        ):
+            with self.subTest(error=type(error).__name__):
+                message = friendly_error_message(error)
+                self.assertEqual(message, str(error))
+                self.assertIn("incomplete", message)
+                self.assertNotIn("--batch-count", message)
 
     def test_permission_error_has_actionable_staff_message(self) -> None:
         message = friendly_error_message(PermissionError("technical path"))

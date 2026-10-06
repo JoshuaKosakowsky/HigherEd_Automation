@@ -6,6 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import sqlite3
+from unittest.mock import patch
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -14,6 +16,7 @@ from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_r
 from data_processing.refunds.export import REFUND_SHEETS, WORKBOOK_COLUMNS, export_refund_report
 from data_processing.refunds.extract import (
     ExtractSettings,
+    RefundExtractError,
     _validate_complete_result,
     extract_refund_data,
     read_refund_extracts,
@@ -728,6 +731,208 @@ class RefundTermTests(unittest.TestCase):
         self.assertEqual(previous_term("202680", "202660"), "202660")
 
 
+class CappedRefundSQLClient:
+    """Execute real window/range SQL over synthetic rows, then impose an API cap."""
+
+    def __init__(self, transactions, context=None, limit=2000):
+        self.database = sqlite3.connect(":memory:")
+        self.database.execute("CREATE TABLE transactions (pidm INTEGER, tran_number INTEGER)")
+        self.database.executemany("INSERT INTO transactions VALUES (?, ?)", transactions)
+        self.database.execute("CREATE TABLE context (pidm INTEGER, authorization INTEGER)")
+        self.database.executemany("INSERT INTO context VALUES (?, ?)", context or [(1, 1)])
+        self.limit = limit
+        self.calls = []
+
+    def run_sql(self, sql):
+        self.calls.append(sql)
+        cursor = self.database.execute(sql)
+        return pd.DataFrame(cursor.fetchmany(self.limit), columns=[column[0] for column in cursor.description])
+
+    def close(self):
+        self.database.close()
+
+
+class RefundSubdivisionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.transaction_template = self.root / "transactions.sql"
+        self.context_template = self.root / "context.sql"
+        self.transaction_template.write_text(
+            "SELECT COUNT(*) OVER () AS extract_row_count, pidm, tran_number "
+            "FROM transactions ORDER BY pidm, tran_number;", encoding="utf-8",
+        )
+        self.context_template.write_text(
+            "SELECT COUNT(*) OVER () AS extract_row_count, pidm, authorization "
+            "FROM context ORDER BY pidm, authorization;", encoding="utf-8",
+        )
+        self.settings = ExtractSettings("202680", 1, self.root / "cache")
+        self.messages = []
+
+    def client(self, transactions, context=None, limit=2000):
+        client = CappedRefundSQLClient(transactions, context, limit)
+        self.addCleanup(client.close)
+        return client
+
+    def extract(self, client, settings=None):
+        return extract_refund_data(
+            client, settings or self.settings,
+            transaction_template_path=self.transaction_template,
+            context_template_path=self.context_template,
+            progress=self.messages.append,
+        )
+
+    def assert_transactions(self, frame, rows):
+        self.assertEqual(list(frame.itertuples(index=False, name=None)), rows)
+        self.assertEqual(list(frame.columns), ["pidm", "tran_number"])
+        cached = pd.read_csv(self.settings.extract_directory / "transactions_000.csv")
+        pd.testing.assert_frame_equal(cached, frame)
+
+    def test_complete_empty_and_near_limit_batches_do_not_split(self):
+        for count in (0, 1999, 2000):
+            with self.subTest(count=count):
+                rows = [(i + 1, 1) for i in range(count)]
+                client = self.client(rows)
+                transactions, _ = self.extract(client)
+                self.assertEqual(len(client.calls), 2)
+                self.assert_transactions(transactions, rows)
+
+    def test_one_split_combines_all_rows_once_and_resumes_complete_cache(self):
+        rows = [(i + 1, 1) for i in range(4000)]
+        client = self.client(rows)
+        transactions, _ = self.extract(client)
+        self.assertEqual(len(client.calls), 4)  # root, two complete children, context
+        self.assert_transactions(transactions, rows)
+        self.assertTrue(any("subdividing" in message for message in self.messages))
+        calls = len(client.calls)
+        resumed, _ = self.extract(client, replace(self.settings, resume=True))
+        self.assertEqual(len(client.calls), calls)
+        pd.testing.assert_frame_equal(resumed, transactions)
+        offline, _ = read_refund_extracts(self.settings)
+        pd.testing.assert_frame_equal(offline, transactions)
+
+    def test_multiple_account_splits_include_all_rows_once(self):
+        rows = [(i // 100 + 1, i % 100 + 1) for i in range(37322)]
+        client = self.client(rows)
+        transactions, _ = self.extract(client)
+        self.assertGreater(len(client.calls), 4)
+        self.assert_transactions(transactions, rows)
+        self.assertTrue(any("batch 1.1.1" in message for message in self.messages))
+        self.assertTrue(any("expected 37,322 rows but received 2,000" in message for message in self.messages))
+
+    def test_single_large_account_subdivides_by_transaction_number(self):
+        rows = [(1, i + 1) for i in range(5001)]
+        client = self.client(rows)
+        transactions, _ = self.extract(client)
+        self.assert_transactions(transactions, rows)
+        self.assertTrue(any("source.tran_number <=" in sql for sql in client.calls))
+
+    def test_sparse_negative_ranges_preserve_boundary_rows(self):
+        rows = sorted([(pidm, number) for pidm in (-100, -1, 20, 100000) for number in (1, 20, 9999)])
+        client = self.client(rows, limit=2)
+        transactions, _ = self.extract(client)
+        self.assert_transactions(transactions, rows)
+
+    def test_context_batches_also_subdivide_without_dropping_duplicate_authorizations(self):
+        context = [(i + 1, 1) for i in range(3000)] + [(3000, 1)]
+        client = self.client([(1, 1)], context)
+        _, frame = self.extract(client)
+        self.assertEqual(list(frame.itertuples(index=False, name=None)), context)
+        self.assertTrue(any("Context batch" in message and "subdividing" in message for message in self.messages))
+
+    def test_indivisible_transaction_partition_is_not_cached(self):
+        client = self.client([(1, 1)] * 2001)
+        with self.assertRaisesRegex(RefundExtractError, "smallest transactions partition"):
+            self.extract(client)
+        self.assertEqual(len(client.calls), 1)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+        self.assertEqual(list(self.settings.extract_directory.glob("*.tmp")), [])
+
+    def test_indivisible_context_leaves_only_complete_transaction_cache(self):
+        client = self.client([(1, 1)], [(1, 1)] * 2001)
+        with self.assertRaisesRegex(RefundExtractError, "smallest context partition"):
+            self.extract(client)
+        self.assertTrue((self.settings.extract_directory / "transactions_000.csv").exists())
+        self.assertFalse((self.settings.extract_directory / "context_000.csv").exists())
+        with self.assertRaisesRegex(FileNotFoundError, "incomplete"):
+            read_refund_extracts(self.settings)
+
+    def test_depth_limit_stops_subdivision_without_caching(self):
+        client = self.client([(i + 1, 1) for i in range(5)], limit=2)
+        with patch("data_processing.refunds.extract.MAX_SUBDIVISION_DEPTH", 0):
+            with self.assertRaisesRegex(RefundExtractError, "safety limit"):
+                self.extract(client)
+        self.assertEqual(len(client.calls), 1)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+    def test_failed_child_is_not_cached_and_resume_retries_the_root(self):
+        client = self.client([(i + 1, 1) for i in range(4)], limit=2)
+        original = client.run_sql
+
+        def fail_right(sql):
+            if "source.pidm >" in sql:
+                raise RuntimeError("Synthetic connection failure")
+            return original(sql)
+
+        with patch.object(client, "run_sql", side_effect=fail_right):
+            with self.assertRaisesRegex(RuntimeError, "connection failure"):
+                self.extract(client)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+        transactions, _ = self.extract(client, replace(self.settings, resume=True))
+        self.assert_transactions(transactions, [(i + 1, 1) for i in range(4)])
+
+    def test_changed_population_cannot_enter_the_cache(self):
+        client = self.client([(i + 1, 1) for i in range(4)], limit=2)
+        original = client.run_sql
+
+        def change_population(sql):
+            if len(client.calls) == 1:
+                client.database.execute("DELETE FROM transactions WHERE pidm = 4")
+            return original(sql)
+
+        with patch.object(client, "run_sql", side_effect=change_population):
+            with self.assertRaisesRegex(RefundExtractError, "population changed"):
+                self.extract(client)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+    def test_recombined_count_detects_membership_changes_with_same_root_total(self):
+        client = self.client([(i + 1, 1) for i in range(4)], limit=2)
+        original = client.run_sql
+
+        def move_row(sql):
+            if len(client.calls) == 2:
+                client.database.execute("UPDATE transactions SET pidm = 5 WHERE pidm = 1")
+            return original(sql)
+
+        with patch.object(client, "run_sql", side_effect=move_row):
+            with self.assertRaisesRegex(RefundExtractError, "Recombined transactions batch"):
+                self.extract(client)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+    def test_original_root_guard_is_not_weakened(self):
+        client = self.client([(1, 1)])
+        original = client.run_sql
+
+        def wrong_root_guard(sql):
+            frame = original(sql)
+            frame["extract_row_count"] = 2
+            return frame
+
+        with patch.object(client, "run_sql", side_effect=wrong_root_guard):
+            with self.assertRaisesRegex(RefundExtractError, "conflicting.*row-count guards"):
+                self.extract(client)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+    def test_missing_guard_cannot_trigger_a_retry_or_cache_write(self):
+        client = self.client([(1, 1)])
+        with patch.object(client, "run_sql", return_value=pd.DataFrame({"pidm": [1]})) as query:
+            with self.assertRaisesRegex(ValueError, "lacks automatic-subdivision"):
+                self.extract(client)
+        query.assert_called_once()
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+
 class RefundExtractTests(unittest.TestCase):
     def test_ed_hold_end_date_cutoff_matches_all_sql_paths(self) -> None:
         root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
@@ -762,6 +967,12 @@ class RefundExtractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "truncated"):
             _validate_complete_result(frame, "transactions", 0)
 
+    def test_invalid_or_inconsistent_row_count_guards_are_rejected(self) -> None:
+        for counts in ([2, 3], [2.5, 2.5], [None, None], [-1, -1]):
+            with self.subTest(counts=counts):
+                with self.assertRaisesRegex(ValueError, "invalid.*guard"):
+                    _validate_complete_result(pd.DataFrame({"extract_row_count": counts}), "transactions", 0)
+
     def test_completed_batches_are_cached_and_resumable(self) -> None:
         class FakeClient:
             def __init__(self) -> None:
@@ -769,9 +980,11 @@ class RefundExtractTests(unittest.TestCase):
 
             def run_sql(self, sql: str) -> pd.DataFrame:
                 self.calls += 1
-                if "t.tbraccd_amount AS amount" in sql:
-                    return pd.DataFrame({"extract_row_count": [1], "pidm": [self.calls]})
-                return pd.DataFrame({"extract_row_count": [1], "pidm": [self.calls]})
+                return pd.DataFrame({
+                    "extract_row_count": [1], "extract_partition_row_count": [1],
+                    "extract_pidm_min": [self.calls], "extract_pidm_max": [self.calls],
+                    "extract_tran_min": [1], "extract_tran_max": [1], "pidm": [self.calls],
+                })
 
         with TemporaryDirectory() as directory:
             root = Path(directory)

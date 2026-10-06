@@ -56,6 +56,10 @@ The integrated workflows are:
   source file paths** for matching transaction and account-context XLSX/CSV
   exports, or **Run SQL from PROD Insights** to extract both inputs directly
   using the configured PROD connection and existing 20-batch refund pipeline.
+  Oversized results automatically subdivide by account and, for a single
+  account's transaction history, by transaction number. Each part and the
+  recombined batch must pass completeness checks before being saved. The GUI
+  log records subdivision progress without account identifiers.
   SQL mode requires no input files and shows a production warning in the review
   dialog. Temporary extracts are removed after the run. Both options calculate
   and format the review in Python; neither approves or issues refunds, and

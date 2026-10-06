@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -54,6 +55,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
                 context_template_path=QUERY_DIRECTORY / "refund_context_extract.sql",
                 output_file=output_file,
                 client=client,
+                progress=logging.getLogger("highered_automation.gui").info,
             )
     else:
         transaction_file = Path(context.parameters["transaction_file"])

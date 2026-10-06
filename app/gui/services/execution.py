@@ -8,9 +8,12 @@ import threading
 from pathlib import Path
 
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowResult
+from data_processing.refunds.extract import RefundExtractError
 
 
 def friendly_error_message(error: Exception) -> str:
+    if isinstance(error, RefundExtractError):
+        return str(error)
     if isinstance(error, FileNotFoundError):
         return (
             "The source file could not be found. Check the selected file and "

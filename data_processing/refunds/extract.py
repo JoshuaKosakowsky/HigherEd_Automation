@@ -23,6 +23,27 @@ TEMPLATE_TOKENS = {
     "__TARGET_TERM_OVERRIDE__",
     "__CWID_FILTER__",
 }
+MAX_SUBDIVISION_DEPTH = 64
+PARTITION_COLUMNS = {
+    "extract_partition_row_count", "extract_pidm_min", "extract_pidm_max",
+    "extract_tran_min", "extract_tran_max",
+}
+
+
+class RefundExtractError(RuntimeError):
+    """A safe-to-display extraction error; no account identifiers are included."""
+
+
+class TruncatedRefundExtractError(RefundExtractError):
+    def __init__(self, label: str, location: str, expected: int, received: int) -> None:
+        self.expected = expected
+        self.received = received
+        super().__init__(
+            f"Insights truncated {label} {location}: expected {expected:,} rows "
+            f"but received {received:,}. No incomplete result was accepted. "
+            "For manual downloads, export the complete result; for SQL runs, "
+            "review the extraction log or contact the automation administrator."
+        )
 
 
 class SQLClient(Protocol):
@@ -116,16 +137,33 @@ def _write_atomic(frame: pd.DataFrame, path: Path) -> None:
     temporary.replace(path)
 
 
-def _validate_complete_result(
-    frame: pd.DataFrame,
-    label: str,
-    batch_index: int | None,
-) -> pd.DataFrame:
+def _normalized_result(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     result.columns = [
         re.sub(r"[^a-z0-9]+", "_", str(column).strip().lower()).strip("_")
         for column in result.columns
     ]
+    return result
+
+
+def _row_count(frame: pd.DataFrame, column: str) -> int:
+    if column not in frame:
+        raise ValueError(f"Insights result did not return its {column} guard.")
+    if frame.empty:
+        return 0
+    values = pd.to_numeric(frame[column], errors="coerce")
+    value = values.iloc[0]
+    if pd.isna(value) or value < 0 or value % 1 or not values.eq(value).all():
+        raise ValueError(f"Insights result returned an invalid {column} guard.")
+    return int(value)
+
+
+def _validate_complete_result(
+    frame: pd.DataFrame,
+    label: str,
+    batch_index: int | None,
+) -> pd.DataFrame:
+    result = _normalized_result(frame)
     location = (
         f"batch {batch_index + 1}"
         if batch_index is not None
@@ -134,14 +172,120 @@ def _validate_complete_result(
     if "extract_row_count" not in result.columns:
         raise ValueError(f"{label} {location} did not return its row-count guard.")
     if not result.empty:
-        expected = int(result["extract_row_count"].iloc[0])
+        expected = _row_count(result, "extract_row_count")
         if expected != len(result):
-            raise RuntimeError(
-                f"Insights truncated {label} {location}: "
-                f"expected {expected:,} rows but received {len(result):,}. "
-                "Increase --batch-count and start a fresh extraction without --resume."
-            )
+            if expected < len(result):
+                raise RefundExtractError(f"Insights returned more {label} rows than its count guard.")
+            raise TruncatedRefundExtractError(label, location, expected, len(result))
     return result.drop(columns=["extract_row_count"])
+
+
+def _render_partition_sql(sql: str, label: str, predicates: tuple[str, ...]) -> str:
+    """Partition the final rows, leaving account selection and history intact."""
+    transaction_bounds = (
+        "MIN(source.tran_number) OVER () AS extract_tran_min,\n"
+        "    MAX(source.tran_number) OVER () AS extract_tran_max,\n"
+        if label == "transactions" else ""
+    )
+    where = " AND ".join(predicates) or "TRUE"
+    order = "source.pidm, source.tran_number" if label == "transactions" else "source.pidm"
+    return (
+        "WITH refund_extract_source AS MATERIALIZED (\n"
+        + sql.rstrip().removesuffix(";")
+        + "\n)\nSELECT\n"
+        "    COUNT(*) OVER () AS extract_partition_row_count,\n"
+        "    MIN(source.pidm) OVER () AS extract_pidm_min,\n"
+        "    MAX(source.pidm) OVER () AS extract_pidm_max,\n"
+        f"    {transaction_bounds}source.*\n"
+        "FROM refund_extract_source source\n"
+        f"WHERE {where}\nORDER BY {order};"
+    )
+
+
+def _complete_partition(
+    client: SQLClient, sql: str, label: str, batch_index: int,
+    *, predicates: tuple[str, ...] = (), depth: int = 0,
+    location: str | None = None, root_count: int | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> pd.DataFrame:
+    """Bisect disjoint integer ranges until each result passes the count guard."""
+    location = location or str(batch_index + 1)
+    raw = _normalized_result(client.run_sql(_render_partition_sql(sql, label, predicates)))
+    required = PARTITION_COLUMNS if label == "transactions" else PARTITION_COLUMNS - {
+        "extract_tran_min", "extract_tran_max",
+    }
+    if not required.issubset(raw.columns):
+        raise ValueError("Insights result lacks automatic-subdivision count or range guards.")
+    expected = _row_count(raw, "extract_partition_row_count")
+    source_count = _row_count(raw, "extract_row_count")
+    if root_count is None:
+        if expected != source_count:
+            raise RefundExtractError(
+                f"Insights returned conflicting {label} row-count guards. "
+                "No incomplete batch was saved."
+            )
+        root_count = source_count
+    elif not raw.empty and source_count != root_count:
+        raise RefundExtractError(
+            f"Insights {label} population changed during automatic subdivision. "
+            "No incomplete batch was saved. Start a fresh extraction."
+        )
+    frame = raw.drop(columns=list(PARTITION_COLUMNS & set(raw.columns)))
+    frame["extract_row_count"] = raw["extract_partition_row_count"]
+    try:
+        complete = _validate_complete_result(frame, label, batch_index)
+    except TruncatedRefundExtractError:
+        if progress:
+            progress(
+                f"{label.capitalize()} batch {location} expected {expected:,} rows "
+                f"but received {len(raw):,}; subdividing."
+            )
+        if depth >= MAX_SUBDIVISION_DEPTH:
+            raise RefundExtractError(
+                f"Automatic subdivision reached its safety limit for {label} batch {location}. "
+                "No incomplete batch was saved. Contact the automation administrator."
+            ) from None
+        for column, low_name, high_name in (
+            ("pidm", "extract_pidm_min", "extract_pidm_max"),
+            ("tran_number", "extract_tran_min", "extract_tran_max"),
+        ):
+            if low_name not in raw:
+                continue
+            low, high = raw[low_name].iloc[0], raw[high_name].iloc[0]
+            if pd.isna(low) or pd.isna(high) or low % 1 or high % 1:
+                raise RefundExtractError(
+                    f"Insights returned invalid subdivision ranges for {label} batch {location}. "
+                    "No incomplete batch was saved."
+                ) from None
+            if low < high:
+                midpoint = (int(low) + int(high)) // 2
+                break
+        else:
+            raise RefundExtractError(
+                f"Insights still truncates the smallest {label} partition in batch {location}. "
+                "A single account or transaction cannot be subdivided further. "
+                "No incomplete batch was saved. Contact the automation administrator."
+            ) from None
+        parts = [
+            _complete_partition(
+                client, sql, label, batch_index,
+                predicates=(*predicates, f"source.{column} {operator} {midpoint}"),
+                depth=depth + 1, location=f"{location}.{child}", root_count=root_count,
+                progress=progress,
+            )
+            for child, operator in ((1, "<="), (2, ">"))
+        ]
+        combined = pd.concat(parts, ignore_index=True)
+        if len(combined) != expected:
+            raise RefundExtractError(
+                f"Recombined {label} batch {location} has {len(combined):,} rows; "
+                f"expected {expected:,}. No incomplete batch was saved. "
+                "Start a fresh extraction."
+            ) from None
+        return combined
+    if progress:
+        progress(f"{label.capitalize()} batch {location} complete: {len(complete):,} rows.")
+    return complete
 
 
 def _manifest_values(settings: ExtractSettings) -> dict[str, object]:
@@ -196,8 +340,10 @@ def extract_refund_data(
             else:
                 if progress:
                     progress(f"Extracting {label} batch {batch_index + 1}/{settings.batch_count}...")
-                frame = client.run_sql(render_extract_sql(template, settings, batch_index))
-                frame = _validate_complete_result(frame, label, batch_index)
+                frame = _complete_partition(
+                    client, render_extract_sql(template, settings, batch_index), label,
+                    batch_index, progress=progress,
+                )
                 _write_atomic(frame, path)
                 source = "Insights"
             frames.append(frame)
