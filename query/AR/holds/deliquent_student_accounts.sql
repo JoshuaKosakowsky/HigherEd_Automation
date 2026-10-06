@@ -1,5 +1,5 @@
 /*
-Deliquent student accounts: net balance owed without an active PP hold.
+Deliquent student accounts: net balance owed without any CO hold.
 Banner Insights (PostgreSQL-flavored SQL); read-only.
 
 Amt = all-term charges minus payments/credits, rounded to cents. Credits in
@@ -8,6 +8,10 @@ balances with due dates before today; it relies on Banner payment application.
 Missing charge balances or unpaid-charge due dates make Past Due Amt NULL.
 Student = any SGBSTDN record, including former students. No enrollment filter.
 PP is active when FROM_DATE <= today and TO_DATE > today (date-only).
+Active PP accounts are included and marked in Hold for manual Transact review;
+Insights cannot establish whether their payment arrangements have errors.
+Any CO record excludes the account from outreach because it is in collections;
+CO dates are intentionally not used, including on historical records.
 A NULL start is treated as already started. A NULL end does not meet the
 requested strict end-date condition; validate local NULL-date conventions.
 Accounts with unknown detail types or missing amounts are excluded because
@@ -99,7 +103,18 @@ SELECT
     b.amount_owed AS "Amt",
     b.past_due_amount AS "Past Due Amt",
     email.email_address AS "Preferred Email",
-    phone.phone_number AS "Preferred Phone"
+    phone.phone_number AS "Preferred Phone",
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM saturn.sprhold h
+        WHERE h.sprhold_pidm = b.pidm
+          AND UPPER(TRIM(h.sprhold_hldd_code)) = 'PP'
+          AND (
+              h.sprhold_from_date IS NULL
+              OR CAST(h.sprhold_from_date AS date) <= CURRENT_DATE
+          )
+          AND CAST(h.sprhold_to_date AS date) > CURRENT_DATE
+    ) THEN 'PP' ELSE NULL END AS "Hold"
 FROM account_balances b
 INNER JOIN saturn.spriden s
     ON s.spriden_pidm = b.pidm
@@ -113,11 +128,6 @@ WHERE b.amount_owed > 0
       SELECT 1
       FROM saturn.sprhold h
       WHERE h.sprhold_pidm = b.pidm
-        AND UPPER(TRIM(h.sprhold_hldd_code)) = 'PP'
-        AND (
-            h.sprhold_from_date IS NULL
-            OR CAST(h.sprhold_from_date AS date) <= CURRENT_DATE
-        )
-        AND CAST(h.sprhold_to_date AS date) > CURRENT_DATE
+        AND UPPER(TRIM(h.sprhold_hldd_code)) = 'CO'
   )
 ORDER BY b.amount_owed DESC, s.spriden_id;

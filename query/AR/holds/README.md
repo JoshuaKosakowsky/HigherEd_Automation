@@ -3,8 +3,15 @@
 Run `validate_hold_schema.sql` in Banner Insights first and confirm every field
 is `FOUND`, then run `deliquent_student_accounts.sql`. Both queries are read-only.
 The report returns `CWID`, `First Name`, `Last Name`, `Amt`, `Past Due Amt`,
-`Preferred Email`, and `Preferred Phone`, with the largest net balance first.
+`Preferred Email`, `Preferred Phone`, and `Hold`, with the largest net balance first.
 The filename retains the requested spelling, `deliquent`.
+
+This list supports outreach about upcoming late fees or collections. Accounts
+with any `CO` hold record are excluded because they are already in collections
+and should not receive these delinquency communications.
+Accounts with PP holds are included for manual review. Transact errors affecting
+payment arrangements cannot be determined from this Insights report, so a PP
+hold alone does not establish whether a student should receive a message.
 
 ## Population and balance
 
@@ -58,17 +65,26 @@ student; ranking contacts before joining preserves one row per account.
 
 Oldest due date is omitted because the existing aging reports cover aging.
 
-## PP hold dates
+## CO exclusion and PP review indicator
+
+Any `SPRHOLD` record with hold code `CO` excludes the account, regardless of
+start/end dates, including expired, future-dated, or NULL-dated records. This
+implements the collections exclusion without inferring eligibility from CO
+dates. Hold codes are trimmed and matched without case sensitivity.
 
 A PP hold is active when its start date is today or earlier (or NULL) and its
 end date is **strictly later than today**, using the database's `CURRENT_DATE`.
-Dates are cast to `date`, ignoring time of day. Multiple or historical holds
-cannot duplicate students because the exclusion uses `NOT EXISTS`.
+Dates are cast to `date`, ignoring time of day. `Hold` displays `PP` when at
+least one active PP record exists; otherwise it is NULL (blank). Other hold
+codes are not displayed. PP accounts remain in the output for manual review
+against Transact before deciding whether outreach is appropriate. Multiple
+holds cannot duplicate students because the PP indicator uses `EXISTS` and
+the CO exclusion uses `NOT EXISTS`. An account with both PP and CO is excluded.
 
 A hold ending today is not active under this requested rule. A future-start PP
 hold is also not active, even when its end date is later. A NULL end date does
 not satisfy `> CURRENT_DATE`; confirm whether local Banner practice treats NULL
-as indefinite before using the result to place holds.
+as indefinite before relying on the PP indicator.
 
 ## Operational review and useful additions
 

@@ -93,7 +93,7 @@ class DeliquentStudentAccountsTests(unittest.TestCase):
         self.assertEqual(
             [column[0] for column in cursor.description],
             ["CWID", "First Name", "Last Name", "Amt", "Past Due Amt",
-             "Preferred Email", "Preferred Phone"],
+             "Preferred Email", "Preferred Phone", "Hold"],
         )
         return {row[0]: row[3] for row in cursor.fetchall()}
 
@@ -117,18 +117,41 @@ class DeliquentStudentAccountsTests(unittest.TestCase):
         self.add_hold(6, "2099-10-01", None)  # no qualifying end
         self.add_hold(7, "2099-10-01", "2099-12-31", "ED")
         self.add_hold(8, "2099-10-02 14:00:00", "2099-12-31", " pp ")
-        self.assertEqual(
-            self.results(), {f"TEST-{pidm}": 100 for pidm in (2, 3, 4, 6, 7, 9)}
-        )
+        self.assertEqual(self.results(), {f"TEST-{pidm}": 100 for pidm in range(1, 10)})
+        holds = {row[0]: row[7] for row in self.db.execute(self.query)}
+        self.assertEqual(holds, {
+            f"TEST-{pidm}": 'PP' if pidm in (1, 5, 8) else None
+            for pidm in range(1, 10)
+        })
 
-    def test_any_active_pp_excludes_account_without_multiplying_balances(self) -> None:
+    def test_multiple_pp_holds_mark_account_without_multiplying_balances(self) -> None:
         self.add_account(1, [("CHARGE", 100)])
         self.add_account(2, [("CHARGE", 100)])
         for _ in range(2):
             self.add_hold(1, "2099-01-01", "2099-01-02")
             self.add_hold(2, "2099-01-01", "2099-01-02")
         self.add_hold(2, "2099-01-01", "2099-12-31")
-        self.assertEqual(self.results(), {"TEST-1": 100})
+        self.add_hold(2, "2099-01-01", "2099-12-31")
+        rows = self.db.execute(self.query).fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([(row[0], row[3], row[7]) for row in rows], [
+            ("TEST-1", 100, None), ("TEST-2", 100, 'PP'),
+        ])
+
+    def test_collections_holds_exclude_accounts_regardless_of_dates(self) -> None:
+        for pidm in range(1, 8):
+            self.add_account(pidm, [("CHARGE", 100)])
+        self.add_hold(1, "2099-10-01", "2099-12-31", "CO")
+        self.add_hold(2, "2099-01-01", "2099-01-02", "CO")  # expired
+        self.add_hold(3, "2099-10-03", "2099-12-31", "CO")  # future start
+        self.add_hold(4, None, None, " co ")
+        self.add_hold(5, "2099-10-01", "2099-10-02", "CO")  # ends today
+        self.add_hold(6, "2099-01-01", "2099-01-02", "PP")
+        self.add_hold(6, "2099-01-01", "2099-12-31", "PP")
+        self.add_hold(6, "2099-01-01", "2099-01-02", "CO")
+        self.add_hold(6, "2099-10-01", "2099-12-31", "CO")
+        # A CO record belonging to another account must not exclude pidm 7.
+        self.assertEqual(self.results(), {"TEST-7": 100})
 
     def test_student_history_and_current_identity(self) -> None:
         self.add_account(1, [("CHARGE", 100)])
@@ -139,7 +162,7 @@ class DeliquentStudentAccountsTests(unittest.TestCase):
         )
         rows = self.db.execute(self.query).fetchall()
         self.assertEqual(
-            rows, [("TEST-1", "Synthetic", "Student", 100, 100, None, None)]
+            rows, [("TEST-1", "Synthetic", "Student", 100, 100, None, None, None)]
         )
 
     def test_incomplete_balances_are_excluded(self) -> None:
@@ -214,7 +237,7 @@ class DeliquentStudentAccountsTests(unittest.TestCase):
         rows = self.db.execute(self.query).fetchall()
         self.assertEqual(len(rows), 3)
         self.assertEqual([row[3] for row in rows], [100, 100, 100])
-        self.assertEqual([row[5:] for row in rows], [
+        self.assertEqual([row[5:7] for row in rows], [
             ('school@example.invalid', '(720) 5550102 x123'),
             ('fallback@example.invalid', '5550105'), (None, None),
         ])
