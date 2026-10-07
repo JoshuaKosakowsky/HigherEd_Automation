@@ -59,8 +59,11 @@ students with multiple curricula.
    year. Missing references or unexpected transaction types are flagged;
    duplicated application IDs fail. Repeated payment/charge pairs with distinct
    IDs remain separate. Neither `DISTINCT` nor grouping hides reapplications.
-   Confirm which application rows currently count before summing them. The
-   refund allocation workflow is not reused as a Canadian tax rule.
+   The review calculation validates cancelling reverse-direction `Y` pairs,
+   separates charge credits/payment reversals, and reconciles every stored
+   transaction balance before counting retained P-to-C allocations. Unsupported
+   flows/flags withhold amounts. The refund allocation workflow is not reused
+   as a Canadian tax rule.
 5. Apply the owner's fee policy and reconcile a paid retained USD amount before applying
    the exchange rate. An account balance of zero does not prove every charge
    was paid by eligible funding.
@@ -94,7 +97,7 @@ there is no daily, current-year or other-year fallback. The requested tax year's
 rate is recorded for review; payments in another year require review of the
 appropriate payment-year conversion before use.
 
-Sources (verified October 4, 2026):
+Sources (verified October 6, 2026):
 
 - [CRA instructions for educational institutions outside Canada](https://www.canada.ca/en/revenue-agency/services/tax/individuals/topics/about-your-tax-return/tax-return/completing-a-tax-return/deductions-credits-expenses/line-32300-your-tuition-education-textbook-amounts/recognized-educational-institutions-outside-canada/info-educational-institutions-outside-canada.html), sections “Reporting period” and “Eligible tuition fee.”
 - [Bank of Canada annual average rates](https://www.bankofcanada.ca/rates/exchange/annual-average-exchange-rates/), values stated as foreign currency converted into CAD.

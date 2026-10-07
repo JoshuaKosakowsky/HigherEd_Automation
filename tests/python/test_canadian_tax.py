@@ -218,7 +218,7 @@ class CanadianTaxQueryExecutionTests(unittest.TestCase):
                                           (3, "202510", "SCH1", 1030, "2026-01-01"),
                                           (4, "202480", "TU01", -50, "2024-08-01")]:
             self.insert("taismgr", "tbraccd", pidm=1, tran_number=n, term_code=term,
-                        detail_code=code, amount=amount, effective_date=date)
+                        detail_code=code, amount=amount, balance=0, effective_date=date)
         for key, charge, amount, reapplied in [(10, 1, 1000, "N"), (11, 2, 30, "N"), (12, 1, -100, "Y")]:
             self.insert("taismgr", "tbrappl", pidm=1, surrogate_id=key, version=1,
                         pay_tran_number=3, chg_tran_number=charge, amount=amount,

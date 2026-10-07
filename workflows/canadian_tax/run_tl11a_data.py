@@ -1,25 +1,19 @@
-"""Prepare one student's TL11A source data; no final certificate calculation."""
+"""Prepare one student's reconciled TL11A review; no certificate is issued."""
 
 from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
-import json
 from pathlib import Path
-import shutil
-
-import pandas as pd
 from dotenv import load_dotenv
 
 from app.gui import APP_VERSION
 from data_processing.canadian_tax.exchange_rates import fetch_annual_rate
 from data_processing.canadian_tax.preparation import (
     DEFAULT_RULES, QUERY_DIRECTORY, REPOSITORY_ROOT, load_rules,
-    prepare_enrollment, prepare_payment_applications, prepare_transactions,
-    render_query, summarize_codes, validate_extract, validate_inputs,
+    validate_inputs,
 )
-from shared.insights.client import InsightsClient
+from data_processing.canadian_tax.pipeline import extract_data, prepare_review, read_source_package, review_metadata, write_package
 from shared.insights.config import load_department_profiles
 from shared.insights.session_auth import build_authenticated_client
 
@@ -32,45 +26,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--schema-only", action="store_true", help="Inspect metadata without querying students.")
     parser.add_argument("--output-dir", type=Path, help="New directory; existing directories are never replaced.")
     parser.add_argument("--rules-file", type=Path, default=DEFAULT_RULES)
+    parser.add_argument("--source-package", type=Path, help="Rebuild a review from a complete downloaded ZIP without Insights sign-in.")
     return parser
-
-
-def extract_data(client: InsightsClient, cwid: str, tax_year: int) -> dict[str, pd.DataFrame]:
-    validate_inputs(cwid, tax_year)
-    frames = {}
-    for name in ("identity", "transactions", "enrollment", "programs", "payment_applications"):
-        frame = client.run_sql(render_query(name, cwid, tax_year))
-        validate_extract(frame, tax_year)
-        if name == "identity" and len(frame) != 1:
-            raise ValueError("CWID did not resolve to exactly one current identity.")
-        if not frame.empty and not frame["pidm"].eq(frames.get("identity", frame).iloc[0]["pidm"]).all():
-            raise ValueError("Extract account does not match the selected identity.")
-        frames[name] = frame
-    if frames["enrollment"].duplicated(["pidm", "term_code", "crn"]).any():
-        raise ValueError("Registration rows are duplicated; reconcile section/part-of-term joins.")
-    return frames
-
-
-def write_package(output: Path, frames: dict[str, pd.DataFrame], manifest: dict) -> None:
-    """Create exclusively and remove this run's partial output on a write failure."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.mkdir()  # Must not replace another student's or an earlier run's package.
-    try:
-        for name, frame in frames.items():
-            frame.to_csv(output / f"{name}.csv", index=False)
-        (output / "manifest.json").write_text(
-            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-        )
-    except Exception:
-        # Intentional cleanup boundary; delete only the directory created above.
-        shutil.rmtree(output)
-        raise
 
 
 def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args()
-    if not arguments.schema_only:
+    if arguments.source_package and (arguments.schema_only or arguments.cwid or arguments.tax_year is not None):
+        parser.error("--source-package reads its account/year from the ZIP; do not combine it with student/schema arguments.")
+    if not arguments.schema_only and not arguments.source_package:
         if not arguments.cwid or arguments.tax_year is None:
             parser.error("--cwid and --tax-year are required unless --schema-only is used.")
         validate_inputs(arguments.cwid, arguments.tax_year)
@@ -80,6 +45,14 @@ def main() -> int:
     if output.exists():
         raise ValueError("Output directory already exists; choose a new directory.")
     rules = load_rules(arguments.rules_file)
+    if arguments.source_package:
+        frames, manifest = read_source_package(arguments.source_package)
+        manifest["source_app_version"] = manifest.get("app_version")
+        manifest["app_version"] = APP_VERSION
+        review = prepare_review(frames, manifest, rules)
+        write_package(output, frames, manifest, review)
+        print(f"TL11A review saved: {output / 'tl11a_review.xlsx'}")
+        return 0
     load_dotenv(REPOSITORY_ROOT / ".env")
     profile = load_department_profiles()[arguments.environment]
     if profile is None:
@@ -105,50 +78,17 @@ def main() -> int:
         "schema_missing_columns": int(missing),
         "status": "schema_inventory" if arguments.schema_only else "data_preparation_only",
     }
+    review = None
     if not arguments.schema_only:
-        frames["transactions_prepared"] = prepare_transactions(frames["transactions"], rules)
-        frames["payment_applications_prepared"] = prepare_payment_applications(
-            frames["payment_applications"], frames["transactions_prepared"],
-        )
-        frames["enrollment_prepared"] = prepare_enrollment(frames["enrollment"])
-        frames["detail_code_review"] = summarize_codes(frames["transactions_prepared"])
         print("Fetching the published Bank of Canada annual USD/CAD rate.")
         rate, response = fetch_annual_rate(arguments.tax_year)
-        manifest.update(
-            tax_year=arguments.tax_year, exchange_rate=rate,
-            detail_code_rules=rules,
-            eligible_paid_usd=None, eligible_paid_cad=None,
-            row_counts={name: len(frame) for name, frame in frames.items()},
-            query_hashes={name: hashlib.sha256(render_query(name, arguments.cwid, arguments.tax_year).encode()).hexdigest()
-                          for name in ("identity", "transactions", "enrollment", "programs", "payment_applications")},
-            enrollment_policy={
-                "minimum_consecutive_days": 21,
-                "duration_convention": "Scheduled start and end dates are inclusive.",
-                "summer_policy": "Report owner confirmed Summer counts; no credit-hour full-time threshold is inferred from course duration.",
-            },
-            review_required=[
-                "Fee exclusions are FEIT/CFEE only under the report owner's policy; verify application treatment before calculating retained tuition paid.",
-                "Reconcile payment application signs, direct-payment/reapplication flags, scholarships, refunds and reversals before summing applications.",
-                "Reconcile program and session dates to SGASTDN/SFARSTS; confirm full-time attendance and qualifying courses.",
-                "Review cross-year payments and the appropriate rate year; no transaction posting date is assumed to be payment date.",
-                "Sequential Insights extracts reflect warehouse data, not a guaranteed atomic or live Banner snapshot.",
-            ],
-            bank_of_canada_response=response,
-        )
-        if frames["enrollment"].empty:
-            manifest["review_required"].append("No registration rows returned for the requested year's candidate terms.")
-        if frames["programs"].empty or frames["programs"].duplicated(["pidm", "term_code"]).any():
-            manifest["review_required"].append("Program records are missing or tied at the latest effective term.")
-        if frames["payment_applications"].empty:
-            manifest["review_required"].append("No payment application records returned; do not infer paid tuition from zero balances.")
-        elif frames["payment_applications_prepared"].application_review_status.ne("linked").any():
-            manifest["review_required"].append("Some payment applications have missing transaction links or unexpected charge/payment types.")
-        if frames["enrollment_prepared"].course_duration_status.isin(["review_dates", "below_minimum", "review_enrollment_status"]).any():
-            manifest["review_required"].append("Some courses have unverified dates/enrollment or are shorter than three weeks.")
-    write_package(output, frames, manifest)
+        manifest.update(review_metadata(arguments.cwid, arguments.tax_year, arguments.environment, APP_VERSION, rate, response))
+        review = prepare_review(frames, manifest, rules)
+    write_package(output, frames, manifest, review)
     print(f"Data package saved. Required schema columns missing: {missing}.")
     if not arguments.schema_only:
-        print(f"Annual exchange rate status: {manifest['exchange_rate']['status']}. Tuition paid remains pending review.")
+        print(f"Annual exchange rate status: {manifest['exchange_rate']['status']}. Amount status: {manifest['status']}.")
+        print(f"Review workbook: {output / 'tl11a_review.xlsx'}")
     print(f"Output directory: {output}")
     return 0
 

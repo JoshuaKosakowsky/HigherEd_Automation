@@ -12,7 +12,8 @@ from data_processing.population_testing.config import (
     DEFAULT_STAFF_NAMES,
 )
 
-from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition
+from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode
+from app.gui.services.canadian_tax import run_canadian_tax
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
 from app.gui.services.report_watcher import run_setup_report_watcher
@@ -25,6 +26,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CURRENT_TERM = get_banner_term()
 LAST_MONTH = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
+    WorkflowDefinition(
+        workflow_id="canadian_tax", name="Canadian TL11A Review",
+        description="Reconciles tuition paid from Insights, includes scholarships, checks course dates and converts USD to CAD using the published annual rate. Saves a review workbook and audit data.",
+        category="Accounts Receivable", runner=run_canadian_tax,
+        administrator_only=True, cancellable=True,
+        supported_modes=(WorkflowMode.TEST, WorkflowMode.PRODUCTION),
+        production_warning="This reads one student's account and enrollment from PROD Insights and saves a review. No Banner records are changed and no certificate is issued.",
+        parameters=(
+            ParameterDefinition(key="cwid", label="Student CWID", kind=ParameterKind.TEXT,
+                                help_text="Enter the student's CWID. It is not included in progress messages."),
+            ParameterDefinition(key="tax_year", label="Tax year", kind=ParameterKind.TEXT,
+                                default=str(date.today().year - 1), help_text="Calendar year of the courses, for example 2025."),
+            ParameterDefinition(key="output_directory", label="Output location", kind=ParameterKind.TEXT,
+                                default=PROJECT_ROOT / "data" / "canadian_tax",
+                                help_text="Creates a new timestamped subfolder on each run with tl11a_review.xlsx, source CSVs and manifest.json."),
+        ),
+    ),
     WorkflowDefinition(
         workflow_id="population_testing",
         name="Student Testing Population",

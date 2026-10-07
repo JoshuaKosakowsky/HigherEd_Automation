@@ -1,84 +1,105 @@
-# TL11A source-data preparation
+# Canadian TL11A review
 
-This command-line workflow prepares data for one student's Canadian tuition
-certificate using existing department Insights authentication. TEST is the
-default. PROD must be selected explicitly and used only with authorized access.
-No PDF is filled, no Banner data is changed, and no final tuition-paid amount
-is calculated in this step. The workflow is not yet in the GUI query picker.
+In the GUI, sign in as an Administrator and open **Canadian TL11A Review**.
+Enter the student's CWID, calendar tax year, and output location. Each run creates
+a new timestamped subfolder, so the same location can be reused for future students.
+TEST is the default; select PROD explicitly when authorized to read production
+records. Complete the existing Chrome/Insights sign-in if prompted. The GUI
+restricts this workflow to Administrators, including when staff policies
+explicitly grant its workflow ID. The runner verifies administrator access too.
 
-First inspect metadata without querying a student:
+Each run saves `tl11a_review.xlsx`, raw/prepared CSVs and `manifest.json` together.
+Open Summary for proposed paid USD/CAD amounts, Sessions for readable Banner
+term labels, dates, credits and program codes, and Checks for unresolved items.
+Confirm full-time attendance and a qualifying degree/course in the editable
+confirmation columns on Sessions before certifying any form. These cells are
+reviewer notes; they do not recalculate or certify the saved financial amounts.
+No PDF is filled and no Banner data is changed. Cancellation is checked between
+reads and before publication; saving the complete package is a protected step.
+
+## Terminal use on Windows
+
+From the repository root with its configured environment, first inspect schema
+metadata without querying a student:
 
 ```powershell
 .\.venv\Scripts\python.exe -m workflows.canadian_tax.run_tl11a_data --schema-only
 ```
 
-Review `schema.csv` for `MISSING` rows and
-`payment_application_columns.csv` for available `TBRAPPL` fields. Resolve schema
-differences before trying a student extract.
-
-Then supply the requested CWID and year. `SYNTHETIC001` below is a placeholder:
+Review `schema.csv` for `MISSING` fields and `payment_application_columns.csv`.
+Then run a student review; `SYNTHETIC001` is a placeholder:
 
 ```powershell
 .\.venv\Scripts\python.exe -m workflows.canadian_tax.run_tl11a_data --cwid SYNTHETIC001 --tax-year 2025
 ```
 
-On macOS, use `python3 -m workflows.canadian_tax.run_tl11a_data` with the same
-arguments from the repository root and your configured Python environment.
-The same dedicated Chrome/SSO flow and cached department session are reused.
-For PROD, add `--environment PROD` explicitly. Do not record real CWIDs in
-shared terminal transcripts or saved commands.
+For PROD add `--environment PROD`. On macOS use `python3 -m` with the same module
+and arguments. Do not put real CWIDs in shared transcripts or saved examples.
+The CLI reuses department Insights authentication and defaults to TEST. GUI
+administrator policy applies to the GUI runner; CLI access is controlled by the
+existing authorized workstation and Insights credentials.
 
-Outputs go to a new timestamped directory under ignored `data/canadian_tax/`.
-Use `--output-dir` to select a new directory in another approved storage
-location. Existing directories are never overwritten. A failed write removes
-only the new partial package created by this run.
+To rebuild a review from a previously downloaded complete source ZIP, without
+connecting to Insights or refreshing its captured exchange rate:
 
-The package contains raw identity, transactions, enrollment, programs and
-payment applications CSVs; prepared transactions with eligibility reasons;
-prepared applications linked to their payment and charge transactions;
-prepared enrollment with course-duration checks; a detail-code review grouped
-by term/code; and the schema/payment-application inventories. Raw financial
-amounts and signs are preserved. Prepared transactions add labels without
-removing excluded fees. The code review summarizes **all account history**,
-not just the requested year. `year_term_candidate` in the transaction files
-identifies the requested year's broad candidate scope.
+```powershell
+.\.venv\Scripts\python.exe -m workflows.canadian_tax.run_tl11a_data --source-package "C:\approved-storage\student-source.zip" --output-dir "C:\approved-storage\new-review"
+```
 
-The configured fee policy excludes FEIT/CFEE and retains other charges. This
-implements the report owner's direction. Payment applications preserve signed
-amounts and direct-payment/reapplication flags. A `linked` application means
-both transactions were found with expected payment/charge types; it is not
-proof that the row should enter a final tuition-paid total. Missing links and
-unexpected types are identified in `application_review_status`.
+The account/year and environment come from the package. Completeness, account,
+schema, registration and transaction keys are validated. Old prepared CSVs are
+ignored and rebuilt from raw files. The current configured fee policy is used
+and its snapshot recorded in the new manifest. Source application version and
+original extraction/rate timestamps remain in the audit record.
 
-`enrollment_prepared.csv` includes `scheduled_duration_days` and
-`course_duration_status`. The minimum is 21 consecutive days, counting start
-and end dates inclusively. Short courses, dropped/non-counting registrations,
-and missing/conflicting dates remain visible. Summer is included in the
-duration check, consistent with the report owner's confirmation. Duration does
-not independently prove full-time attendance.
+## Calculation and review rules
 
-Rerun the same CWID/year command after updating your work copy. The next
-package will include the actual application records; the prior package
-contains only their column inventory. Return the new package for reconciliation
-of application signs and reapplication behavior before computing paid totals.
+- Exclude FEIT/CFEE only; retain other charge codes under the report owner's
+  operational policy. This is not an independent CRA determination of each fee.
+- Count positive payment-to-positive-charge allocations to retained charges
+  for the requested year's sessions. Scholarships stay in the payment funding.
+  Unused payments and unpaid charges are not counted as tuition paid.
+- Reapplication `Y` records are omitted only after validating equal
+  opposite-direction pairs. Negative charge credits and payment reversals
+  reconcile separately; they do not become additional tuition paid.
+- Reconcile **every full-history transaction**: amount minus stored balance
+  must equal incoming minus outgoing applications for charges, or outgoing
+  minus incoming for payments. Missing links, unsupported signs/flags, unmatched
+  reapplications or mismatched balances withhold USD/CAD. An older-history
+  discrepancy also requires review rather than assuming the current year is safe.
+- Courses must be enrolled and last at least 21 inclusive scheduled days.
+  Summer is included. Missing/conflicting dates, short/mixed course eligibility,
+  cross-year sessions or missing/tied programs withhold totals rather than
+  guessing tuition proration. Full-time attendance and degree qualification
+  still require administrator confirmation; credit hours alone are not proof.
+- Use the Bank of Canada's published `FXAUSDCAD` **annual average**, in CAD per
+  USD, verified against the captured annual observation. Multiply the final USD
+  total and round CAD to cents, half up. The workbook records the method, source
+  URL, CRA guidance URL, rate year and retrieval time.
+- Payment effective dates in another year or missing/invalid dates keep USD
+  allocations visible but withhold CAD pending appropriate payment-year rate
+  review. Payment activity/feed dates are not substituted as payment dates.
+  Missing/unpublished/unreachable exchange rates also withhold CAD without a
+  fallback. The annual-average method follows CRA guidance for fees paid
+  throughout the calendar year.
 
-`manifest.json` records the application version, selected environment/year,
-UTC extraction time, row counts, query hashes, fee-rule snapshot, course-duration
-policy, outstanding
-reviews, rate/year/direction, CRA and Bank of Canada source links, retrieval
-time, and the fetched public rate response. `eligible_paid_usd` and
-`eligible_paid_cad` remain null until payment allocation and eligibility are
-established. Do not treat a net charge/code amount as tuition paid.
+Financial results are a saved review snapshot, not a live Excel financial
+model. Re-run the workflow after correcting source records or configuration.
+Sequential Insights reads reflect warehouse data and are not guaranteed to
+represent one atomic/live Banner snapshot.
 
-The selected annual rate is a conversion input for later reviewed paid USD
-amounts. A missing rate does not prevent retaining the Banner data package;
-the manifest explicitly reports it as `not_published` or `unavailable`.
-Review payment years before using a tax-year rate for advance or late payments.
+## Audit and storage
 
-The original teaching workbook is unchanged. No student data or workbook from
-Downloads is copied into tracked code or tests. Generated packages contain
-student information and belong in approved institutional storage; the default
-directory is excluded from Git, including JSON manifests.
+The default output is under ignored `data/canadian_tax/`. `--output-dir` selects
+a new approved location. Existing directories/workbooks are never overwritten.
+A failed write removes only this run's partial directory. Source CSVs preserve
+signs, flags, full history and excluded fees. The manifest includes environment,
+year, row counts, query hashes for live reads, application version, policy,
+amount status, outstanding reviews and the public exchange-rate response.
+
+Generated packages contain student information. Keep them in approved
+institutional storage and use redacted or synthetic examples when reporting
+GitHub issues. No student data from Downloads is put into tracked code or tests.
 
 See [query sources and business rules](../../query/AR/canadian_tax/README.md)
-for the mapping, initial fee-rule questions and reconciliation steps.
+for Banner mappings and official sources.

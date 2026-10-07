@@ -83,12 +83,16 @@ step requires confirmation that TSPLOAD applied successfully in Banner. File inp
 a typed or pasted path, the Browse button, or a file dropped from Explorer.
 Existing command-line workflows remain available.
 
-Canadian TL11A [source-data preparation](workflows/canadian_tax/README.md) is
-available by command line for one CWID and tax year. It extracts account,
-payment-application, enrollment and program data, checks course durations,
-and records fee rules and the published
-annual USD/CAD rate. Payment allocation and final certificate preparation
-remain review steps; this workflow does not fill a PDF.
+Administrators can run **Canadian TL11A Review** with a CWID and calendar tax
+year in the GUI. It defaults to TEST, reconciles paid tuition allocations,
+includes scholarships, excludes FEIT/CFEE, and checks course durations including
+Summer. A new output directory contains a review workbook, complete source CSVs
+and an audit manifest with the published annual USD/CAD rate. Unresolved
+allocations or course dates withhold amounts; cross-year payments withhold CAD.
+Attendance/degree confirmation and certificate preparation remain administrator
+review steps; this workflow does not fill a PDF. The
+[command-line workflow](workflows/canadian_tax/README.md) also supports rebuilding
+reviews from downloaded source ZIPs without Insights sign-in.
 
 ### Optional PowerShell shortcuts
 
