@@ -253,6 +253,25 @@ function Get-ReportSourceDate {
 }
 
 
+function Get-ReportDefaultDate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [datetime]$SourceDate,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Report
+    )
+
+    # Lockbox downloads report the previous calendar day's deposits.
+    if ([string]$Report.Operation -eq "TransformJpmlb") {
+        return $SourceDate.Date.AddDays(-1)
+    }
+
+    return $SourceDate.Date
+}
+
+
 function Get-ReportDestinationProposal {
     [CmdletBinding()]
     param(
@@ -620,7 +639,7 @@ function Show-ReportFilingConfirmation {
 
     $datePicker = New-Object System.Windows.Forms.DateTimePicker
     $datePicker.Format = [System.Windows.Forms.DateTimePickerFormat]::Long
-    $datePicker.Value = $ReportDate.Date
+    $datePicker.Value = Get-ReportDefaultDate -SourceDate $ReportDate -Report $Report
     $datePicker.Location = New-Object System.Drawing.Point(30, 198)
     $datePicker.Size = New-Object System.Drawing.Size(380, 30)
     $form.Controls.Add($datePicker)
@@ -1409,6 +1428,7 @@ function Start-ReportFilingWatcher {
 
 Export-ModuleMember -Function @(
     "Get-ReportFilingConfiguration",
+    "Get-ReportDefaultDate",
     "Get-ReportDestinationProposal",
     "Get-ReportSourceDate",
     "Get-WindowsDownloadsDirectory",

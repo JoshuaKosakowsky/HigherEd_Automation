@@ -129,6 +129,33 @@ try {
         -Actual $jpmlbSourceDate `
         -Case "JPMLB source date"
 
+    # Only the confirmation default is backdated; source parsing stays unchanged.
+    foreach ($dateCase in @(
+        @{ Source = "2026-07-31"; Expected = "2026-07-30" },
+        @{ Source = "2026-07-01"; Expected = "2026-06-30" },
+        @{ Source = "2027-01-01"; Expected = "2026-12-31" },
+        @{ Source = "2024-03-01"; Expected = "2024-02-29" },
+        @{ Source = "2026-08-03"; Expected = "2026-08-02" }
+    )) {
+        $downloadDate = [datetime]$dateCase.Source
+        Assert-Equal `
+            -Expected ([datetime]$dateCase.Expected) `
+            -Actual (Get-ReportDefaultDate -SourceDate $downloadDate.AddHours(14) -Report $jpmlbReport) `
+            -Case "JPMLB previous calendar day for $($dateCase.Source)"
+        Assert-Equal `
+            -Expected $downloadDate `
+            -Actual (Get-ReportDefaultDate -SourceDate $downloadDate.AddHours(14) -Report $report) `
+            -Case "RDC retains download day for $($dateCase.Source)"
+    }
+
+    $backdatedProposal = Get-ReportDestinationProposal `
+        -ReportDate (Get-ReportDefaultDate -SourceDate ([datetime]"2026-07-01") -Report $jpmlbReport) `
+        -Report $jpmlbReport `
+        -DestinationConfiguration $configuration.Destination
+    Assert-Equal -Expected "JPMLB 06-30-2026.xlsx" -Actual $backdatedProposal.FileName -Case "Backdated JPMLB filename"
+    Assert-Equal -Expected 2026 -Actual $backdatedProposal.FiscalYear -Case "Backdated JPMLB fiscal year"
+    Assert-Equal -Expected "P12" -Actual $backdatedProposal.Period -Case "Backdated JPMLB period"
+
     foreach ($invalidJpmlbName in @(
         "Transaction_Results_02_29_2025_12_00_00.csv",
         "Transaction_Results_07_31_2026_24_00_00.csv",

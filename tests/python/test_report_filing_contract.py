@@ -52,8 +52,11 @@ class ReportFilingPowerShellContractTests(unittest.TestCase):
         self.assertIn("workflows\\jpmlb\\run_jpmlb.py", self.scheduler_setup)
         self.assertIn(".venv\\Scripts\\python.exe", self.scheduler_setup)
 
-    def test_confirmation_uses_source_date_and_per_file_bank_choice(self) -> None:
-        self.assertIn("$DATEPICKER.VALUE = $REPORTDATE.DATE", self.normalized_module)
+    def test_confirmation_uses_report_default_date_and_per_file_bank_choice(self) -> None:
+        self.assertIn(
+            "$DATEPICKER.VALUE = GET-REPORTDEFAULTDATE -SOURCEDATE $REPORTDATE -REPORT $REPORT",
+            self.normalized_module,
+        )
         self.assertIn("$INITIALSBOX.TEXT = $USERSETTINGS.INITIALS", self.normalized_module)
         self.assertIn("$BANKBOX.ADD_CHECKEDCHANGED($UPDATEPREVIEW)", self.normalized_module)
         self.assertEqual(self.normalized_module.count("-BANK2723:$BANKBOX.CHECKED"), 2)

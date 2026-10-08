@@ -35,8 +35,10 @@ The confirmed report date determines both folders.
 The watcher recognizes `Transaction_Results_MM_DD_YYYY_HH_MM_SS.csv` with a
 valid date and time. Browser duplicate names such as `... (1).csv` are ignored.
 
-The confirmation starts with the date from the downloaded filename. Correct
-the date when the business date differs from the download date. The date updates
+The confirmation defaults to one calendar day before the date in the downloaded
+filename (yesterday for today's download). Weekends and holidays are not skipped.
+Correct the date if needed before confirming. RDC continues to default to the
+date in its downloaded filename. The selected date updates
 the fiscal year, period, output filename, and destination shown on screen.
 
 After confirmation, the workflow reproduces the JPMLB macro's column changes,
