@@ -94,6 +94,24 @@ review steps; this workflow does not fill a PDF. The
 [command-line workflow](workflows/canadian_tax/README.md) also supports rebuilding
 reviews from downloaded source ZIPs without Insights sign-in.
 
+### App updates
+
+Choose **App updates** in the sidebar, then **Check for updates**. If an update
+is available, close other automation tools and choose **Install update**. After
+installation, close the app and reopen it using the desktop shortcut. If the
+screen says setup is required, ask your administrator to run `setup.ps1` before
+reopening. The updater downloads code; it does not install Python packages or
+refresh scheduled tasks and shortcuts.
+
+This feature requires Git on PATH and a separate Git clone for each workstation,
+with a tracking branch and repository authentication already configured by the
+administrator. A downloaded ZIP or copied folder without Git metadata cannot
+update this way. Do not share one live Git working directory between employees
+or concurrently update a checkout through OneDrive. Normal staff updates do not
+require terminal commands; initial Git provisioning and exceptions remain
+administrator tasks. See [GUI update details](app/gui/README.md#app-updates) for
+the source configuration and safeguards.
+
 ### Optional PowerShell shortcuts
 
 The shortcuts are the normal way to run the automation tools on computers that

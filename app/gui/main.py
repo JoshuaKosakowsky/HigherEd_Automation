@@ -20,6 +20,8 @@ from app.gui.pages.access_management import AccessManagementPage
 from app.gui.pages.home import HomePage
 from app.gui.pages.connections import ConnectionsPage
 from app.gui.pages.workflow_detail import WorkflowDetailPage
+from app.gui.pages.updates import UpdatesPage
+from app.gui.services.updates import RepositoryUpdater
 from app.gui.services.access import (
     AccessConfiguration, AccessConfigurationError, create_shared_access_configuration,
     filter_workflows_for_view, get_current_login, load_access_configuration,
@@ -57,6 +59,7 @@ class AutomationApplication(QMainWindow):
         self.access_error = None
         self.current_page = None
         self._busy = False
+        self._restart_required = False
         self._close_after_cancel = False
         self.setWindowTitle(APP_NAME)
         self.resize(1180, 820)
@@ -104,6 +107,8 @@ class AutomationApplication(QMainWindow):
         if user_login_override:
             navigation.addWidget(label("LOCAL REVIEW", wrap=False))
         navigation.addWidget(button("Open logs", self._open_logs, "nav"))
+        self.updates_button = button("App updates", self.show_updates, "nav")
+        navigation.addWidget(self.updates_button)
         navigation.addWidget(button("About this app", self._about, "nav"))
         navigation.addWidget(label(f"Version {APP_VERSION}", wrap=False))
         row.addWidget(self.sidebar)
@@ -172,7 +177,7 @@ class AutomationApplication(QMainWindow):
             previous.deleteLater()
 
     def show_home(self, checked: bool = False, *, reload: bool = True) -> None:
-        if self._busy or self.executor.is_running:
+        if self._busy or self.executor.is_running or self._restart_required:
             return
         if reload:
             self._reload_access()
@@ -186,7 +191,7 @@ class AutomationApplication(QMainWindow):
         ))
 
     def show_access_management(self) -> None:
-        if self._busy or self.executor.is_running:
+        if self._busy or self.executor.is_running or self._restart_required:
             return
         self._reload_access()
         if not self.access_configuration or not self.access_configuration.is_administrator(self.user_login):
@@ -207,7 +212,7 @@ class AutomationApplication(QMainWindow):
                     self.access_configuration.is_administrator(self.user_login))
 
     def show_connections(self) -> None:
-        if self._busy or self.executor.is_running:
+        if self._busy or self.executor.is_running or self._restart_required:
             return
         if not self._authorize_connections():
             self.show_home(reload=False)
@@ -228,7 +233,7 @@ class AutomationApplication(QMainWindow):
         return True
 
     def show_workflow(self, definition: WorkflowDefinition) -> None:
-        if self._busy or self.executor.is_running or not self._authorize_workflow(definition):
+        if self._busy or self.executor.is_running or self._restart_required or not self._authorize_workflow(definition):
             return
         page = WorkflowDetailPage(
             self.content, definition, self.executor, self.show_home,
@@ -239,13 +244,27 @@ class AutomationApplication(QMainWindow):
         page.busy_changed.connect(self._set_busy)
         self._show(page)
 
+    def show_updates(self) -> None:
+        if self._busy or self.executor.is_running or self._restart_required:
+            return
+        for control in (self.home_button, self.access_button, self.connections_button):
+            control.setChecked(False)
+        page = UpdatesPage(self.content, RepositoryUpdater(PROJECT_ROOT), self.close)
+        page.busy_changed.connect(self._set_busy)
+        page.restart_required.connect(self._require_restart)
+        self._show(page)
+
+    def _require_restart(self) -> None:
+        # Loaded Python modules belong to the old revision. Do not mix them with
+        # updated launchers or workflow files in this process.
+        self._restart_required = True
+
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         if not busy and self._close_after_cancel:
             QTimer.singleShot(0, self.close)
-        self.home_button.setEnabled(not busy)
-        self.access_button.setEnabled(not busy)
-        self.connections_button.setEnabled(not busy)
+        for control in (self.home_button, self.access_button, self.connections_button, self.updates_button):
+            control.setEnabled(not busy and not self._restart_required)
 
     def _open_logs(self) -> None:
         try:
@@ -288,7 +307,7 @@ class AutomationApplication(QMainWindow):
                         # confirmation is open. Recheck after this close event.
                         QTimer.singleShot(0, self.close)
             else:
-                QMessageBox.warning(self, "Workflow is running", "Keep this window open until the workflow finishes.")
+                QMessageBox.warning(self, "Task is running", "Keep this window open until the current task finishes.")
             event.ignore()
             return
         self.logger.info("Application closed")

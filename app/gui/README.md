@@ -391,6 +391,49 @@ while the launcher runs. Invalid markers are ignored; existing output markers,
 diagnostics, exit codes, and timeouts are preserved. Use these explicit markers
 rather than parsing ordinary log messages as progress.
 
+## App updates
+
+**App updates** is available to all users, including users without assigned
+workflows. **Check for updates** fetches the current branch's configured upstream
+without changing installed files. It shows the remote name, branch and number of
+new commits. **Install update** applies exactly the checked commit using a
+fast-forward; it does not merge divergent history, reset files, stash changes,
+or push anything. Git operations run in a background thread with bounded command
+timeouts. Navigation and window closing are blocked until the operation ends.
+
+After installation, workflows remain disabled until the app closes. Reopen it
+with the normal shortcut so Python modules and launchers use the same revision.
+Changes to `requirements.txt`, `setup.ps1`, or files under `setup`, `powershell`,
+and `launcher` are flagged as requiring an administrator to rerun setup before
+reopening. Dependency installation, automatic relaunch, and initial clone/auth
+provisioning are outside this first update feature.
+
+Administrators must provision a separate clone per workstation, install Git on
+PATH, and configure its branch to track the intended remote branch. The current
+development remote is GitHub `origin`; the updater uses each installation's Git
+configuration rather than a hard-coded account or host. Changing that upstream
+to Mines GitLab later needs no updater code change. It does not implement the
+future work-PC publishing bridge. Grant staff the repository access needed to
+fetch, using approved workstation authentication; never distribute your personal
+SSH key. HTTPS credentials can use an already configured credential manager;
+SSH must work without prompts. Authentication prompts are disabled inside the
+updater; failures direct staff to IT and raw Git output is neither shown nor
+logged because it can include credentials or private paths.
+
+Copied folders without Git metadata and downloaded ZIPs cannot use this updater.
+Existing setup does not install Git or create a clone. Avoid a shared or
+concurrently OneDrive-synchronized working directory: in-app busy protection
+covers this app process, not other app instances, scheduled workflows or other
+machines. Close other automation tools before installation.
+
+Updates refuse tracked modifications, untracked non-ignored files, detached
+HEADs, missing upstreams, local commits/divergence, and unfinished Git operations.
+The updater rechecks the branch, installed commit, clean state and fetched target
+before installation. Ignored settings/data remain in place, and a collision
+with a newly tracked file is refused. Git hooks are disabled for these operations.
+Failures during installation require closing/reopening and administrator review;
+the updater never attempts a destructive rollback. Failed checks can be retried.
+
 ## Deployment boundary and next integrations
 
 The next useful migration steps are:

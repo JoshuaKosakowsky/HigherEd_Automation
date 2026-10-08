@@ -588,6 +588,64 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(widget.bar.value(), 0)
         self.assertIn("Stopped", widget.stage_label.text())
 
+    def test_updates_are_available_to_staff_and_restart_blocks_workflows(self):
+        from app.gui.pages.updates import UpdatesPage
+        from app.gui.services.updates import UpdatePlan
+
+        window = self.open_app("STAFF")
+        self.assertFalse(window.updates_button.isHidden())
+        window.show_updates()
+        page = window.current_page
+        self.assertIsInstance(page, UpdatesPage)
+        plan = UpdatePlan(self.root, "main", "origin", "refs/remotes/origin/main",
+                          "a" * 40, "b" * 40, 1, True)
+        page.result_queue = queue.Queue()
+        page.result_queue.put((plan, None))
+        page.installing = False
+        window._set_busy(True)
+        with patch.object(QMessageBox, "warning"):
+            self.assertFalse(window.close())
+        page._poll()
+        self.assertTrue(page.install_button.isEnabled())
+        self.assertIn("Setup must be run again", page.status.text())
+        page.result_queue = queue.Queue()
+        page.result_queue.put((plan, None))
+        page.installing = True
+        window._set_busy(True)
+        page._poll()
+        self.assertTrue(window._restart_required)
+        self.assertFalse(window.home_button.isEnabled())
+        self.assertFalse(window.updates_button.isEnabled())
+        self.assertIn("run setup.ps1", page.status.text())
+        window.show_home()
+        window.show_connections()
+        window.show_workflow(get_workflow("refund_review"))
+        self.assertIs(window.current_page, page)
+        self.assertTrue(window.close())
+
+    def test_update_check_runs_in_worker_and_failures_allow_retry(self):
+        from app.gui.services.updates import UpdateError
+
+        window = self.open_app()
+        window.show_updates()
+        page = window.current_page
+        with patch.object(page.updater, "check", side_effect=UpdateError("Synthetic network failure")):
+            page._start(install=False)
+            self.assertTrue(window._busy)
+            self.assertFalse(window.updates_button.isEnabled())
+            original = window.current_page
+            window.show_home()
+            self.assertIs(window.current_page, original)
+            deadline = time.monotonic() + 3
+            while page.result_queue is not None and time.monotonic() < deadline:
+                self.qt.processEvents()
+                time.sleep(0.01)
+        self.assertIsNone(page.result_queue)
+        self.assertFalse(window._busy)
+        self.assertTrue(page.check_button.isEnabled())
+        self.assertFalse(page.install_button.isEnabled())
+        self.assertIn("Synthetic network failure", page.status.text())
+
     def test_running_workflow_blocks_close_and_navigation(self):
         window = self.open_app()
         original = window.current_page
