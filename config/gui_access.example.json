@@ -25,6 +25,9 @@
     },
     "cashier": {
       "workflows": []
+    },
+    "Grad Contract Sponsor": {
+      "workflows": ["graduate_contract_recon"]
     }
   }
 }

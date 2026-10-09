@@ -6,9 +6,9 @@ import queue
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QDate, QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLineEdit, QMessageBox, QPlainTextEdit,
     QScrollArea, QVBoxLayout, QWidget,
 )
@@ -77,6 +77,11 @@ class WorkflowDetailPage(QScrollArea):
                 control = QPlainTextEdit("\n".join(str(name) for name in parameter.default or ()))
                 control.setFixedHeight(112)
                 field_label.setBuddy(control)
+            elif parameter.kind == ParameterKind.DATE:
+                control = QDateEdit(QDate.fromString(str(parameter.default), "yyyy-MM-dd"))
+                control.setCalendarPopup(True)
+                control.setDisplayFormat("yyyy-MM-dd")
+                field_label.setBuddy(control)
             else:
                 control = QLineEdit(str(parameter.default) if parameter.default is not None else "")
                 field_label.setBuddy(control)
@@ -96,6 +101,15 @@ class WorkflowDetailPage(QScrollArea):
                 self.recon_source = QComboBox()
                 self.recon_source.setAccessibleName("Banner data source")
                 self.recon_source.addItem("Upload BOOK/FRST files manually", MANUAL_SOURCE)
+                if is_administrator:
+                    self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
+                form_layout.addWidget(self.recon_source)
+                form_layout.addSpacing(8)
+            if parameter.key == "workday_file" and definition.workflow_id == "graduate_contract_recon":
+                form_layout.addWidget(label("Banner data source", "field"))
+                self.recon_source = QComboBox()
+                self.recon_source.setAccessibleName("Banner data source")
+                self.recon_source.addItem("Upload Banner Insights file", MANUAL_SOURCE)
                 if is_administrator:
                     self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
                 form_layout.addWidget(self.recon_source)
@@ -175,6 +189,8 @@ class WorkflowDetailPage(QScrollArea):
             self.definition.workflow_id == "textbook_recon_manual" and key in ("frst_file", "book_file")
         ) or (
             self.definition.workflow_id == "refund_review" and key in ("transaction_file", "context_file")
+        ) or (
+            self.definition.workflow_id == "graduate_contract_recon" and key == "banner_file"
         )
 
     def _update_production_warning(self) -> None:

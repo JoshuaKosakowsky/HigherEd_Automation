@@ -173,6 +173,39 @@ class QtGuiTests(unittest.TestCase):
         self.assertFalse(page.inputs["book_file"].isHidden())
         self.assertTrue(page.production_warning.isHidden())
 
+    def test_grad_contract_sponsor_sees_1305_uploads_only(self):
+        self.payload["views"]["Grad Contract Sponsor"] = {"workflows": ["graduate_contract_recon"]}
+        self.payload["users"]["STAFF"]["view"] = "Grad Contract Sponsor"
+        self.write_policy()
+        window = self.open_app("STAFF")
+        self.assertEqual([item.workflow_id for item in window.visible_workflows], ["graduate_contract_recon"])
+        window.show_workflow(window.visible_workflows[0])
+        page = window.current_page
+        self.assertEqual(page.recon_source.count(), 1)
+        self.assertEqual(page.recon_source.currentData(), "manual")
+        self.assertFalse(page.inputs["banner_file"].isHidden())
+        self.assertEqual(page.inputs["detail_codes"].text(), "")
+        self.assertEqual(page.mode.count(), 0)
+        self.assertTrue(page.inputs["start_date"].calendarPopup())
+        self.assertTrue(page.production_warning.isHidden())
+
+    def test_admin_1305_offers_upload_and_prod_without_optional_banner_file(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("graduate_contract_recon"))
+        page = window.current_page
+        self.assertEqual(page.recon_source.count(), 2)
+        page.recon_source.setCurrentIndex(page.recon_source.findData("sql"))
+        self.assertTrue(page.inputs["banner_file"].isHidden())
+        self.assertFalse(page.inputs["workday_file"].isHidden())
+        self.assertFalse(page.production_warning.isHidden())
+        wd = self.root / "synthetic_wd.xlsx"; wd.touch()
+        page.inputs["workday_file"].editor.setText(str(wd))
+        page.inputs["detail_codes"].setText("TPDT")
+        values = page._parse_parameters()
+        self.assertEqual(values["banner_source"], "sql")
+        self.assertNotIn("banner_file", values)
+        self.assertRegex(values["start_date"], r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
     def test_staff_view_and_missing_policy_fail_closed(self):
         window = self.open_app("STAFF")
         self.assertTrue(window.access_button.isHidden())

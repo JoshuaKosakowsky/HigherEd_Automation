@@ -207,9 +207,25 @@ It checks source row counts, splits capped results into non-overlapping date
 windows, and fails without saving if a single day remains capped. The internal
 count is removed from the workbook. Output retains the 12 SQL columns, signed
 amounts, and real Excel feed dates, with no Excel Tables or file overwrite.
-Direct database transport and the 1305/Workday reconciliation are future work.
+Direct database transport remains future work. The 1305 reconciliation is
+available as a separate workflow in 0.12.0, described below.
 See [`query/AR/activity/README.md`](../../query/AR/activity/README.md) for API
 limits, permissions, and first-run validation.
+
+**1305 Graduate Contract Recon** reads Workday and Banner files and produces
+document, CWID, period, exception, verification and combined activity views.
+The **Grad Contract Sponsor** view receives this workflow with uploads only;
+administrators can also select **Run SQL from PROD Insights** for Banner.
+Workday always requires an uploaded export. Dates are inclusive calendar inputs;
+detail codes start blank and must be supplied. The combined tab replaces only
+matched SIS summaries with Banner detail, keeps other Workday entries, and marks
+unmatched Banner rows as review-only instead of counting them twice. Worksheets
+are plain ranges without Excel Tables, and existing files are not overwritten.
+For existing shared policies, grant `graduate_contract_recon` to the employee's
+existing view through Access Management; updating code does not replace deployed
+access rules. See
+[`data_processing/graduate_contract_recon/README.md`](../../data_processing/graduate_contract_recon/README.md)
+for source layouts, matching rules, output interpretation, and deployment.
 
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,

@@ -14,6 +14,7 @@ from data_processing.population_testing.config import (
 
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode
 from app.gui.services.canadian_tax import run_canadian_tax
+from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
 from app.gui.services.report_watcher import run_setup_report_watcher
@@ -244,6 +245,33 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
                 help_text="A new workbook is created. Existing files are never overwritten.",
             ),
+        ),
+    ),
+    WorkflowDefinition(
+        workflow_id="graduate_contract_recon", name="1305 Graduate Contract Recon",
+        description="Reconcile Workday 1305 activity to Banner feed documents and student detail. Creates a combined activity view and keeps both source exports.",
+        category="Accounts Receivable", runner=run_graduate_contract_recon,
+        cancellable=True,
+        production_warning="Reads Banner activity from PROD Insights. Workday must still be uploaded. Saves a review workbook without changing either system.",
+        parameters=(
+            ParameterDefinition(key="workday_file", label="Workday 1305 export", kind=ParameterKind.INPUT_FILE,
+                file_types=(("Excel or CSV", "*.xlsx *.xlsm *.csv"),),
+                help_text="Upload the original Workday report with Accounting Date, Ledger Account, Journal Source, Debit/Credit Amounts and Memo."),
+            ParameterDefinition(key="banner_file", label="Banner Insights download", kind=ParameterKind.INPUT_FILE,
+                file_types=(("Excel or CSV", "*.xlsx *.xlsm *.csv"),),
+                help_text="Upload the complete Banner Activity by Date & Detail Code result for the reconciliation range."),
+            ParameterDefinition(key="start_date", label="Start date (inclusive)", kind=ParameterKind.DATE,
+                default=date.fromisoformat(LAST_MONTH + "-01").isoformat(),
+                help_text="Workday Accounting Date and Banner Feed Date are filtered independently to this range."),
+            ParameterDefinition(key="end_date", label="End date (inclusive)", kind=ParameterKind.DATE,
+                default=(date.today().replace(day=1) - timedelta(days=1)).isoformat(),
+                help_text="Use actual boundaries for a period, quarter, fiscal year, or multiple years."),
+            ParameterDefinition(key="detail_codes", label="1305 Banner detail codes (comma-separated)", kind=ParameterKind.TEXT,
+                help_text="Enter the codes approved for this reconciliation. No codes are selected by default; the program does not infer ledger mappings."),
+            ParameterDefinition(key="output_file", label="Save reconciliation as", kind=ParameterKind.OUTPUT_FILE,
+                default=PROJECT_ROOT / "data" / f"1305_recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
+                help_text="Choose an existing approved output folder and a new filename. Source files and existing results are never overwritten."),
         ),
     ),
 )

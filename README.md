@@ -83,6 +83,15 @@ step requires confirmation that TSPLOAD applied successfully in Banner. File inp
 a typed or pasted path, the Browse button, or a file dropped from Explorer.
 Existing command-line workflows remain available.
 
+**1305 Graduate Contract Recon** is available to the **Grad Contract Sponsor**
+view through uploaded Workday and Banner Insights exports. Administrators can
+also extract Banner activity directly from PROD Insights. The workflow produces
+document/CWID reconciliation, period totals, verification and exception tabs,
+plus a combined view that replaces matched SIS summaries with Banner detail.
+Detail codes are entered explicitly with no defaults. See the
+[1305 workflow instructions](data_processing/graduate_contract_recon/README.md)
+for matching rules and the permission grant needed in existing shared policies.
+
 Administrators can run **Canadian TL11A Review** with a CWID and calendar tax
 year in the GUI. It defaults to TEST, reconciles paid tuition allocations,
 includes scholarships, excludes FEIT/CFEE, and checks course durations including
