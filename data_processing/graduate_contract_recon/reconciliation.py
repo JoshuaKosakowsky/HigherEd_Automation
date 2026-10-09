@@ -85,15 +85,25 @@ def reconcile(
         documents.append([f"FY{year}", period, quarter, feed, wdebit, bdebit, wdebit - bdebit,
             wcredit, bcredit, wcredit - bcredit, len(wr), len(br), status, "", "Not reviewed"])
 
-    # Keep each financial row once. Never join every Workday line to every
-    # Banner line: a many-to-many merge would inflate both sources' amounts.
+    # Display Workday summaries above their Banner detail, but count only one
+    # source in activity totals when the amounts agree.
     combined = []
-    for row in wd + bn:
+    ordered = []
+    displayed_groups = set()
+    for row in wd:
+        if row.kind.upper() == "SIS" and row.feed:
+            if row.group_key in displayed_groups:
+                continue
+            displayed_groups.add(row.group_key)
+            ordered.extend(groups[row.group_key]["Workday"])
+            ordered.extend(groups[row.group_key]["Banner"])
+        else:
+            ordered.append(row)
+    ordered.extend(row for row in bn if row.group_key not in displayed_groups)
+    for row in ordered:
         status = statuses.get(row.group_key, "Missing feed document")
         if row.source == "Workday":
-            if row.kind.upper() == "SIS" and status == "Amounts agree":
-                continue  # The full original remains in Workday Data.
-            included = True
+            included = not (row.kind.upper() == "SIS" and status == "Amounts agree")
             if row.kind.upper() != "SIS":
                 status = "Other Workday activity"
         else:
@@ -103,9 +113,9 @@ def reconcile(
         year, period, quarter = fiscal_scope(row.day)
         combined.append([f"FY{year}", period, quarter, row.feed or row.memo, row.source, row.row,
             row.day, row.cwid, row.account, row.journal, row.code, row.term, row.memo,
-            row.debit, row.credit, "Yes" if included else "Review only",
+            row.debit, row.credit, "Yes" if included else
+                "Summary reference" if row.source == "Workday" else "Review only",
             row.debit if included else ZERO, row.credit if included else ZERO, status, row.user])
-    combined.sort(key=lambda row: (row[0], row[1], row[3], row[6], row[4], row[5]))
 
     by_student = defaultdict(list)
     for row in bn + non_sis:

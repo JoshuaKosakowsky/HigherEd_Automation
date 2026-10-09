@@ -51,20 +51,27 @@ amount row. Positive Banner amounts are debits and negative amounts are credits;
 the existing September example supports this convention. Non-SIS Workday
 journals are retained separately. Invalid dates/amounts and duplicate transaction
 identities block automatic substitution; suspect rows are retained in the source
-tabs with selection status and exception references. No rows are deduplicated.
+tabs with selection status. No rows are deduplicated.
 
 The output uses plain worksheets, freeze panes and ordinary filters, without
 Excel Tables. All financial results are calculated by Python as a snapshot;
 editing a source tab does not recalculate them. Rerun with changed input files.
+Combined begins with CWID, Term, Recon Period and Journal Number, following the
+employee's Journal Lines Data layout. Feed blocks follow the first Workday
+source occurrence within each fiscal period; all Workday rows in the block come
+before its Banner rows. Banner rows without a Workday feed match follow last.
+Document, Combined and source selection statuses retain review warnings; the
+workbook does not include separate Verification or Exceptions tabs.
+Journal Number displays only a six- or seven-digit SIS Memo / Banner Feed
+Document posting code. CWIDs, manual memos and other reference formats leave
+this column blank. Original Workday Journal Entry values stay in Workday Data.
 
 | Sheet | Use |
 | --- | --- |
-| 1305 Combined | Replace matched Workday SIS summaries with Banner detail. Retain other Workday rows. Unmatched/differing Banner rows remain visible as **Review only**, with zero Activity Debit/Credit to avoid counting both sources. Sum **Activity Debit/Credit**, not the raw Debit/Credit columns. |
+| 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail. Matched Workday summaries remain visible as **Summary reference**, with zero Activity Debit/Credit. Unmatched/differing Banner rows remain **Review only**, also with zero Activity Debit/Credit. Sum **Activity Debit/Credit** to count financial activity once. |
 | 1305 Doc Recon | Union of feed documents from both sources, with separate debit/credit differences, row counts, calculated status, and editable Notes/Review Status. |
 | 1305 CWID Recon | Banner plus non-SIS Workday student activity by fiscal period. Sponsor account descriptions may supply the student's CWID. Missing/conflicting IDs are flagged; no SIS student allocation is invented. Net Period Activity is not an ending balance. |
 | 1305 Period Totals | Period/quarter/year labels and source/combined totals across the selected date range, including periods with no supplied activity. |
-| 1305 Verification | Source names, selection, totals, attribution differences, combined-total preservation and limitations. |
-| 1305 Exceptions | Source and original row number for invalid/unallocated/duplicate or timing items. |
 | Workday Data / Banner Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
 
 CWIDs follow the supplied VBA rule: eight digits beginning with `10`, taken

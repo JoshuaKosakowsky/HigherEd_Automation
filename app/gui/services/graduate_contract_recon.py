@@ -85,4 +85,4 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
         cancellation=context.cancellation)
     return WorkflowResult(True,
         f"Created 1305 reconciliation: {len(review.documents):,} feed groups, {len(review.students):,} student groups, "
-        f"{len(review.issues):,} source warnings. Review Verification and Exceptions before completing the reconciliation.", output)
+        f"{len(review.issues):,} source warnings. Review document differences, row statuses and source selection statuses before completing the reconciliation.", output)

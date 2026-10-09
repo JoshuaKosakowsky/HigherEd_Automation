@@ -48,12 +48,16 @@ class GraduateContractReconTests(unittest.TestCase):
     def build(self, wd, bn):
         return reconcile(workday(wd), banner_from_frame(pd.DataFrame(bn, columns=BN_HEADERS)), self.params)
 
-    def test_replaces_only_matched_sis_summaries_without_cartesian_duplication(self):
+    def test_displays_summaries_above_details_without_cartesian_duplication(self):
         result = self.build([wd_row(30), wd_row(30), wd_row(5, memo="10000001 Manual", kind="Manual Journal EIB")],
                             [bn_row(40), bn_row(20)])
         self.assertEqual(result.documents[0][12], "Amounts agree")
         self.assertEqual(result.documents[0][10:12], [2, 2])
-        self.assertEqual(len(result.combined), 3)
+        self.assertEqual(len(result.combined), 5)
+        self.assertEqual([row[4] for row in result.combined],
+                         ["Workday", "Workday", "Banner", "Banner", "Workday"])
+        self.assertEqual([row[15] for row in result.combined[:2]],
+                         ["Summary reference", "Summary reference"])
         self.assertEqual(sum(row[16] for row in result.combined), Decimal("65"))
         self.assertEqual(result.students[0][8:11], [Decimal("65"), Decimal("0"), Decimal("65")])
         controls = dict(result.verification)
@@ -69,6 +73,32 @@ class GraduateContractReconTests(unittest.TestCase):
         self.assertEqual(len(result.combined), 3)
         self.assertEqual([row[15] for row in result.combined if row[4] == "Banner"], ["Review only"])
 
+    def test_feed_blocks_follow_workday_order_and_keep_banner_rows_once(self):
+        result = self.build(
+            [wd_row(30, memo="9002"), wd_row(10, memo="9001"), wd_row(30, memo="9002")],
+            [bn_row(60, feed="9002"), bn_row(99, feed="9003"), bn_row(5, feed="9001")])
+        self.assertEqual([(row[4], row[5]) for row in result.combined],
+                         [("Workday", 2), ("Workday", 4), ("Banner", 2),
+                          ("Workday", 3), ("Banner", 4), ("Banner", 3)])
+        self.assertEqual(sum(row[16] for row in result.combined), 70)
+        self.assertEqual(result.combined[-1][18], "Missing Workday")
+
+    def test_combined_journal_column_uses_posting_codes_and_never_cwids(self):
+        result = self.build(
+            [wd_row(memo="123456"), wd_row(memo="10000001", kind="Manual"),
+             wd_row(memo="1234567"), wd_row(memo="10000001")],
+            [bn_row(feed="123456"), bn_row(feed="1234567"), bn_row(feed="10000001")])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            rows = list(book["1305 Combined"].iter_rows(min_row=2, values_only=True))
+            self.assertEqual([row[3] for row in rows],
+                             ["123456", "123456", None, "1234567", "1234567", None, None])
+            self.assertEqual(rows[1][0], "10000001")
+            self.assertEqual(rows[2][0], "10000001")
+            book.close()
+
     def test_missing_zero_amount_sources_never_show_agreement(self):
         result = self.build([wd_row(0, memo="9001")], [bn_row(0, feed="9002")])
         self.assertEqual([row[12] for row in result.documents], ["Missing Banner", "Missing Workday"])
@@ -77,7 +107,7 @@ class GraduateContractReconTests(unittest.TestCase):
     def test_reversals_duplicates_and_manual_journals_preserve_raw_signs(self):
         result = self.build([wd_row(0, 25)], [bn_row(-10), bn_row(-10), bn_row(-5)])
         self.assertEqual(result.documents[0][12], "Amounts agree")
-        self.assertEqual(len(result.combined), 3)
+        self.assertEqual(len(result.combined), 4)
         self.assertEqual(sum(row[17] for row in result.combined), 25)
         self.assertEqual(result.students[0][10], -25)
 
@@ -155,12 +185,16 @@ class GraduateContractReconTests(unittest.TestCase):
             export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
             book = load_workbook(output)
             self.assertEqual(book.sheetnames[0], "1305 Combined")
-            self.assertEqual(len(book.sheetnames), 8)
+            self.assertEqual(len(book.sheetnames), 6)
+            self.assertNotIn("1305 Verification", book.sheetnames)
+            self.assertNotIn("1305 Exceptions", book.sheetnames)
             self.assertTrue(all(not sheet.tables for sheet in book))
             cell = book["Workday Data"].cell(2, 7)
             self.assertEqual(cell.value, "=TEST_FORMULA")
             self.assertEqual(cell.data_type, "s")
-            self.assertIsInstance(book["1305 Combined"]["Q2"].value, (int, float))
+            self.assertEqual([book["1305 Combined"].cell(1, column).value for column in range(1, 5)],
+                             ["CWID", "Term", "Recon Period", "Journal Number"])
+            self.assertIsInstance(book["1305 Combined"]["R2"].value, (int, float))
             book.close()
             existing = output.read_bytes()
             with self.assertRaises(ValueError):

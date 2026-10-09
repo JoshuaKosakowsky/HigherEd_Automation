@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import shutil
+import re
 import tempfile
 from math import ceil
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,6 +19,20 @@ from .reconciliation import COMBINED_HEADERS, CWID_HEADERS, DOC_HEADERS, PERIOD_
 
 
 EXCEL_MAX_ROWS = 1_048_576
+# Follow the employee's Journal Lines Data layout; keep the reconciliation's
+# internal column order stable for period totals and activity controls.
+COMBINED_COLUMN_ORDER = (7, 11, 1, 9, 18, 6, 4, 13, 14, 12, 3, 0, 2, 8, 10, 5, 15, 16, 17, 19)
+COMBINED_OUTPUT_HEADERS = [COMBINED_HEADERS[index] for index in COMBINED_COLUMN_ORDER]
+COMBINED_OUTPUT_HEADERS[2] = "Recon Period"
+COMBINED_OUTPUT_HEADERS[3] = "Journal Number"
+
+
+def combined_output_row(row: list[object]) -> list[object]:
+    values = [row[index] for index in COMBINED_COLUMN_ORDER]
+    # Column D is the SIS/Banner posting reference, never a student identifier.
+    reference = "" if str(row[18]).startswith("Other Workday activity") else str(row[3])
+    values[3] = reference if re.fullmatch(r"[0-9]{6,7}", reference) else ""
+    return values
 
 
 def validate_output(path: Path, inputs: tuple[Path, ...] = ()) -> None:
@@ -68,27 +83,14 @@ def export_reconciliation(
         return ws
 
     try:
-        sheet("1305 Combined", COMBINED_HEADERS, review.combined)
+        sheet("1305 Combined", COMBINED_OUTPUT_HEADERS,
+              [combined_output_row(row) for row in review.combined])
         sheet("1305 Doc Recon", DOC_HEADERS, review.documents)
         sheet("1305 CWID Recon", CWID_HEADERS, review.students)
         sheet("1305 Period Totals", PERIOD_HEADERS, review.periods)
         for name in ("1305 Combined", "1305 Doc Recon", "1305 CWID Recon"):
             book[name].freeze_panes = "E2"
         book["1305 Period Totals"].freeze_panes = "D2"
-        metadata = review.verification + [["Application version", app_version], ["Banner input method", banner_source],
-            ["Run at (UTC)", datetime.now(timezone.utc).replace(tzinfo=None)]]
-        verification = sheet("1305 Verification", ["Control / metadata", "Value"], metadata)
-        verification.column_dimensions["A"].width = 62
-        verification.column_dimensions["B"].width = 105
-        for cells in verification.iter_rows(min_row=2):
-            cells[1].alignment = Alignment(wrap_text=True, vertical="top")
-            if isinstance(cells[1].value, float):
-                cells[1].number_format = '#,##0.00;[Red](#,##0.00)'
-            if isinstance(cells[1].value, str) and len(cells[1].value) > 95:
-                verification.row_dimensions[cells[1].row].height = 45
-        sheet("1305 Exceptions", ["Source", "Source Row", "Issue"],
-              [[issue.source, issue.row, issue.issue] for issue in review.issues])
-        book["1305 Exceptions"].column_dimensions["C"].width = 85
         for source in review.sources:
             if any(len(values) > len(source.headers) for _, values in source.rows):
                 raise ValueError(f"{source.source} has source rows wider than the headers.")
