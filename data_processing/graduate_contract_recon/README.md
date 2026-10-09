@@ -12,6 +12,8 @@ This is read-only in both source systems.
 - Upload XLSX, XLSM or UTF-8 CSV exports. Headers are detected within the first
   30 rows; column order and worksheet name do not determine the mapping. A
   workbook must contain exactly one matching source worksheet for each input.
+  XLSX/XLSM readers scan actual worksheet contents even when an export stores
+  an incorrect used range, such as A1 for a full Workday report.
 - Workday requires Accounting Date, Ledger Account, Journal Source, Memo, and
   debit/credit amounts. Workday Debit/Credit Amount, Ledger Debit/Credit Amount,
   and Line Memo are supported header aliases. Journal Entry/Number, External

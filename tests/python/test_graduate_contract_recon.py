@@ -1,11 +1,14 @@
 """Synthetic financial, source parsing and publication checks for 1305."""
 
 import csv
+from io import BytesIO
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+import re
 import tempfile
 import unittest
+from zipfile import ZipFile
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
@@ -171,6 +174,34 @@ class GraduateContractReconTests(unittest.TestCase):
 
 
 class GraduateContractSourceTests(unittest.TestCase):
+    def test_incorrect_worksheet_dimensions_do_not_truncate_headers_or_records(self):
+        for source_name, headers, rows in (
+            ("Workday", WD_HEADERS, [wd_row(debit=60), wd_row(debit=90)]),
+            ("Banner", BN_HEADERS, [bn_row(amount=60), bn_row(amount=90)]),
+        ):
+            for dimension in ("A1", "A1:L2"):
+                with self.subTest(source=source_name, dimension=dimension), tempfile.TemporaryDirectory() as folder:
+                    path = Path(folder) / "export.xlsx"
+                    book = Workbook()
+                    book.active.append(headers)
+                    for row in rows:
+                        book.active.append(row)
+                    book.save(path)
+                    book.close()
+                    # Reproduce export metadata that hides columns or later rows.
+                    original = BytesIO(path.read_bytes())
+                    with ZipFile(original) as archive, ZipFile(path, "w") as patched:
+                        for member in archive.infolist():
+                            content = archive.read(member.filename)
+                            if member.filename == "xl/worksheets/sheet1.xml":
+                                content = re.sub(rb'<dimension ref="[^"]+"',
+                                    f'<dimension ref="{dimension}"'.encode(), content)
+                            patched.writestr(member, content)
+                    source = read_source(path, source_name)
+                    self.assertEqual(source.headers, headers)
+                    expected_rows = [[None if value == "" else value for value in row] for row in rows]
+                    self.assertEqual(source.rows, list(enumerate(expected_rows, 2)))
+
     def test_header_based_workday_and_banner_reading_with_title_row_and_quotes(self):
         with tempfile.TemporaryDirectory() as folder:
             wd = Path(folder) / "wd.csv"

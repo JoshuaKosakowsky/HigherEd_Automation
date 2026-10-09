@@ -170,6 +170,9 @@ def read_source(path: Path, source: str) -> SourceData:
         book = load_workbook(path, read_only=True, data_only=False)
         try:
             for sheet in book:
+                # Some Workday exports declare A1 as the used range despite
+                # containing a full report. Read actual cells, not that metadata.
+                sheet.reset_dimensions()
                 inspect(sheet.title, sheet.iter_rows(values_only=True))
         finally:
             book.close()
