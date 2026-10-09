@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QFileDialog, QFrame, QMessageBox
+from PySide6.QtCore import QDate
 
 from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.pages.connections import ConnectionsPage
@@ -24,6 +25,7 @@ from shared.insights.config import (
     load_department_profiles,
 )
 from shared.insights.query_catalog import QUERIES, get_query
+from shared.insights.banner_activity import BannerActivityParameters
 
 
 def profiles():
@@ -79,7 +81,10 @@ class InsightsQueryCatalogTests(unittest.TestCase):
                 sql = query.sql_path.read_text(encoding="utf-8")
                 self.assertTrue(sql.strip())
                 self.assertNotIn("validate_", query.relative_path.lower())
-                if query.term_variable is None:
+                if query.requires_activity_parameters:
+                    activity = BannerActivityParameters.from_inputs("2026-01-01", "2026-03-31", "TPDT, TDLE, Z0LE")
+                    self.assertNotIn("{{", query.render_sql(activity=activity))
+                elif query.term_variable is None:
                     self.assertNotIn("{{", sql)
                 else:
                     self.assertNotIn("{{", query.render_sql("202680"))
@@ -113,6 +118,63 @@ class InsightsConnectionServiceTests(unittest.TestCase):
 
     def run_action(self, action, mode=WorkflowMode.TEST):
         return run_insights_connection(WorkflowContext("insights_connection", {"action": action}, mode))
+
+    def test_activity_export_uses_existing_auth_and_preserves_plain_workbook(self):
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.run_sql.return_value = pd.DataFrame({
+            "'Amount'": [-10.50], "'Feed Date'": ["2026-01-31T23:59:59Z"],
+            "Transaction User": ["SYNTHETIC_USER"], "__activity_row_count": [1],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "activity.xlsx"
+            with patch("app.gui.services.insights.build_authenticated_client", return_value=(client, "cached session")) as build:
+                result = run_insights_connection(WorkflowContext(
+                    "insights_query_export", {"action": "query_export", "query_id": "banner_activity",
+                    "start_date": "2026-01-01", "end_date": "2026-01-31", "detail_codes": "TPDT, HLTH",
+                    "output_path": str(output)}, WorkflowMode.TEST,
+                ))
+            self.assertTrue(result.success, result.message)
+            book = load_workbook(output)
+            self.assertEqual(book.active["B2"].value, datetime(2026, 1, 31, 23, 59, 59))
+            self.assertEqual(book.active["A2"].value, -10.50)
+            self.assertEqual(book.active.max_column, 3)
+            self.assertFalse(book.active.tables)
+            book.close()
+        self.assertEqual(build.call_args.args[0].environment, "TEST")
+        self.assertTrue(build.call_args.kwargs["use_saved_mines_login"])
+        self.assertIn("IN ('TPDT', 'HLTH')", client.run_sql.call_args.args[0])
+        client.run_sql_file.assert_not_called()
+
+    def test_invalid_activity_inputs_never_authenticate_or_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "activity.xlsx"
+            with patch("app.gui.services.insights.build_authenticated_client") as build:
+                result = run_insights_connection(WorkflowContext(
+                    "insights_query_export", {"action": "query_export", "query_id": "banner_activity",
+                    "start_date": "2026-02-01", "end_date": "2026-01-31", "detail_codes": "TPDT",
+                    "output_path": str(output)}, WorkflowMode.TEST,
+                ))
+            self.assertFalse(result.success)
+            self.assertIn("on or after", result.message)
+            self.assertFalse(output.exists())
+            build.assert_not_called()
+
+    def test_capped_activity_never_saves_partial_workbook(self):
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.run_sql.return_value = pd.DataFrame({"'Amount'": [10], "__activity_row_count": [2]})
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "activity.xlsx"
+            with patch("app.gui.services.insights.build_authenticated_client", return_value=(client, "cached session")):
+                result = run_insights_connection(WorkflowContext(
+                    "insights_query_export", {"action": "query_export", "query_id": "banner_activity",
+                    "start_date": "2026-01-01", "end_date": "2026-01-01", "detail_codes": "TPDT",
+                    "output_path": str(output)}, WorkflowMode.TEST,
+                ))
+            self.assertFalse(result.success)
+            self.assertIn("limited the results", result.message)
+            self.assertFalse(output.exists())
 
     def test_unconfigured_prod_never_authenticates(self):
         with patch("app.gui.services.insights.build_authenticated_client") as build:
@@ -362,6 +424,44 @@ class ConnectionsPageTests(unittest.TestCase):
         self.page.mode.setCurrentIndex(1)
         self.assertTrue(all(not item.isEnabled() for item in self.page.actions.values()))
 
+    def test_activity_controls_calendar_defaults_visibility_and_busy_state(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("banner_activity"))
+        self.assertFalse(self.page.activity_inputs.isHidden())
+        self.assertTrue(self.page.term.isHidden())
+        self.assertTrue(self.page.start_date.calendarPopup())
+        self.assertTrue(self.page.end_date.calendarPopup())
+        self.assertEqual(self.page.detail_codes.text(), "")
+        self.page._run("connect")
+        self.assertFalse(self.page.activity_inputs.isEnabled())
+        self.results.put(WorkflowResult(True, "TEST verified"))
+        self.page._poll()
+        self.assertTrue(self.page.activity_inputs.isEnabled())
+        self.page.queries.setCurrentIndex(self.page.queries.findData("last_month_activity"))
+        self.assertTrue(self.page.activity_inputs.isHidden())
+
+    def test_activity_parameters_reach_background_task(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("banner_activity"))
+        self.page.start_date.setDate(QDate(2024, 1, 1))
+        self.page.end_date.setDate(QDate(2026, 12, 31))
+        self.page.detail_codes.setText("hlth, TPDT, hlth")
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(QFileDialog, "getSaveFileName", return_value=(str(Path(directory) / "activity.xlsx"), "")):
+                self.page._run("query_export")
+        params = self.executor.run_async.call_args.args[1].parameters
+        self.assertEqual(params["start_date"], "2024-01-01")
+        self.assertEqual(params["end_date"], "2026-12-31")
+        self.assertEqual(params["detail_codes"], "HLTH, TPDT")
+        self.assertNotIn("term_code", params)
+
+    def test_invalid_activity_selection_stops_before_file_picker(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("banner_activity"))
+        self.page.detail_codes.clear()
+        with patch.object(QMessageBox, "warning") as warning, patch.object(QFileDialog, "getSaveFileName") as save:
+            self.page._run("query_export")
+        warning.assert_called_once()
+        save.assert_not_called()
+        self.executor.run_async.assert_not_called()
+
     def test_saved_mines_login_can_be_removed_without_touching_insights_session(self):
         self.vault.load.return_value = SimpleNamespace(username="synthetic.user")
         self.page._refresh()
@@ -427,6 +527,7 @@ class ConnectionsPageTests(unittest.TestCase):
     def test_prod_query_runs_without_confirmation(self):
         self.page.profiles["PROD"] = production_profile()
         self.page.mode.setCurrentIndex(1)
+        self.page.detail_codes.setText("HLTH")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "activity.xlsx"
             with (

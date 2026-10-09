@@ -10,6 +10,7 @@ import pandas as pd
 
 from app.gui.models import WorkflowContext, WorkflowResult
 from shared.insights.auth import InsightsAuthenticationError
+from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
 from shared.insights.browser_auth import InsightsBrowserAuthenticationError
 from shared.insights.client import InsightsAPIError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
@@ -32,7 +33,7 @@ def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
     """Convert ISO 8601 feed timestamps to timezone-free UTC Excel dates."""
     feed_date_columns = [
         column for column in dataframe.columns
-        if isinstance(column, str) and column.endswith("Feed Date")
+        if isinstance(column, str) and column.strip("'\"").endswith("Feed Date")
     ]
     if not feed_date_columns:
         return dataframe
@@ -122,7 +123,14 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
             if term_code is not None and not isinstance(term_code, str):
                 raise InsightsConfigurationError("Enter a valid Banner term.")
             try:
-                rendered_sql = query.render_sql(term_code)
+                activity = None
+                if query.requires_activity_parameters:
+                    activity = BannerActivityParameters.from_inputs(
+                        context.parameters.get("start_date"),
+                        context.parameters.get("end_date"),
+                        context.parameters.get("detail_codes"),
+                    )
+                rendered_sql = query.render_sql(term_code, activity=activity)
             except ValueError as error:
                 raise InsightsConfigurationError(str(error)) from None
             selected_path = context.parameters.get("output_path")
@@ -143,10 +151,15 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
         )
         with client:
             if action == "query_export":
-                result = (
-                    client.run_sql(rendered_sql)
-                    if query.term_variable else client.run_sql_file(query.sql_path)
-                )
+                if activity is not None:
+                    result = extract_banner_activity(
+                        client, activity, sql_template=query.sql_path.read_text(encoding="utf-8"),
+                    )
+                else:
+                    result = (
+                        client.run_sql(rendered_sql)
+                        if query.term_variable else client.run_sql_file(query.sql_path)
+                    )
                 _export_query(result, output_path)
                 return WorkflowResult(
                     True,

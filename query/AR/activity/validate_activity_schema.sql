@@ -3,12 +3,18 @@
 WITH required_columns (table_schema, table_name, column_name) AS (
     VALUES
         ('TAISMGR', 'TBRACCD', 'PIDM'),
+        ('TAISMGR', 'TBRACCD', 'USER'),
         ('TAISMGR', 'TBRACCD', 'TERM_CODE'),
         ('TAISMGR', 'TBRACCD', 'DETAIL_CODE'),
+        ('TAISMGR', 'TBRACCD', 'DESC'),
         ('TAISMGR', 'TBRACCD', 'AMOUNT'),
         ('TAISMGR', 'TBRACCD', 'BALANCE'),
         ('TAISMGR', 'TBRACCD', 'FEED_DATE'),
         ('TAISMGR', 'TBRACCD', 'TRAN_NUMBER'),
+        ('TAISMGR', 'TBRACCD', 'AIDY_CODE'),
+        ('TAISMGR', 'TBRACCD', 'FEED_DOC_CODE'),
+        ('TAISMGR', 'TBRACCD', 'EFFECTIVE_DATE'),
+        ('TAISMGR', 'TBRACCD', 'ACTIVITY_DATE'),
         ('TAISMGR', 'TBBDETC', 'DETAIL_CODE'),
         ('TAISMGR', 'TBBDETC', 'DESC'),
         ('TAISMGR', 'TBBDETC', 'DCAT_CODE'),

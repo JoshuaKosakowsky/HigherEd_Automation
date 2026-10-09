@@ -111,11 +111,11 @@ def apply_theme(application: QApplication) -> None:
             text-align: left; padding: 12px; }}
         QPushButton#nav:hover, QPushButton#nav:checked {{ background: {BLASTER_BLUE}; color: {WHITE}; }}
         QPushButton#nav:focus {{ border: 1px solid {LIGHT_BLUE}; }}
-        QLineEdit, QPlainTextEdit, QComboBox {{
+        QLineEdit, QPlainTextEdit, QComboBox, QDateEdit {{
             background: {WHITE}; color: {TEXT}; border: 1px solid {LIGHT_BLUE};
             border-radius: 6px; padding: 9px; selection-background-color: {BLASTER_BLUE};
             selection-color: {WHITE}; }}
-        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{ border: 2px solid {BLASTER_BLUE}; }}
+        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus {{ border: 2px solid {BLASTER_BLUE}; }}
         QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"] {{ border: 2px solid {RED_FLANNEL}; }}
         QFrame#fileInput {{ border: 1px dashed {LIGHT_BLUE}; border-radius: 8px; background: {PAGE}; }}
         QFrame#fileInput[dragging="true"] {{ border: 2px solid {BLASTER_BLUE}; background: {PALE_BLUE}; }}

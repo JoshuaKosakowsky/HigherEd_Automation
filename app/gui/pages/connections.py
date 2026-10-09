@@ -7,9 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QDate, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QFileDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+    QFileDialog, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QScrollArea,
     QVBoxLayout, QWidget,
 )
@@ -21,6 +21,7 @@ from app.gui.theme import button, card, label
 from mymines.credentials import MyMinesCredentialStore
 from shared.credentials import CredentialStoreError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
+from shared.insights.banner_activity import BannerActivityParameters
 from shared.insights.query_catalog import QUERIES, get_query
 
 
@@ -130,6 +131,26 @@ class ConnectionsPage(QScrollArea):
         self.term.setPlaceholderText("Six-digit term, for example 202680")
         export.addWidget(self.term_label)
         export.addWidget(self.term)
+        self.activity_inputs = QWidget()
+        activity_form = QFormLayout(self.activity_inputs)
+        activity_form.setContentsMargins(0, 0, 0, 0)
+        today = QDate.currentDate()
+        self.start_date = QDateEdit(QDate(today.year(), today.month(), 1))
+        self.end_date = QDateEdit(today)
+        for control, name in (
+            (self.start_date, "Start Feed Date (inclusive)"),
+            (self.end_date, "End Feed Date (inclusive)"),
+        ):
+            control.setCalendarPopup(True)
+            control.setDisplayFormat("yyyy-MM-dd")
+            control.setAccessibleName(name)
+            activity_form.addRow(name, control)
+        self.detail_codes = QLineEdit()
+        self.detail_codes.setAccessibleName("Detail codes separated by commas")
+        self.detail_codes.setPlaceholderText("Enter detail codes separated by commas")
+        activity_form.addRow("Detail codes (comma-separated)", self.detail_codes)
+        activity_form.addRow(label("Both dates include the entire day. Replace codes as needed.", "muted"))
+        export.addWidget(self.activity_inputs)
         export.addWidget(label("Reports may contain student and financial data.", "muted"))
         self.actions["query_export"] = button(
             "Run selected query and save Excel",
@@ -156,6 +177,7 @@ class ConnectionsPage(QScrollArea):
         requires_term = query.term_variable is not None
         self.term_label.setVisible(requires_term)
         self.term.setVisible(requires_term)
+        self.activity_inputs.setVisible(query.requires_activity_parameters)
 
     def _refresh(self) -> None:
         environment = self.mode.currentData()
@@ -164,6 +186,7 @@ class ConnectionsPage(QScrollArea):
             control.setEnabled(profile is not None and self.result_queue is None)
         self.queries.setEnabled(profile is not None and self.result_queue is None)
         self.term.setEnabled(profile is not None and self.result_queue is None)
+        self.activity_inputs.setEnabled(profile is not None and self.result_queue is None)
         self.save_login_button.setEnabled(self.result_queue is None)
         self.remove_login_button.setEnabled(self.result_queue is None)
         try:
@@ -253,7 +276,14 @@ class ConnectionsPage(QScrollArea):
             query = get_query(self.queries.currentData())
             term_code = self.term.text().strip() if query.term_variable else None
             try:
-                query.render_sql(term_code)
+                activity = None
+                if query.requires_activity_parameters:
+                    activity = BannerActivityParameters.from_inputs(
+                        self.start_date.date().toString("yyyy-MM-dd"),
+                        self.end_date.date().toString("yyyy-MM-dd"),
+                        self.detail_codes.text(),
+                    )
+                query.render_sql(term_code, activity=activity)
             except (OSError, ValueError) as error:
                 QMessageBox.warning(self, "Query input needed", str(error))
                 return
@@ -282,6 +312,12 @@ class ConnectionsPage(QScrollArea):
             }
             if term_code is not None:
                 parameters["term_code"] = term_code
+            if activity is not None:
+                parameters.update(
+                    start_date=activity.start_date.isoformat(),
+                    end_date=activity.end_date.isoformat(),
+                    detail_codes=", ".join(activity.detail_codes),
+                )
         else:
             parameters = {"action": action}
         is_query = action == "query_export"

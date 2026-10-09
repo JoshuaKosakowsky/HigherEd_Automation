@@ -189,6 +189,28 @@ and SHIP reports prompt for a six-digit Banner term. The SHIP reports require a
 Fall term ending in `80`. The term is validated and inserted as a quoted SQL
 literal; no raw free-form SQL is accepted from the interface.
 
+In 0.11.0, **Activity — Banner Activity by Date & Detail Code** uses the same
+`query/AR/activity/tgiaccd_transactions.sql` template as the staff Insights
+question. Select inclusive start/end feed dates with the calendars and enter
+comma-separated detail codes. Dates default to the first of the current month
+through today. Detail codes start blank with no default selections; enter at
+least one four-letter/digit code. Actual date boundaries support periods, quarters, years, and multiple
+years without assuming fiscal-calendar rules. Invalid/reversed dates or empty
+code selections are rejected before authentication or output selection.
+
+The report uses the existing JWT-to-session login and secure environment-specific
+session cache. Application administrators still need native SQL permission in
+Insights; staff without that permission use the published saved question.
+`shared/insights/banner_activity.py` separates parameter validation and extraction
+from GUI/authentication so later reports and the 1305 workflow can reuse it.
+It checks source row counts, splits capped results into non-overlapping date
+windows, and fails without saving if a single day remains capped. The internal
+count is removed from the workbook. Output retains the 12 SQL columns, signed
+amounts, and real Excel feed dates, with no Excel Tables or file overwrite.
+Direct database transport and the 1305/Workday reconciliation are future work.
+See [`query/AR/activity/README.md`](../../query/AR/activity/README.md) for API
+limits, permissions, and first-run validation.
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

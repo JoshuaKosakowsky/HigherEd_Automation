@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.insights.banner_activity import BannerActivityParameters
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,14 +19,24 @@ class InsightsQuery:
     description: str
     term_variable: str | None = None
     fall_term_only: bool = False
+    requires_activity_parameters: bool = False
 
     @property
     def sql_path(self) -> Path:
         return REPO_ROOT / "query" / self.relative_path
 
-    def render_sql(self, term_code: str | None = None) -> str:
-        """Fill the one supported term tag with a validated SQL text literal."""
+    def render_sql(
+        self, term_code: str | None = None, *,
+        activity: BannerActivityParameters | None = None,
+    ) -> str:
+        """Render only the explicitly supported, validated report parameters."""
         sql = self.sql_path.read_text(encoding="utf-8")
+        if self.requires_activity_parameters:
+            if activity is None or term_code is not None:
+                raise ValueError("Enter feed dates and detail codes for this report.")
+            return activity.render_sql(sql)
+        if activity is not None:
+            raise ValueError("This query does not take feed dates or detail codes.")
         if self.term_variable is None:
             if term_code is not None:
                 raise ValueError("This query does not take a term.")
@@ -45,6 +56,13 @@ class InsightsQuery:
 
 
 QUERIES: tuple[InsightsQuery, ...] = (
+    InsightsQuery(
+        "banner_activity", "Activity", "Banner Activity by Date & Detail Code",
+        "AR/activity/tgiaccd_transactions.sql",
+        "Transactions for selected detail codes and inclusive start/end feed dates. "
+        "Enter actual dates for a period, quarter, year, or multiple years.",
+        requires_activity_parameters=True,
+    ),
     InsightsQuery(
         "current_month_activity", "Activity", "Current month transactions",
         "AR/activity/Current_month_activity.sql",
