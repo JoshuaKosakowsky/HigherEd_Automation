@@ -27,8 +27,10 @@ This is read-only in both source systems.
   in the raw source tab. Legacy header layouts are accepted internally, but the
   staff form advertises only the Insights download.
 - Enter **inclusive** start/end dates and at least one approved detail code.
-  **No detail codes are preselected.** The workflow does not establish which
-  codes post to ledger 1305; the reviewer chooses them. Workday is restricted to
+  The 1305 workflow prepopulates **TPDT, TPLE, Z0LE**. Reviewers can add, change
+  or remove codes for the reconciliation; at least one code is required.
+  These are editable workflow defaults, not an inferred ledger mapping.
+  Workday is restricted to
   ledger account 1305. The two sources use Accounting Date and Feed Date
   respectively. Feed timing differences remain review items.
 - Dates default to the previous calendar month. Supply actual boundaries for
