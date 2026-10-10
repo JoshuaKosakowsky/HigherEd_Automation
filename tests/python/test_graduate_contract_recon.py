@@ -97,6 +97,18 @@ class GraduateContractReconTests(unittest.TestCase):
                              ["123456", "123456", None, "1234567", "1234567", None, None])
             self.assertEqual(rows[1][0], "10000001")
             self.assertEqual(rows[2][0], "10000001")
+            combined = book["1305 Combined"]
+            headers = [cell.value for cell in combined[1]]
+            self.assertEqual(len(headers), 14)
+            for removed in ("Status", "Source Row", "Included in Activity", "Quarter",
+                            "Activity Debit", "Activity Credit"):
+                self.assertNotIn(removed, headers)
+            # First journal white, intervening manual row grey, next journal
+            # white, last journal grey; detail shares its summary's fill.
+            self.assertEqual([combined.cell(number, 1).fill.patternType for number in range(2, 9)],
+                             [None, None, "solid", None, None, "solid", "solid"])
+            for number in (4, 7, 8):
+                self.assertTrue(all(cell.fill.fgColor.rgb == "FFEFEFEF" for cell in combined[number]))
             book.close()
 
     def test_missing_zero_amount_sources_never_show_agreement(self):
@@ -194,7 +206,7 @@ class GraduateContractReconTests(unittest.TestCase):
             self.assertEqual(cell.data_type, "s")
             self.assertEqual([book["1305 Combined"].cell(1, column).value for column in range(1, 5)],
                              ["CWID", "Term", "Recon Period", "Journal Number"])
-            self.assertIsInstance(book["1305 Combined"]["R2"].value, (int, float))
+            self.assertIsInstance(book["1305 Combined"]["G2"].value, (int, float))
             book.close()
             existing = output.read_bytes()
             with self.assertRaises(ValueError):

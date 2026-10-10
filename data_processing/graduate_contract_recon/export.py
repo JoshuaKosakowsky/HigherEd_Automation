@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from data_processing.shared.xlsx_output_format import apply_default_font, format_table_columns
 from shared.cancellation import CancellationToken
@@ -21,7 +21,7 @@ from .reconciliation import COMBINED_HEADERS, CWID_HEADERS, DOC_HEADERS, PERIOD_
 EXCEL_MAX_ROWS = 1_048_576
 # Follow the employee's Journal Lines Data layout; keep the reconciliation's
 # internal column order stable for period totals and activity controls.
-COMBINED_COLUMN_ORDER = (7, 11, 1, 9, 18, 6, 4, 13, 14, 12, 3, 0, 2, 8, 10, 5, 15, 16, 17, 19)
+COMBINED_COLUMN_ORDER = (7, 11, 1, 9, 6, 4, 13, 14, 12, 3, 0, 8, 10, 19)
 COMBINED_OUTPUT_HEADERS = [COMBINED_HEADERS[index] for index in COMBINED_COLUMN_ORDER]
 COMBINED_OUTPUT_HEADERS[2] = "Recon Period"
 COMBINED_OUTPUT_HEADERS[3] = "Journal Number"
@@ -83,8 +83,24 @@ def export_reconciliation(
         return ws
 
     try:
-        sheet("1305 Combined", COMBINED_OUTPUT_HEADERS,
-              [combined_output_row(row) for row in review.combined])
+        combined = sheet("1305 Combined", COMBINED_OUTPUT_HEADERS,
+                         [combined_output_row(row) for row in review.combined])
+        grey = PatternFill(fill_type="solid", fgColor="FFEFEFEF")
+        previous_group = None
+        shaded = True
+        for number, row in enumerate(review.combined, 2):
+            # Keep the same journal in separate periods visually separate too.
+            # Blank journal numbers use the feed, or the individual manual row.
+            reference = combined.cell(number, 4).value or row[3]
+            if str(row[18]).startswith("Other Workday activity"):
+                reference = (row[4], row[5])
+            group = (row[0], row[1], reference)
+            if group != previous_group:
+                shaded = not shaded
+                previous_group = group
+            if shaded:
+                for cell in combined[number]:
+                    cell.fill = grey
         sheet("1305 Doc Recon", DOC_HEADERS, review.documents)
         sheet("1305 CWID Recon", CWID_HEADERS, review.students)
         sheet("1305 Period Totals", PERIOD_HEADERS, review.periods)

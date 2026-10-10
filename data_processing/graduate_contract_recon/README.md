@@ -60,15 +60,19 @@ Combined begins with CWID, Term, Recon Period and Journal Number, following the
 employee's Journal Lines Data layout. Feed blocks follow the first Workday
 source occurrence within each fiscal period; all Workday rows in the block come
 before its Banner rows. Banner rows without a Workday feed match follow last.
-Document, Combined and source selection statuses retain review warnings; the
+Document and source selection statuses retain review warnings; the
 workbook does not include separate Verification or Exceptions tabs.
 Journal Number displays only a six- or seven-digit SIS Memo / Banner Feed
 Document posting code. CWIDs, manual memos and other reference formats leave
 this column blank. Original Workday Journal Entry values stay in Workday Data.
+Alternating journal groups have a light grey background across their Workday
+and Banner rows. Combined omits Status, Source Row, Included in Activity,
+Quarter and Activity Debit/Credit. Use Period Totals for reconciled totals:
+Combined's displayed Debit/Credit includes both summaries and their detail.
 
 | Sheet | Use |
 | --- | --- |
-| 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail. Matched Workday summaries remain visible as **Summary reference**, with zero Activity Debit/Credit. Unmatched/differing Banner rows remain **Review only**, also with zero Activity Debit/Credit. Sum **Activity Debit/Credit** to count financial activity once. |
+| 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' original Debit/Credit remain visible for comparison; use Period Totals for totals without double-counting. |
 | 1305 Doc Recon | Union of feed documents from both sources, with separate debit/credit differences, row counts, calculated status, and editable Notes/Review Status. |
 | 1305 CWID Recon | Banner plus non-SIS Workday student activity by fiscal period. Sponsor account descriptions may supply the student's CWID. Missing/conflicting IDs are flagged; no SIS student allocation is invented. Net Period Activity is not an ending balance. |
 | 1305 Period Totals | Period/quarter/year labels and source/combined totals across the selected date range, including periods with no supplied activity. |
