@@ -60,7 +60,7 @@ Combined begins with CWID, Term, Recon Period and Journal Number, following the
 employee's Journal Lines Data layout. Feed blocks follow the first Workday
 source occurrence within each fiscal period; all Workday rows in the block come
 before its Banner rows. Banner rows without a Workday feed match follow last.
-Document and source selection statuses retain review warnings; the
+Period Totals and source selection statuses retain review warnings; the
 workbook does not include separate Verification or Exceptions tabs.
 Journal Number displays only a six- or seven-digit SIS Memo / Banner Feed
 Document posting code. CWIDs, manual memos and other reference formats leave
@@ -73,9 +73,9 @@ Combined's displayed Debit/Credit includes both summaries and their detail.
 | Sheet | Use |
 | --- | --- |
 | 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' original Debit/Credit remain visible for comparison; use Period Totals for totals without double-counting. |
-| 1305 Doc Recon | Union of feed documents from both sources, with separate debit/credit differences, row counts, calculated status, and editable Notes/Review Status. |
-| 1305 CWID Recon | Banner plus non-SIS Workday student activity by fiscal period. Sponsor account descriptions may supply the student's CWID. Missing/conflicting IDs are flagged; no SIS student allocation is invented. Net Period Activity is not an ending balance. |
-| 1305 Period Totals | Period/quarter/year labels and source/combined totals across the selected date range, including periods with no supplied activity. |
+| 1305 Doc Recon | Union of feed documents from both sources, with separate debit/credit differences and editable Notes. Quarter, source row counts and status columns are omitted. |
+| 1305 CWID Recon | Banner plus non-SIS Workday student activity by fiscal period. Total Debits/Credits explicitly label the sum of Banner and Other Workday amounts. Sponsor account descriptions may supply the student's CWID; no SIS student allocation is invented. Quarter, row counts and status columns are omitted. Net Period Activity is not an ending balance. |
+| 1305 Period Totals | Period/quarter/year labels and source/combined totals across the selected date range, including periods with no supplied activity. Retains Status and omits Document Exceptions. |
 | Workday Data / Banner Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
 
 CWIDs follow the supplied VBA rule: eight digits beginning with `10`, taken

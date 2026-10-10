@@ -25,6 +25,12 @@ COMBINED_COLUMN_ORDER = (7, 11, 1, 9, 6, 4, 13, 14, 12, 3, 0, 8, 10, 19)
 COMBINED_OUTPUT_HEADERS = [COMBINED_HEADERS[index] for index in COMBINED_COLUMN_ORDER]
 COMBINED_OUTPUT_HEADERS[2] = "Recon Period"
 COMBINED_OUTPUT_HEADERS[3] = "Journal Number"
+DOC_COLUMN_ORDER = (0, 1, 3, 4, 5, 6, 7, 8, 9, 13)
+CWID_COLUMN_ORDER = (0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 14)
+PERIOD_COLUMN_ORDER = (*range(15), 16)
+CWID_OUTPUT_HEADERS = [CWID_HEADERS[index] for index in CWID_COLUMN_ORDER]
+CWID_OUTPUT_HEADERS[7] = "Total Debits (Banner + Other Workday)"
+CWID_OUTPUT_HEADERS[8] = "Total Credits (Banner + Other Workday)"
 
 
 def combined_output_row(row: list[object]) -> list[object]:
@@ -101,11 +107,15 @@ def export_reconciliation(
             if shaded:
                 for cell in combined[number]:
                     cell.fill = grey
-        sheet("1305 Doc Recon", DOC_HEADERS, review.documents)
-        sheet("1305 CWID Recon", CWID_HEADERS, review.students)
-        sheet("1305 Period Totals", PERIOD_HEADERS, review.periods)
-        for name in ("1305 Combined", "1305 Doc Recon", "1305 CWID Recon"):
-            book[name].freeze_panes = "E2"
+        sheet("1305 Doc Recon", [DOC_HEADERS[index] for index in DOC_COLUMN_ORDER],
+              [[row[index] for index in DOC_COLUMN_ORDER] for row in review.documents])
+        sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS,
+              [[row[index] for index in CWID_COLUMN_ORDER] for row in review.students])
+        sheet("1305 Period Totals", [PERIOD_HEADERS[index] for index in PERIOD_COLUMN_ORDER],
+              [[row[index] for index in PERIOD_COLUMN_ORDER] for row in review.periods])
+        book["1305 Combined"].freeze_panes = "E2"
+        for name in ("1305 Doc Recon", "1305 CWID Recon"):
+            book[name].freeze_panes = "D2"
         book["1305 Period Totals"].freeze_panes = "D2"
         for source in review.sources:
             if any(len(values) > len(source.headers) for _, values in source.rows):

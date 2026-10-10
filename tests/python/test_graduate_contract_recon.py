@@ -116,6 +116,38 @@ class GraduateContractReconTests(unittest.TestCase):
         self.assertEqual([row[12] for row in result.documents], ["Missing Banner", "Missing Workday"])
         self.assertTrue(dict(result.verification)["Conclusion"].startswith("OPEN"))
 
+    def test_slim_review_sheets_keep_amounts_notes_and_clear_student_totals(self):
+        result = self.build(
+            [wd_row(60), wd_row(5, credit=2, memo="10000001 Manual", kind="Manual")],
+            [bn_row(60)])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                doc = book["1305 Doc Recon"]
+                self.assertEqual([cell.value for cell in doc[1]],
+                    ["Fiscal Year", "Period", "Feed Document", "Workday Debit", "Banner Debit",
+                     "Debit Difference", "Workday Credit", "Banner Credit", "Credit Difference", "Notes"])
+                self.assertEqual([cell.value for cell in doc[2]][3:9], [60, 60, 0, 0, 0, 0])
+                cwid = book["1305 CWID Recon"]
+                self.assertEqual([cell.value for cell in cwid[1]],
+                    ["Fiscal Year", "Period", "CWID", "Banner Debit", "Banner Credit",
+                     "Other Workday Debit", "Other Workday Credit", "Total Debits (Banner + Other Workday)",
+                     "Total Credits (Banner + Other Workday)", "Net Period Activity", "Notes / Explanation"])
+                self.assertEqual([cell.value for cell in cwid[2]][3:10], [60, 0, 5, 2, 65, 2, 63])
+                self.assertNotEqual(cwid["H2"].number_format, "General")
+                periods = book["1305 Period Totals"]
+                self.assertNotIn("Document Exceptions", [cell.value for cell in periods[1]])
+                self.assertEqual(periods.max_column, 16)
+                self.assertEqual(periods["P1"].value, "Status")
+                self.assertEqual(periods["L2"].value, 65)
+                self.assertEqual(periods["M2"].value, 2)
+                self.assertEqual(doc.freeze_panes, "D2")
+                self.assertEqual(cwid.freeze_panes, "D2")
+            finally:
+                book.close()
+
     def test_reversals_duplicates_and_manual_journals_preserve_raw_signs(self):
         result = self.build([wd_row(0, 25)], [bn_row(-10), bn_row(-10), bn_row(-5)])
         self.assertEqual(result.documents[0][12], "Amounts agree")
