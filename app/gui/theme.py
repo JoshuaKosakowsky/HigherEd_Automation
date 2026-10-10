@@ -116,6 +116,17 @@ def apply_theme(application: QApplication) -> None:
             border-radius: 6px; padding: 9px; selection-background-color: {BLASTER_BLUE};
             selection-color: {WHITE}; }}
         QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus {{ border: 2px solid {BLASTER_BLUE}; }}
+        /* Calendar navigation otherwise inherits dark text on Qt's blue header. */
+        QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {PALE_BLUE}; }}
+        QCalendarWidget QToolButton {{ background: {PALE_BLUE}; color: {DARK_BLUE};
+            border: none; border-radius: 4px; padding: 4px; }}
+        QCalendarWidget QToolButton:hover, QCalendarWidget QToolButton:pressed {{
+            background: {LIGHT_BLUE}; color: {DARK_BLUE}; }}
+        QCalendarWidget QMenu {{ background: {WHITE}; color: {TEXT}; }}
+        QCalendarWidget QMenu::item:selected {{ background: {BLASTER_BLUE}; color: {WHITE}; }}
+        QCalendarWidget QSpinBox {{ background: {WHITE}; color: {TEXT};
+            border: 1px solid {LIGHT_BLUE}; selection-background-color: {BLASTER_BLUE};
+            selection-color: {WHITE}; }}
         QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"] {{ border: 2px solid {RED_FLANNEL}; }}
         QFrame#fileInput {{ border: 1px dashed {LIGHT_BLUE}; border-radius: 8px; background: {PAGE}; }}
         QFrame#fileInput[dragging="true"] {{ border: 2px solid {BLASTER_BLUE}; background: {PALE_BLUE}; }}
