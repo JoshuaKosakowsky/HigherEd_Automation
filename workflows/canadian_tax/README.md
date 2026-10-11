@@ -9,7 +9,25 @@ restricts this workflow to Administrators, including when staff policies
 explicitly grant its workflow ID. The runner verifies administrator access too.
 
 Each run saves `tl11a_review.xlsx`, raw/prepared CSVs and `manifest.json` together.
-Open Summary for proposed paid USD/CAD amounts, Sessions for readable Banner
+The workbook opens on **Final**, following the original teaching workbook:
+charges and payments grouped by term/detail code, a separate non-qualified
+expense section, retained charges, reconciled eligible paid USD, and per-term
+CAD conversion. **CWID** provides the underlying candidate-term transactions
+with separate Charge, Payment and Balance columns, readable term labels, dates
+and transaction numbers. It includes all signed credits/reversals; only net-zero
+groups are omitted from Final. Banner fields not present in the extracts are
+not fabricated to fill the original template's wider source layout.
+
+Source charge/payment totals use candidate terms and may differ from funding
+allocated from other terms. They are reconciliation context, not tuition-paid
+totals. Final links eligible paid USD/CAD to the existing validated calculations,
+withholds amounts when checks require review, and shows payment effective dates
+alongside the documented annual rate. Per-term CAD figures round to cents; the
+final CAD total rounds the full USD amount once. Any difference appears on the
+rounding row. The original template's daily-rate values and incorrect USD label
+on its CAD total are not copied.
+
+Open Summary for the same proposed paid USD/CAD amounts, Sessions for readable Banner
 term labels, dates, credits and program codes, and Checks for unresolved items.
 Confirm full-time attendance and a qualifying degree/course in the editable
 confirmation columns on Sessions before certifying any form. These cells are
@@ -84,7 +102,9 @@ original extraction/rate timestamps remain in the audit record.
   throughout the calendar year.
 
 Financial results are a saved review snapshot, not a live Excel financial
-model. Re-run the workflow after correcting source records or configuration.
+model. Final contains native Excel subtotal/conversion formulas, but editing
+its ledger does not rerun payment allocation or eligibility validation. Re-run
+the workflow after correcting source records or configuration.
 Sequential Insights reads reflect warehouse data and are not guaranteed to
 represent one atomic/live Banner snapshot.
 

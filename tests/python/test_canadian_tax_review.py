@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -190,6 +191,108 @@ class TuitionReviewTests(unittest.TestCase):
                 archive.writestr("another/identity.csv", "not source data")
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 read_source_package(archive_path)
+
+    def test_manual_layout_distinguishes_charges_payments_and_paid_amount(self):
+        frames, manifest = sources()
+        report = self.review(frames, manifest)
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "review"
+            write_package(output, frames, manifest, report)
+            workbook = load_workbook(output / "tl11a_review.xlsx")
+            try:
+                self.assertEqual(workbook.sheetnames[0], "Final")
+                sheet = workbook["Final"]
+                self.assertIsNone(sheet["E2"].value)
+                labels = {row[0].value: row[0].row for row in sheet.iter_rows() if row[0].value is not None}
+                self.assertIn("Non-Qualified Educational Expenses (USD)", labels)
+                self.assertIn("Charges Less Excluded Fees (USD)", labels)
+                self.assertIn("Retained Charges Less Eligible Paid (USD)", labels)
+                paid_row = labels["Automated Eligible Paid Amount (USD)"]
+                self.assertIn("Summary!$B$6", sheet.cell(paid_row, 4).value)
+                self.assertEqual(workbook["Summary"]["B6"].value, 800)
+                source = workbook["CWID"]
+                self.assertEqual([c.value for c in source[1]][:6],
+                                 ["Detail Code", "Description", "Term", "Charge", "Payment", "Balance"])
+                self.assertEqual(source["D2"].value, 1000)
+                self.assertIsNone(source["E2"].value)
+                self.assertEqual(source["F2"].value, 200)
+                self.assertIsInstance(source["G2"].value, datetime)
+                self.assertIsNone(source["D5"].value)
+                self.assertEqual(source["E5"].value, 600)  # scholarship retained as payment
+            finally:
+                workbook.close()
+
+    def test_manual_source_keeps_offsets_while_final_omits_net_zero_groups(self):
+        frames, manifest = sources()
+        base = frames["transactions"].iloc[0].to_dict()
+        frames["transactions"] = pd.concat([frames["transactions"], pd.DataFrame([
+            {**base, "tran_number": 6, "detail_code": "ZERO", "amount_usd": "50", "stored_balance_usd": "50"},
+            {**base, "tran_number": 7, "detail_code": "ZERO", "amount_usd": "-50", "stored_balance_usd": "-50"},
+        ])], ignore_index=True)
+        complete(frames)
+        report = self.review(frames, manifest)
+        with TemporaryDirectory() as directory:
+            write_package(Path(directory) / "review", frames, manifest, report)
+            workbook = load_workbook(Path(directory) / "review/tl11a_review.xlsx")
+            try:
+                self.assertNotIn("ZERO", [c.value for c in workbook["Final"]["A"]])
+                self.assertEqual([c.value for c in workbook["CWID"]["A"]].count("ZERO"), 2)
+                self.assertEqual(workbook["Summary"]["B6"].value, 800)
+            finally:
+                workbook.close()
+
+    def test_manual_conversion_does_not_supply_cad_when_cross_year_review_is_required(self):
+        frames, manifest = sources()
+        frames["transactions"].loc[3, "effective_date"] = "2024-12-15"
+        report = self.review(frames, manifest)
+        with TemporaryDirectory() as directory:
+            write_package(Path(directory) / "review", frames, manifest, report)
+            workbook = load_workbook(Path(directory) / "review/tl11a_review.xlsx")
+            try:
+                sheet = workbook["Final"]
+                conversion_header = next(row[0].row for row in sheet.iter_rows() if row[0].value == "Eligible Paid (USD)")
+                self.assertIsNone(sheet.cell(conversion_header + 1, 4).value)
+                self.assertIn("12/15/2024", sheet.cell(conversion_header + 1, 5).value)
+                self.assertIsNone(workbook["Summary"]["B7"].value)
+                self.assertIn("Amounts pending review — see Checks", [c.value for c in sheet["A"]])
+            finally:
+                workbook.close()
+
+    def test_manual_cad_total_uses_final_rounding_not_sum_of_rounded_terms(self):
+        frames, manifest = sources()
+        base = frames["transactions"].iloc[0].to_dict()
+        frames["transactions"] = pd.DataFrame([
+            {**base, "tran_number": 1, "term_code": "202510", "term_description": "Spring 2025", "amount_usd": "0.01", "stored_balance_usd": "0"},
+            {**base, "tran_number": 2, "amount_usd": "0.01", "stored_balance_usd": "0"},
+            {**base, "tran_number": 3, "type_ind": "P", "detail_code": "SCH1", "amount_usd": "0.02", "stored_balance_usd": "0"},
+        ])
+        application = frames["payment_applications"].iloc[0].to_dict()
+        frames["payment_applications"] = pd.DataFrame([
+            {**application, "application_id": number, "payment_tran_number": 3,
+             "charge_tran_number": number, "application_amount_usd": "0.01"}
+            for number in (1, 2)
+        ])
+        for name in ("enrollment", "programs"):
+            frames[name] = pd.concat([frames[name]] * 2, ignore_index=True)
+            frames[name].loc[0, "term_code"] = "202510"
+        frames["enrollment"].loc[0, "term_description"] = "Spring 2025"
+        complete(frames)
+        report = self.review(frames, manifest)
+        self.assertEqual(report.paid_cad, Decimal("0.03"))
+        with TemporaryDirectory() as directory:
+            write_package(Path(directory) / "review", frames, manifest, report)
+            workbook = load_workbook(Path(directory) / "review/tl11a_review.xlsx")
+            try:
+                sheet = workbook["Final"]
+                labels = {row[0].value: row[0].row for row in sheet.iter_rows() if row[0].value is not None}
+                cad_formula = sheet.cell(labels["Review Amount on TL11A (CAD)"], 4).value
+                self.assertIn("Summary!$B$7", cad_formula)
+                self.assertNotIn("SUM(", cad_formula)
+                rounding_formula = sheet.cell(labels["Final Total Rounding Difference (CAD)"], 4).value
+                self.assertIn("ROUND(", rounding_formula)
+                self.assertIn("SUM(", rounding_formula)
+            finally:
+                workbook.close()
 
 
 class CanadianTaxAdapterTests(unittest.TestCase):
