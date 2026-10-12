@@ -16,6 +16,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from data_processing.shared.xlsx_output_format import apply_default_font, format_table_columns
 from shared.cancellation import CancellationToken
 from .reconciliation import COMBINED_HEADERS, CWID_HEADERS, DOC_HEADERS, PERIOD_HEADERS, Reconciliation
+from .worktags import StudentWorktags, WORKTAG_HEADERS
 
 
 EXCEL_MAX_ROWS = 1_048_576
@@ -53,6 +54,7 @@ def validate_output(path: Path, inputs: tuple[Path, ...] = ()) -> None:
 def export_reconciliation(
     review: Reconciliation, output: Path, *, app_version: str,
     banner_source: str, cancellation: CancellationToken | None = None,
+    worktags: StudentWorktags | None = None,
 ) -> None:
     validate_output(output)
     book = Workbook()
@@ -109,14 +111,21 @@ def export_reconciliation(
                     cell.fill = grey
         sheet("1305 Doc Recon", [DOC_HEADERS[index] for index in DOC_COLUMN_ORDER],
               [[row[index] for index in DOC_COLUMN_ORDER] for row in review.documents])
-        sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS,
-              [[row[index] for index in CWID_COLUMN_ORDER] for row in review.students])
+        sheet("1305 CWID Recon", [*CWID_OUTPUT_HEADERS, "Student Worktag"],
+              [[*[row[index] for index in CWID_COLUMN_ORDER],
+                worktags.by_cwid.get(str(row[3]), "No matching worktag") if worktags else ""]
+               for row in review.students])
         sheet("1305 Period Totals", [PERIOD_HEADERS[index] for index in PERIOD_COLUMN_ORDER],
               [[row[index] for index in PERIOD_COLUMN_ORDER] for row in review.periods])
         book["1305 Combined"].freeze_panes = "E2"
         for name in ("1305 Doc Recon", "1305 CWID Recon"):
             book[name].freeze_panes = "D2"
         book["1305 Period Totals"].freeze_panes = "D2"
+        if worktags:
+            worktag_sheet = sheet("Worktags", WORKTAG_HEADERS, worktags.rows)
+            for column in ("A", "B", "E"):
+                for cell in worktag_sheet[column][1:]:
+                    cell.number_format = "@"
         for source in review.sources:
             if any(len(values) > len(source.headers) for _, values in source.rows):
                 raise ValueError(f"{source.source} has source rows wider than the headers.")
@@ -124,10 +133,10 @@ def export_reconciliation(
                 [[number, *values, *([None] * (len(source.headers) - len(values))),
                   source.dispositions.get(number, "")] for number, values in source.rows])
         wrap_headers = {"Notes", "Notes / Explanation", "Description / Original Memo",
-                        "Status", "Memo / Feed Document", "Issue"}
+                        "Status", "Memo / Feed Document", "Issue", "Student Worktag"}
         for ws in book:
             for cell in ws[1]:
-                if cell.value in {"Notes", "Notes / Explanation", "Status", "Review Status"}:
+                if cell.value in {"Notes", "Notes / Explanation", "Status", "Review Status", "Student Worktag"}:
                     ws.column_dimensions[cell.column_letter].width = 45
             for row in ws.iter_rows(min_row=2):
                 lines = 1

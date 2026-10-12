@@ -32,10 +32,12 @@ ALIASES = {
     "amount": ("Amount",), "feed": ("Feed Document",), "feed_date": ("Feed Date",),
     "transaction": ("Transaction Number",), "term": ("Term",),
     "user": ("Transaction User", "Cashier User ID"),
+    "worktag_memo": ("Line Memo",), "worktags": ("Worktags",),
 }
 REQUIRED = {
     "Workday": ("date", "kind", "debit", "credit", "memo", "ledger"),
     "Banner": ("id", "description", "code", "amount", "feed", "feed_date"),
+    "Worktags": ("worktag_memo", "worktags"),
 }
 
 

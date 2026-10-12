@@ -134,7 +134,7 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertEqual([cell.value for cell in cwid[1]],
                     ["Fiscal Year", "Period", "CWID", "Banner Debit", "Banner Credit",
                      "Other Workday Debit", "Other Workday Credit", "Total Debits (Banner + Other Workday)",
-                     "Total Credits (Banner + Other Workday)", "Net Period Activity", "Notes / Explanation"])
+                     "Total Credits (Banner + Other Workday)", "Net Period Activity", "Notes / Explanation", "Student Worktag"])
                 self.assertEqual([cell.value for cell in cwid[2]][3:10], [60, 0, 5, 2, 65, 2, 63])
                 self.assertNotEqual(cwid["H2"].number_format, "General")
                 periods = book["1305 Period Totals"]

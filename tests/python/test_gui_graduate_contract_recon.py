@@ -11,6 +11,8 @@ from app.gui.models import WorkflowContext, WorkflowMode
 from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
 from shared.cancellation import CancellationToken, WorkflowCancelled
 from test_graduate_contract_recon import BN_HEADERS, banner_from_frame, bn_row, workday, wd_row
+from test_graduate_contract_worktags import worktag_source
+from openpyxl import load_workbook
 
 
 class GraduateContractServiceTests(unittest.TestCase):
@@ -43,6 +45,21 @@ class GraduateContractServiceTests(unittest.TestCase):
                 run_graduate_contract_recon(self.context(WorkflowMode.PRODUCTION))
         auth.assert_not_called()
         self.assertFalse(self.output.exists())
+
+    def test_worktag_upload_is_read_and_added_to_student_output(self):
+        self.inputs["worktag_file"] = Path(self.temp.name) / "tags.xlsx"
+        tags = worktag_source([["10000001 SU26 Synthetic", "Grant: 123456"]])
+        with patch("app.gui.services.graduate_contract_recon.read_source",
+                   side_effect=[self.sources[0], tags, self.sources[1]]) as reader:
+            result = run_graduate_contract_recon(self.context())
+        self.assertTrue(result.success)
+        self.assertEqual(reader.call_args_list[1].args, (self.inputs["worktag_file"], "Worktags"))
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book["1305 CWID Recon"]["L2"].value, "Grant: 123456")
+            self.assertIn("Worktags", book.sheetnames)
+        finally:
+            book.close()
 
     def test_admin_prod_uses_existing_parameterized_complete_extract(self):
         self.inputs["banner_source"] = "sql"

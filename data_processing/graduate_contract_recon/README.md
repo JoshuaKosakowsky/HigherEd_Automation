@@ -37,6 +37,22 @@ This is read-only in both source systems.
   periods, quarters, years, or multiple years. The fiscal calendar follows
   `shared/fiscal_period.ps1`: July P01, June P12, fiscal year named for its ending
   year, and three periods per fiscal quarter. Adjusting periods are not inferred.
+- **Grad Contract Worktag** optionally accepts the Workday **Find Journal Lines**
+  export. Only Line Memo and Worktags are used (M and O in the supplied layout;
+  mapping uses headers). Student CWIDs are eight digits beginning with `10`.
+  SU/FA/SP/WI plus two-digit year are separated into term code and description
+  (for example SU26 → Summer 2026). Names and unrelated source fields are omitted.
+  Only Grant, Project and Operating Account with six-digit numbers are kept;
+  leading zeros remain intact.
+- **Student Worktag** matches by CWID across the supplied worktag export. Every
+  distinct type/number is listed, separated by semicolons, so a first-match lookup
+  cannot hide multiple funding assignments. The Worktags tab preserves the term
+  for each assignment. This is student metadata, not allocation of amounts to
+  worktags; fiscal periods are not assumed to correspond to academic terms.
+  Upload the relevant worktag population. An unmatched CWID shows **No matching
+  worktag**; without the optional upload, the column stays blank. Repeated identical
+  CWID/term/tag assignments are collapsed. Ambiguous/missing CWIDs are not assigned;
+  malformed rows contribute to a worktag warning count in the completion message.
 
 ## Matching and output
 
@@ -79,6 +95,7 @@ Combined's displayed Debit/Credit includes both summaries and their detail.
 | 1305 CWID Recon | Banner plus non-SIS Workday student activity by fiscal period. Total Debits/Credits explicitly label the sum of Banner and Other Workday amounts. Sponsor account descriptions may supply the student's CWID; no SIS student allocation is invented. Quarter, row counts and status columns are omitted. Net Period Activity is not an ending balance. |
 | 1305 Period Totals | Period/quarter/year labels and source/combined totals across the selected date range, including periods with no supplied activity. Retains Status and omits Document Exceptions. |
 | Workday Data / Banner Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
+| Worktags (when uploaded) | Cleaned CWID, term code/description, worktag type and six-digit number. Only the requested metadata is retained. |
 
 CWIDs follow the supplied VBA rule: eight digits beginning with `10`, taken
 from the explicit ID or the leading description/memo token. A valid Banner

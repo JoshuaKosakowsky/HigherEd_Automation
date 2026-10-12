@@ -10,6 +10,7 @@ from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.graduate_contract_recon.export import export_reconciliation, validate_output
 from data_processing.graduate_contract_recon.reconciliation import reconcile
 from data_processing.graduate_contract_recon.sources import banner_from_frame, read_source
+from data_processing.graduate_contract_recon.worktags import prepare_worktags
 from shared.cancellation import WorkflowCancelled
 from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
 from shared.insights.config import load_department_profiles
@@ -29,7 +30,8 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     workday_path = Path(context.parameters["workday_file"])
     output = Path(context.parameters["output_file"])
     banner_path = Path(context.parameters["banner_file"]) if source == "manual" else None
-    validate_output(output, (workday_path,) + ((banner_path,) if banner_path else ()))
+    worktag_path = Path(context.parameters["worktag_file"]) if context.parameters.get("worktag_file") else None
+    validate_output(output, tuple(path for path in (workday_path, banner_path, worktag_path) if path))
     if context.cancellation:
         context.cancellation.check()
     if source == "sql":
@@ -42,6 +44,10 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
         raise ValueError("File upload reconciliation does not use TEST or PROD.")
     context.progress.report("Reading Workday source export")
     workday = read_source(workday_path, "Workday")
+    worktags = None
+    if worktag_path:
+        context.progress.report("Reading Grad Contract Worktag export")
+        worktags = prepare_worktags(read_source(worktag_path, "Worktags"))
     if source == "manual":
         context.progress.report("Reading Banner Insights download")
         banner = read_source(banner_path, "Banner")
@@ -82,7 +88,9 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     context.progress.report("Saving reconciliation workbook")
     export_reconciliation(review, output, app_version=APP_VERSION,
         banner_source="PROD Insights (API row-count checked)" if source == "sql" else "Uploaded Insights file (coverage unconfirmed)",
-        cancellation=context.cancellation)
+        cancellation=context.cancellation, worktags=worktags)
     return WorkflowResult(True,
         f"Created 1305 reconciliation: {len(review.documents):,} feed groups, {len(review.students):,} student groups, "
-        f"{len(review.issues):,} source warnings. Review document differences, period statuses and source selection statuses before completing the reconciliation.", output)
+        f"{len(review.issues):,} source warnings. "
+        + (f"{worktags.warning_count:,} worktag rows need review. " if worktags else "")
+        + "Review document differences, period statuses and source selection statuses before completing the reconciliation.", output)
