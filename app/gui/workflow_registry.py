@@ -163,7 +163,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 key="output_file",
                 label="Save refund review as",
                 kind=ParameterKind.OUTPUT_FILE,
-                default=(
+                default_factory=lambda: (
                     PROJECT_ROOT
                     / "data"
                     / "refunds"
@@ -273,7 +273,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 default="TPDT, TPLE, Z0LE",
                 help_text="Defaults to TPDT, TPLE and Z0LE for this reconciliation. Add, change or remove codes as needed; at least one code is required."),
             ParameterDefinition(key="output_file", label="Save reconciliation as", kind=ParameterKind.OUTPUT_FILE,
-                default=PROJECT_ROOT / "data" / f"1305_recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                default_factory=lambda: PROJECT_ROOT / "data" / f"1305_recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
                 help_text="Choose an existing approved output folder and a new filename. Source files and existing results are never overwritten."),
         ),

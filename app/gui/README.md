@@ -22,6 +22,10 @@ layout; accent colors remain limited.
 - `services/parameters.py` preserves input parsing independently of the toolkit.
 - Each run has a review dialog. TEST is preferred where modes exist; production
   displays the workflow warning and requires an explicit Run in production action.
+- Refund Review and 1305 Graduate Contract Recon generate their default output
+  timestamps when the form opens and refresh them before each **Review & run**,
+  including reruns on the same form. Manually entered or browsed output paths
+  are preserved. Filenames keep second precision and existing overwrite protections.
 - `services/execution.py` runs one task at a time on a worker thread and converts
   exceptions into staff-safe messages while preserving tracebacks in the log.
 - `shared/progress.py` supplies toolkit-independent progress updates;

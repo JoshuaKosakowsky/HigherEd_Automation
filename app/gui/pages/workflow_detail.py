@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -39,6 +40,7 @@ class WorkflowDetailPage(QScrollArea):
         self.active_context: WorkflowContext | None = None
         self.output_path: Path | None = None
         self.inputs = {}
+        self.generated_defaults: dict[str, str] = {}
         self.manual_banner_widgets = []
         self.sql_banner_widgets = []
         self.recon_source = None
@@ -68,6 +70,9 @@ class WorkflowDetailPage(QScrollArea):
             form_layout.addWidget(label("No files or additional inputs are needed. Review the details before running.", "muted"))
         input_groups = {}
         for parameter in definition.parameters:
+            if parameter.default_factory is not None:
+                parameter = replace(parameter, default=parameter.default_factory())
+                self.generated_defaults[parameter.key] = str(parameter.default)
             parameter_layout = form_layout
             if definition.workflow_id == "graduate_contract_recon":
                 group = ("Outputs" if parameter.key == "output_file" else
@@ -231,6 +236,17 @@ class WorkflowDetailPage(QScrollArea):
             widget.setVisible(not manual)
         self._update_production_warning()
 
+    def _refresh_output_defaults(self) -> None:
+        """Refresh generated filenames while preserving staff-selected paths."""
+        for parameter in self.definition.parameters:
+            if parameter.kind != ParameterKind.OUTPUT_FILE or parameter.default_factory is None:
+                continue
+            control = self.inputs[parameter.key]
+            if control.text() == self.generated_defaults[parameter.key]:
+                value = str(parameter.default_factory())
+                control.setText(value)
+                self.generated_defaults[parameter.key] = value
+
     def _parse_parameters(self) -> dict:
         values = {
             key: control.toPlainText() if isinstance(control, QPlainTextEdit) else control.text()
@@ -300,6 +316,7 @@ class WorkflowDetailPage(QScrollArea):
         if self.result_queue is not None or self.executor.is_running:
             return
         self.error.hide()
+        self._refresh_output_defaults()
         try:
             parameters = self._parse_parameters()
         except ValueError as error:

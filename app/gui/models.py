@@ -42,6 +42,7 @@ class ParameterDefinition:
     maximum: float | None = None
     file_types: tuple[tuple[str, str], ...] = ()
     default_extension: str = ""
+    default_factory: Callable[[], Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

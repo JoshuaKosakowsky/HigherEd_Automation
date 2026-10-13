@@ -11,6 +11,7 @@ import sys
 import time
 import unittest
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import PropertyMock, patch
 
@@ -96,6 +97,57 @@ class QtGuiTests(unittest.TestCase):
         window.show_home()
         window.current_page.search.setText("Refund")
         self.assertEqual(sum(not card.isHidden() for card, _ in window.current_page.cards), 1)
+
+    def test_timestamped_outputs_refresh_on_selection_review_and_rerun(self):
+        window = self.open_app()
+        for workflow_id in ("refund_review", "graduate_contract_recon"):
+            with self.subTest(workflow=workflow_id):
+                definition = get_workflow(workflow_id)
+                with patch("app.gui.workflow_registry.datetime") as clock:
+                    clock.now.return_value = datetime(2026, 10, 13, 9, 0, 0)
+                    window.show_workflow(definition)
+                    page = window.current_page
+                    self.assertTrue(page.inputs["output_file"].text().endswith("20261013_090000.xlsx"))
+                    for parameter in definition.parameters:
+                        if parameter.kind == ParameterKind.INPUT_FILE and parameter.required:
+                            source = self.root / f"{parameter.key}.xlsx"
+                            source.touch()
+                            page.inputs[parameter.key].setText(str(source))
+                    for minute in (1, 2):
+                        clock.now.return_value = datetime(2026, 10, 13, 9, minute, 0)
+                        results = queue.Queue()
+                        with patch.object(page, "_confirm", return_value=True) as confirmation, \
+                             patch.object(window.executor, "run_async", return_value=results) as run:
+                            page._run()
+                        context = run.call_args.args[1]
+                        output = context.parameters["output_file"]
+                        self.assertTrue(output.name.endswith(f"20261013_090{minute}00.xlsx"))
+                        self.assertEqual(confirmation.call_args.args[0].parameters["output_file"], output)
+                        self.assertEqual(page.inputs["output_file"].text(), str(output))
+                        results.put(WorkflowResult(True, "Done", output_path=output))
+                        page._poll_result()
+                        self.assertEqual(page.output_path, output)
+                    custom = self.root / "chosen-output.xlsx"
+                    page.inputs["output_file"].setText(str(custom))
+                    clock.now.return_value = datetime(2026, 10, 13, 10, 0, 0)
+                    with patch.object(page, "_confirm", return_value=False) as confirmation:
+                        page._run()
+                    self.assertEqual(confirmation.call_args.args[0].parameters["output_file"], custom)
+                    self.assertEqual(page.inputs["output_file"].text(), str(custom))
+
+    def test_fixed_output_default_is_preserved_on_review(self):
+        output = self.root / "fixed.xlsx"
+        definition = WorkflowDefinition(
+            "fixed", "Fixed", "Example", "Testing", lambda _: WorkflowResult(True, "Done"),
+            parameters=(ParameterDefinition("output_file", "Output", ParameterKind.OUTPUT_FILE, default=output),),
+        )
+        executor = WorkflowExecutor(logging.getLogger("test"), self.root / "log.txt")
+        page = WorkflowDetailPage(None, definition, executor, lambda: None)
+        with patch.object(page, "_confirm", return_value=False) as confirmation:
+            page._run()
+        self.assertEqual(confirmation.call_args.args[0].parameters["output_file"], output)
+        self.assertEqual(page.inputs["output_file"].text(), str(output))
+        page.close()
 
     def test_recon_has_one_card_and_admin_can_choose_sql(self):
         window = self.open_app()
