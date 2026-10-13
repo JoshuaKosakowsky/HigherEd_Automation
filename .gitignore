@@ -44,6 +44,11 @@ logs/**
 detail_codes.json
 data/canadian_tax/
 config/gui_access.json
+# Shared Bursar Office Calendar and local review copies contain staff assignments.
+operations_calendar*.json
+.operations_calendar*.json
+operations_calendar*.lock
+.operations_calendar.*.tmp
 
 # Allow public examples that belong to the application. The live GUI access
 # file is a private bootstrap/Mac-review copy. The live policy is stored in the

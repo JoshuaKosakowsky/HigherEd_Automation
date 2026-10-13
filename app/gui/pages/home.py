@@ -16,6 +16,8 @@ class HomePage(QScrollArea):
         user_first_name: str, profile_description: str | None = None,
         manage_access: Callable[[], None] | None = None,
         access_error: str | None = None,
+        calendar_summary: str | None = None,
+        open_calendar: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWidgetResizable(True)
@@ -30,6 +32,12 @@ class HomePage(QScrollArea):
         layout.addWidget(label("Choose a workflow. Review the details. Get back to your day.", "muted"))
         if profile_description:
             layout.addWidget(label(profile_description, "muted"))
+        if calendar_summary and open_calendar:
+            calendar_row = QHBoxLayout()
+            self.calendar_reminder = label(calendar_summary, "status")
+            calendar_row.addWidget(self.calendar_reminder, 1)
+            calendar_row.addWidget(button("Open Bursar Office Calendar", open_calendar))
+            layout.addLayout(calendar_row)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search your workflows…")
         self.search.setAccessibleName("Search workflows")

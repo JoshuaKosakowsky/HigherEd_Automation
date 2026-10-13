@@ -17,6 +17,13 @@ layout; accent colors remain limited.
 - `pages/` renders searchable workflow cards, registry-driven forms, and staff administration.
 - `theme.py` provides the Mines palette, a navy navigation sidebar, and light workspace.
 - Staff profiles use a single editable form with a view dropdown; permissions use checkboxes.
+- `services/operations_calendar.py` owns recurrence, date exceptions, staffing
+  roles and optional people within them, visual reminders, and admin-checked shared persistence.
+- `pages/operations_calendar.py` renders the Gantt timeline and calendar editors.
+  Admins open **Bursar Office Calendar** from the sidebar and see a reminder summary
+  on the home page. **Affects** lists the existing Staff access views with their
+  users underneath; select a whole role or specific people without creating new
+  permission views. See [Bursar Office Calendar instructions](operations_calendar.md).
 - file inputs accept direct paths, Browse selection, and native Explorer/Finder
   drops, using Qt's native local-file URL support. No separate drop package is required.
 - `services/parameters.py` preserves input parsing independently of the toolkit.

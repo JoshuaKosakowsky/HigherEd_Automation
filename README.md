@@ -83,6 +83,14 @@ step requires confirmation that TSPLOAD applied successfully in Banner. File inp
 a typed or pasted path, the Browse button, or a file dropped from Explorer.
 Existing command-line workflows remain available.
 
+Admins also have a shared **Bursar Office Calendar** with a Gantt timeline for
+recurring deadlines and linked coverage periods. Items apply to Everyone or
+existing staff roles, with optional selections of individual people beneath
+each role. Unassigned roles or people remain visible.
+Weekend adjustments are proposed for admin review, and reminders
+appear inside the app without task completion tracking. See the
+[Bursar Office Calendar instructions](app/gui/operations_calendar.md).
+
 **1305 Graduate Contract Recon** is available to the **Grad Contract Sponsor**
 view through uploaded Workday and Banner Insights exports. Administrators can
 also extract Banner activity directly from PROD Insights. The workflow produces

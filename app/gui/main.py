@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -21,6 +22,10 @@ from app.gui.pages.home import HomePage
 from app.gui.pages.connections import ConnectionsPage
 from app.gui.pages.workflow_detail import WorkflowDetailPage
 from app.gui.pages.updates import UpdatesPage
+from app.gui.pages.operations_calendar import OperationsCalendarPage
+from app.gui.services.operations_calendar import (
+    CalendarError, CalendarStore, reminder_entries, unassigned_targets,
+)
 from app.gui.services.updates import RepositoryUpdater
 from app.gui.services.access import (
     AccessConfiguration, AccessConfigurationError, create_shared_access_configuration,
@@ -98,7 +103,8 @@ class AutomationApplication(QMainWindow):
         self.home_button = button("Workflows", self.show_home, "nav")
         self.access_button = button("Staff access", self.show_access_management, "nav")
         self.connections_button = button("Connections", self.show_connections, "nav")
-        for control in (self.home_button, self.connections_button, self.access_button):
+        self.calendar_button = button("Bursar Office Calendar", self.show_operations_calendar, "nav")
+        for control in (self.home_button, self.calendar_button, self.connections_button, self.access_button):
             control.setCheckable(True)
             navigation.addWidget(control)
         navigation.addStretch()
@@ -165,6 +171,7 @@ class AutomationApplication(QMainWindow):
         )
         self.access_button.setVisible(admin)
         self.connections_button.setVisible(admin)
+        self.calendar_button.setVisible(admin)
         self.identity.setText(self.profile_description or "No view assigned")
 
     def _show(self, page: QWidget) -> None:
@@ -184,10 +191,26 @@ class AutomationApplication(QMainWindow):
         self.home_button.setChecked(True)
         self.access_button.setChecked(False)
         self.connections_button.setChecked(False)
+        self.calendar_button.setChecked(False)
+        calendar_summary = None
+        if self.access_configuration and self.access_configuration.is_administrator(self.user_login):
+            try:
+                store = CalendarStore(self.access_config_path, self.user_login)
+                data = store.load()
+                entries = reminder_entries(data, self.access_configuration, date.today())
+                proposed = {(row.occurrence.event.id, row.occurrence.nominal)
+                            for row, _ in entries if row.occurrence.needs_review}
+                vacant = {name for row, _ in entries for name in
+                          unassigned_targets(row.audience, self.access_configuration)}
+                calendar_summary = (f"Bursar Office Calendar: {len(entries)} date / coverage reminders · "
+                                    f"{len(proposed)} dates need review · {len(vacant)} unassigned")
+            except (CalendarError, AccessConfigurationError, OSError, MinesPathError):
+                calendar_summary = "Bursar Office Calendar is unavailable. Open it to check access or synchronization."
         self._show(HomePage(
             self.content, self.visible_workflows, self.show_workflow,
             user_first_name=self.user_first_name, profile_description=self.profile_description,
             access_error=self.access_error,
+            calendar_summary=calendar_summary, open_calendar=self.show_operations_calendar,
         ))
 
     def show_access_management(self) -> None:
@@ -200,6 +223,7 @@ class AutomationApplication(QMainWindow):
         self.home_button.setChecked(False)
         self.access_button.setChecked(True)
         self.connections_button.setChecked(False)
+        self.calendar_button.setChecked(False)
         self._show(AccessManagementPage(
             self.content, configuration=self.access_configuration,
             config_path=self.access_config_path, current_login=self.user_login,
@@ -211,6 +235,20 @@ class AutomationApplication(QMainWindow):
         return bool(self.access_configuration and
                     self.access_configuration.is_administrator(self.user_login))
 
+    def show_operations_calendar(self) -> None:
+        if self._busy or self.executor.is_running or self._restart_required:
+            return
+        if not self._authorize_connections():
+            self.show_home(reload=False)
+            return
+        self.home_button.setChecked(False)
+        self.access_button.setChecked(False)
+        self.connections_button.setChecked(False)
+        self.calendar_button.setChecked(True)
+        self._show(OperationsCalendarPage(
+            self.content, CalendarStore(self.access_config_path, self.user_login),
+        ))
+
     def show_connections(self) -> None:
         if self._busy or self.executor.is_running or self._restart_required:
             return
@@ -220,6 +258,7 @@ class AutomationApplication(QMainWindow):
         self.home_button.setChecked(False)
         self.access_button.setChecked(False)
         self.connections_button.setChecked(True)
+        self.calendar_button.setChecked(False)
         page = ConnectionsPage(self.content, self.executor, self._authorize_connections)
         page.busy_changed.connect(self._set_busy)
         self._show(page)
@@ -235,6 +274,7 @@ class AutomationApplication(QMainWindow):
     def show_workflow(self, definition: WorkflowDefinition) -> None:
         if self._busy or self.executor.is_running or self._restart_required or not self._authorize_workflow(definition):
             return
+        self.calendar_button.setChecked(False)
         page = WorkflowDetailPage(
             self.content, definition, self.executor, self.show_home,
             authorize=lambda: self._authorize_workflow(definition),
@@ -247,7 +287,7 @@ class AutomationApplication(QMainWindow):
     def show_updates(self) -> None:
         if self._busy or self.executor.is_running or self._restart_required:
             return
-        for control in (self.home_button, self.access_button, self.connections_button):
+        for control in (self.home_button, self.access_button, self.connections_button, self.calendar_button):
             control.setChecked(False)
         page = UpdatesPage(self.content, RepositoryUpdater(PROJECT_ROOT), self.close)
         page.busy_changed.connect(self._set_busy)
@@ -263,7 +303,7 @@ class AutomationApplication(QMainWindow):
         self._busy = busy
         if not busy and self._close_after_cancel:
             QTimer.singleShot(0, self.close)
-        for control in (self.home_button, self.access_button, self.connections_button, self.updates_button):
+        for control in (self.home_button, self.access_button, self.connections_button, self.calendar_button, self.updates_button):
             control.setEnabled(not busy and not self._restart_required)
 
     def _open_logs(self) -> None:
