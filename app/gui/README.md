@@ -216,12 +216,17 @@ limits, permissions, and first-run validation.
 document, CWID, period and combined activity views, plus the original source tabs.
 The **Grad Contract Sponsor** view receives this workflow with uploads only;
 administrators can also select **Run SQL from PROD Insights** for Banner.
-Workday always requires an uploaded export. Dates are inclusive calendar inputs.
+Workday uploads are grouped together in a pale-blue section before Banner data.
+Workday always requires an uploaded export.
 the optional **Grad Contract Worktag** upload reads Find Journal Lines to add a
 cleaned Worktags tab and Student Worktag column matched by CWID. Multiple distinct
 worktags are retained; names and unrelated export columns are discarded.
-Detail codes default to **TPDT, TPLE, Z0LE** and remain editable. At least one
-code is required. The combined tab shows Workday rows above matching Banner
+Inclusive dates and detail codes appear only for **Run SQL from PROD Insights**.
+SQL detail codes default to **TPDT, TPLE, Z0LE** and remain editable; at least one
+code is required. File upload mode uses all valid Banner codes and the dates
+contained in the supplied exports; hidden SQL settings do not filter uploads.
+Upload both financial exports for the same intended scope.
+The combined tab shows Workday rows above matching Banner
 detail. Period Totals counts matched activity once; Combined displays both
 sources' amounts for review. Worksheets
 are plain ranges without Excel Tables, and existing files are not overwritten.

@@ -189,6 +189,11 @@ class QtGuiTests(unittest.TestCase):
         self.assertFalse(page.inputs["worktag_file"].isHidden())
         self.assertEqual(page.mode.count(), 0)
         self.assertTrue(page.inputs["start_date"].calendarPopup())
+        for key in ("start_date", "end_date", "detail_codes"):
+            self.assertTrue(page.inputs[key].isHidden())
+        self.assertEqual(page.inputs["workday_file"].parentWidget(), page.inputs["worktag_file"].parentWidget())
+        self.assertEqual(page.inputs["workday_file"].parentWidget().objectName(), "workdayInputs")
+        self.assertEqual(page.inputs["banner_file"].parentWidget().objectName(), "bannerInputs")
         self.assertTrue(page.production_warning.isHidden())
 
     def test_admin_1305_offers_upload_and_prod_without_optional_banner_file(self):
@@ -198,7 +203,11 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(page.inputs["detail_codes"].text(), "TPDT, TPLE, Z0LE")
         self.assertFalse(page.inputs["detail_codes"].isReadOnly())
         self.assertEqual(page.recon_source.count(), 2)
+        for key in ("start_date", "end_date", "detail_codes"):
+            self.assertTrue(page.inputs[key].isHidden())
         page.recon_source.setCurrentIndex(page.recon_source.findData("sql"))
+        for key in ("start_date", "end_date", "detail_codes"):
+            self.assertFalse(page.inputs[key].isHidden())
         self.assertTrue(page.inputs["banner_file"].isHidden())
         self.assertFalse(page.inputs["workday_file"].isHidden())
         self.assertFalse(page.inputs["worktag_file"].isHidden())
@@ -218,6 +227,16 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(values["banner_source"], "sql")
         self.assertNotIn("banner_file", values)
         self.assertRegex(values["start_date"], r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        page.recon_source.setCurrentIndex(page.recon_source.findData("manual"))
+        for key in ("start_date", "end_date", "detail_codes"):
+            self.assertTrue(page.inputs[key].isHidden())
+        self.assertFalse(page.inputs["banner_file"].isHidden())
+        bn = self.root / "synthetic_banner.xlsx"; bn.touch()
+        page.inputs["banner_file"].editor.setText(str(bn))
+        page.inputs["detail_codes"].setText("")
+        manual_values = page._parse_parameters()
+        for key in ("start_date", "end_date", "detail_codes"):
+            self.assertNotIn(key, manual_values)
 
     def test_staff_view_and_missing_policy_fail_closed(self):
         window = self.open_app("STAFF")

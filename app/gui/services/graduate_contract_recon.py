@@ -9,7 +9,7 @@ from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.graduate_contract_recon.export import export_reconciliation, validate_output
 from data_processing.graduate_contract_recon.reconciliation import reconcile
-from data_processing.graduate_contract_recon.sources import banner_from_frame, read_source
+from data_processing.graduate_contract_recon.sources import banner_from_frame, read_source, uploaded_scope
 from data_processing.graduate_contract_recon.worktags import prepare_worktags
 from shared.cancellation import WorkflowCancelled
 from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
@@ -26,7 +26,7 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     parameters = BannerActivityParameters.from_inputs(
         context.parameters.get("start_date"), context.parameters.get("end_date"),
         context.parameters.get("detail_codes"),
-    )
+    ) if source == "sql" else None
     workday_path = Path(context.parameters["workday_file"])
     output = Path(context.parameters["output_file"])
     banner_path = Path(context.parameters["banner_file"]) if source == "manual" else None
@@ -51,6 +51,7 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     if source == "manual":
         context.progress.report("Reading Banner Insights download")
         banner = read_source(banner_path, "Banner")
+        parameters = uploaded_scope(workday, banner)
     else:
         context.progress.report("Connecting to PROD Insights — complete browser sign-in if prompted")
         # Preserve the established auth boundary: exception chains can include

@@ -229,6 +229,34 @@ class Issue:
     issue: str
 
 
+def uploaded_scope(workday: SourceData, banner: SourceData) -> BannerActivityParameters:
+    """Use the files' dates and codes instead of hidden extraction defaults."""
+    dates = []
+    codes = set()
+    for source in (workday, banner):
+        for _, values in source.rows:
+            if source.source == "Workday":
+                if not re.match(r"^1305(?:\s|:|$)", text(source.value(values, "ledger"))):
+                    continue
+                date_field = "date"
+            else:
+                code = text(source.value(values, "code")).upper()
+                if re.fullmatch(r"[A-Z0-9]{4}", code) is None:
+                    continue
+                codes.add(code)
+                date_field = "feed_date"
+            try:
+                dates.append(parse_date(source.value(values, date_field)))
+            except (ValueError, TypeError, OverflowError):
+                # Invalid rows still receive the normal source review flags.
+                continue
+    if not codes:
+        raise ValueError("Banner upload contains no valid detail codes. Upload a populated Banner activity export.")
+    if not dates:
+        raise ValueError("Uploads contain no valid accounting/feed dates. Check the source exports.")
+    return BannerActivityParameters(min(dates), max(dates), tuple(sorted(codes)))
+
+
 def prepare_source(
     source: SourceData, parameters: BannerActivityParameters,
 ) -> tuple[list[Transaction], list[Issue]]:

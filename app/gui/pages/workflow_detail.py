@@ -9,7 +9,7 @@ from typing import Callable
 from PySide6.QtCore import QDate, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QLineEdit, QMessageBox, QPlainTextEdit,
+    QFrame, QLineEdit, QMessageBox, QPlainTextEdit,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -40,6 +40,7 @@ class WorkflowDetailPage(QScrollArea):
         self.output_path: Path | None = None
         self.inputs = {}
         self.manual_banner_widgets = []
+        self.sql_banner_widgets = []
         self.recon_source = None
         self.refund_source = None
         self.textbook_step = None
@@ -65,9 +66,31 @@ class WorkflowDetailPage(QScrollArea):
         ))
         if not definition.parameters:
             form_layout.addWidget(label("No files or additional inputs are needed. Review the details before running.", "muted"))
+        input_groups = {}
         for parameter in definition.parameters:
+            parameter_layout = form_layout
+            if definition.workflow_id == "graduate_contract_recon" and parameter.key != "output_file":
+                group = "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner"
+                if group not in input_groups:
+                    frame = QFrame()
+                    frame.setObjectName("workdayInputs" if group == "Workday" else "bannerInputs")
+                    group_layout = QVBoxLayout(frame)
+                    group_layout.setContentsMargins(18, 16, 18, 16)
+                    group_layout.setSpacing(10)
+                    group_layout.addWidget(label("Workday uploads" if group == "Workday" else "Banner data", "section"))
+                    form_layout.addWidget(frame)
+                    input_groups[group] = group_layout
+                    if group == "Banner":
+                        group_layout.addWidget(label("Banner data source", "field"))
+                        self.recon_source = QComboBox()
+                        self.recon_source.setAccessibleName("Banner data source")
+                        self.recon_source.addItem("Upload Banner Insights file", MANUAL_SOURCE)
+                        if is_administrator:
+                            self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
+                        group_layout.addWidget(self.recon_source)
+                parameter_layout = input_groups[group]
             field_label = label(parameter.label, "field")
-            form_layout.addWidget(field_label)
+            parameter_layout.addWidget(field_label)
             if parameter.kind in (
                 ParameterKind.INPUT_FILE, ParameterKind.MULTI_INPUT_FILE, ParameterKind.OUTPUT_FILE
             ):
@@ -87,29 +110,25 @@ class WorkflowDetailPage(QScrollArea):
                 field_label.setBuddy(control)
             control.setAccessibleName(parameter.label)
             self.inputs[parameter.key] = control
-            form_layout.addWidget(control)
+            parameter_layout.addWidget(control)
+            if self._is_sql_source_parameter(parameter.key):
+                self.sql_banner_widgets.extend((field_label, control))
             if self._is_manual_source_parameter(parameter.key):
                 self.manual_banner_widgets.extend((field_label, control))
             if parameter.help_text:
                 help_label = label(parameter.help_text, "muted")
-                form_layout.addWidget(help_label)
+                parameter_layout.addWidget(help_label)
+                if self._is_sql_source_parameter(parameter.key):
+                    self.sql_banner_widgets.append(help_label)
                 if self._is_manual_source_parameter(parameter.key):
                     self.manual_banner_widgets.append(help_label)
-            form_layout.addSpacing(8)
+            if not self._is_sql_source_parameter(parameter.key):
+                parameter_layout.addSpacing(8)
             if parameter.key == "brokers_file" and definition.workflow_id == "textbook_recon_manual":
                 form_layout.addWidget(label("Banner data source", "field"))
                 self.recon_source = QComboBox()
                 self.recon_source.setAccessibleName("Banner data source")
                 self.recon_source.addItem("Upload BOOK/FRST files manually", MANUAL_SOURCE)
-                if is_administrator:
-                    self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
-                form_layout.addWidget(self.recon_source)
-                form_layout.addSpacing(8)
-            if parameter.key == "workday_file" and definition.workflow_id == "graduate_contract_recon":
-                form_layout.addWidget(label("Banner data source", "field"))
-                self.recon_source = QComboBox()
-                self.recon_source.setAccessibleName("Banner data source")
-                self.recon_source.addItem("Upload Banner Insights file", MANUAL_SOURCE)
                 if is_administrator:
                     self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
                 form_layout.addWidget(self.recon_source)
@@ -199,10 +218,16 @@ class WorkflowDetailPage(QScrollArea):
             (self._source_control is not None and self._source_control.currentData() == SQL_SOURCE)
         )
 
+    def _is_sql_source_parameter(self, key: str) -> bool:
+        return self.definition.workflow_id == "graduate_contract_recon" and key in {
+            "start_date", "end_date", "detail_codes"}
+
     def _update_source(self) -> None:
         manual = self._source_control.currentData() == MANUAL_SOURCE
         for widget in self.manual_banner_widgets:
             widget.setVisible(manual)
+        for widget in self.sql_banner_widgets:
+            widget.setVisible(not manual)
         self._update_production_warning()
 
     def _parse_parameters(self) -> dict:
@@ -216,6 +241,9 @@ class WorkflowDetailPage(QScrollArea):
             if source == SQL_SOURCE:
                 definitions = tuple(parameter for parameter in definitions
                                     if not self._is_manual_source_parameter(parameter.key))
+            else:
+                definitions = tuple(parameter for parameter in definitions
+                                    if not self._is_sql_source_parameter(parameter.key))
             parsed = parse_parameters(definitions, values)
             parsed["refund_source" if self.refund_source is not None else "banner_source"] = source
             return parsed

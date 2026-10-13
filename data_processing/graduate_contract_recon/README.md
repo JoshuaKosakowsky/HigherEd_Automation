@@ -26,14 +26,22 @@ This is read-only in both source systems.
   does not replace the transaction Description. Additional source columns stay
   in the raw source tab. Legacy header layouts are accepted internally, but the
   staff form advertises only the Insights download.
-- Enter **inclusive** start/end dates and at least one approved detail code.
+- Workday uploads (1305 export and optional Grad Contract Worktag) are grouped
+  together in a pale-blue section, followed by the Banner source section.
+- **Run SQL from PROD Insights** shows inclusive start/end dates and detail codes.
   The 1305 workflow prepopulates **TPDT, TPLE, Z0LE**. Reviewers can add, change
   or remove codes for the reconciliation; at least one code is required.
   These are editable workflow defaults, not an inferred ledger mapping.
   Workday is restricted to
   ledger account 1305. The two sources use Accounting Date and Feed Date
   respectively. Feed timing differences remain review items.
-- Dates default to the previous calendar month. Supply actual boundaries for
+- **Upload Banner Insights file** hides and ignores extraction dates/codes.
+  Upload complete exports for the same intended scope. The reconciliation uses
+  all valid detail codes in the Banner upload and the earliest/latest valid
+  dates across Workday 1305 and Banner rows. It does not silently apply prior SQL
+  selections or previous-month defaults. Invalid source rows still require review;
+  different source coverage remains visible in document/period differences.
+- SQL dates default to the previous calendar month. Supply actual boundaries for
   periods, quarters, years, or multiple years. The fiscal calendar follows
   `shared/fiscal_period.ps1`: July P01, June P12, fiscal year named for its ending
   year, and three periods per fiscal quarter. Adjusting periods are not inferred.

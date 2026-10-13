@@ -35,6 +35,24 @@ class GraduateContractServiceTests(unittest.TestCase):
         self.assertTrue(self.output.is_file())
         auth.assert_not_called()
 
+    def test_upload_scope_uses_file_dates_and_all_codes_not_hidden_inputs(self):
+        self.inputs.update(start_date="invalid", end_date="invalid", detail_codes="")
+        sources = [workday([wd_row(day="2025-07-15")]),
+                   banner_from_frame(pd.DataFrame([bn_row(day="2025-07-15", code="HLTH")], columns=BN_HEADERS))]
+        with patch("app.gui.services.graduate_contract_recon.read_source", side_effect=sources), patch(
+            "app.gui.services.graduate_contract_recon.build_authenticated_client") as auth:
+            result = run_graduate_contract_recon(self.context())
+        self.assertTrue(result.success)
+        auth.assert_not_called()
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book["1305 Doc Recon"]["E2"].value, 60)
+            self.assertEqual(book["1305 Period Totals"]["A2"].value, "FY2026")
+            self.assertEqual(book["1305 Period Totals"]["B2"].value, "P01")
+            self.assertEqual(sources[1].dispositions[2], "Selected")
+        finally:
+            book.close()
+
     def test_non_admin_cannot_forge_prod_source(self):
         self.inputs["banner_source"] = "sql"
         with patch("app.gui.services.graduate_contract_recon.get_shared_gui_access_path", return_value=Path("synthetic")), patch(
@@ -82,9 +100,11 @@ class GraduateContractServiceTests(unittest.TestCase):
     def test_invalid_codes_output_or_mode_stops_before_authentication(self):
         with patch("app.gui.services.graduate_contract_recon.build_authenticated_client") as auth:
             self.inputs["detail_codes"] = ""
+            self.inputs["banner_source"] = "sql"
             with self.assertRaises(ValueError):
                 run_graduate_contract_recon(self.context())
             self.inputs["detail_codes"] = "TPDT"
+            self.inputs["banner_source"] = "manual"
             with self.assertRaisesRegex(ValueError, "does not use TEST or PROD"):
                 run_graduate_contract_recon(self.context(WorkflowMode.PRODUCTION))
             self.output.write_bytes(b"existing")

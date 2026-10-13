@@ -16,7 +16,7 @@ from openpyxl import Workbook, load_workbook
 from data_processing.graduate_contract_recon.export import export_reconciliation
 from data_processing.graduate_contract_recon.reconciliation import reconcile
 from data_processing.graduate_contract_recon.sources import (
-    SourceData, banner_from_frame, fiscal_scope, money, read_source,
+    SourceData, banner_from_frame, fiscal_scope, money, read_source, uploaded_scope,
 )
 from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.insights.banner_activity import BannerActivityParameters
@@ -252,6 +252,19 @@ class GraduateContractReconTests(unittest.TestCase):
 
 
 class GraduateContractSourceTests(unittest.TestCase):
+    def test_uploaded_scope_includes_invalid_amount_dates_and_all_valid_codes(self):
+        wd = workday([wd_row(debit="bad", day="2026-07-01"), wd_row(day="2026-09-30")])
+        outside = wd_row(day="2020-01-01"); outside[2] = "11305 Other"
+        wd.rows.append((4, outside))
+        bn = banner_from_frame(pd.DataFrame([bn_row(code="HLTH"), bn_row(code="TPDT", day="invalid")], columns=BN_HEADERS))
+        scope = uploaded_scope(wd, bn)
+        self.assertEqual(scope.start_date, date(2026, 7, 1))
+        self.assertEqual(scope.end_date, date(2026, 9, 30))
+        self.assertEqual(scope.detail_codes, ("HLTH", "TPDT"))
+        result = reconcile(wd, bn, scope)
+        self.assertTrue(any(issue.issue.startswith("Invalid amount") for issue in result.issues))
+        self.assertTrue(any(issue.issue.startswith("Invalid source date") for issue in result.issues))
+
     def test_incorrect_worksheet_dimensions_do_not_truncate_headers_or_records(self):
         for source_name, headers, rows in (
             ("Workday", WD_HEADERS, [wd_row(debit=60), wd_row(debit=90)]),
