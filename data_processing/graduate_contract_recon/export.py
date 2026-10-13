@@ -115,8 +115,8 @@ def export_reconciliation(
               [[*[row[index] for index in CWID_COLUMN_ORDER],
                 worktags.by_cwid.get(str(row[3]), "No matching worktag") if worktags else ""]
                for row in review.students])
-        sheet("1305 Period Totals", [PERIOD_HEADERS[index] for index in PERIOD_COLUMN_ORDER],
-              [[row[index] for index in PERIOD_COLUMN_ORDER] for row in review.periods])
+        sheet("1305 Period Totals", [*[PERIOD_HEADERS[index] for index in PERIOD_COLUMN_ORDER[:-1]], "Notes"],
+              [[*[row[index] for index in PERIOD_COLUMN_ORDER[:-1]], ""] for row in review.periods])
         book["1305 Combined"].freeze_panes = "E2"
         for name in ("1305 Doc Recon", "1305 CWID Recon"):
             book[name].freeze_panes = "D2"

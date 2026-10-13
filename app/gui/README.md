@@ -217,6 +217,8 @@ document, CWID, period and combined activity views, plus the original source tab
 The **Grad Contract Sponsor** view receives this workflow with uploads only;
 administrators can also select **Run SQL from PROD Insights** for Banner.
 Workday uploads are grouped together in a pale-blue section before Banner data.
+The form is titled **Inputs**, with the save location in a separate **Outputs**
+section. Period Totals includes a blank **Notes** column for staff comments.
 Workday always requires an uploaded export.
 the optional **Grad Contract Worktag** upload reads Find Journal Lines to add a
 cleaned Worktags tab and Student Worktag column matched by CWID. Multiple distinct

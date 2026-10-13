@@ -94,4 +94,4 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
         f"Created 1305 reconciliation: {len(review.documents):,} feed groups, {len(review.students):,} student groups, "
         f"{len(review.issues):,} source warnings. "
         + (f"{worktags.warning_count:,} worktag rows need review. " if worktags else "")
-        + "Review document differences, period statuses and source selection statuses before completing the reconciliation.", output)
+        + "Review document differences, period totals and source selection statuses before completing the reconciliation.", output)

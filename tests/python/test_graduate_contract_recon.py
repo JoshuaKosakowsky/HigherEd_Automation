@@ -140,7 +140,9 @@ class GraduateContractReconTests(unittest.TestCase):
                 periods = book["1305 Period Totals"]
                 self.assertNotIn("Document Exceptions", [cell.value for cell in periods[1]])
                 self.assertEqual(periods.max_column, 16)
-                self.assertEqual(periods["P1"].value, "Status")
+                self.assertEqual(periods["P1"].value, "Notes")
+                self.assertNotIn("Status", [cell.value for cell in periods[1]])
+                self.assertTrue(all(cell.value in (None, "") for cell in periods["P"][1:]))
                 self.assertEqual(periods["L2"].value, 65)
                 self.assertEqual(periods["M2"].value, 2)
                 self.assertEqual(doc.freeze_panes, "D2")

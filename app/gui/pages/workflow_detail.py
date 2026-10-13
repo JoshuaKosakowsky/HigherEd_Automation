@@ -62,22 +62,23 @@ class WorkflowDetailPage(QScrollArea):
         layout.addWidget(label("01  INPUTS     /     02  REVIEW & RUN     /     03  RESULTS", "eyebrow"))
         self.form, form_layout = card()
         form_layout.addWidget(label(
-            "Prepare your inputs" if definition.parameters else "Ready to set up", "section"
+            "Inputs" if definition.parameters else "Ready to set up", "section"
         ))
         if not definition.parameters:
             form_layout.addWidget(label("No files or additional inputs are needed. Review the details before running.", "muted"))
         input_groups = {}
         for parameter in definition.parameters:
             parameter_layout = form_layout
-            if definition.workflow_id == "graduate_contract_recon" and parameter.key != "output_file":
-                group = "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner"
+            if definition.workflow_id == "graduate_contract_recon":
+                group = ("Outputs" if parameter.key == "output_file" else
+                         "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner")
                 if group not in input_groups:
                     frame = QFrame()
-                    frame.setObjectName("workdayInputs" if group == "Workday" else "bannerInputs")
+                    frame.setObjectName({"Workday": "workdayInputs", "Banner": "bannerInputs", "Outputs": "workflowOutputs"}[group])
                     group_layout = QVBoxLayout(frame)
                     group_layout.setContentsMargins(18, 16, 18, 16)
                     group_layout.setSpacing(10)
-                    group_layout.addWidget(label("Workday uploads" if group == "Workday" else "Banner data", "section"))
+                    group_layout.addWidget(label({"Workday": "Workday uploads", "Banner": "Banner data", "Outputs": "Outputs"}[group], "section"))
                     form_layout.addWidget(frame)
                     input_groups[group] = group_layout
                     if group == "Banner":
