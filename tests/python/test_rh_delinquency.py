@@ -2,13 +2,16 @@
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from app.gui.models import WorkflowContext, WorkflowMode
-from app.gui.services.insights import run_insights_connection
+from app.gui.services.insights import _export_query, run_insights_connection
+from shared.insights.config import InsightsConfigurationError
 from shared.insights.query_catalog import get_query
 
 
@@ -30,7 +33,11 @@ class RHDelinquencyQueryTests(unittest.TestCase):
             );
             CREATE TABLE saturn.sgbstdn (sgbstdn_pidm INTEGER);
         """)
-        self.query = get_query("rh_delinquency").render_sql()
+        # SQLite does not implement PostgreSQL's CAST(... AS date).
+        self.query = get_query("rh_delinquency").render_sql().replace(
+            "CAST(MAX(a.tbbacct_activity_date) AS date)",
+            "date(MAX(a.tbbacct_activity_date))",
+        )
 
     def account(self, pidm, code="RH", activity=None, student=True):
         self.db.execute(
@@ -51,22 +58,22 @@ class RHDelinquencyQueryTests(unittest.TestCase):
         self.account(6, student=False)
         self.account(7, "")
         self.assertEqual(self.db.execute(self.query).fetchall(), [
-            ("TEST-1", "Synthetic", "Student", "RH", "2000-01-01", 1, 3),
-            ("TEST-2", "Synthetic", "Student", "RH", "2099-12-31", 1, 3),
-            ("TEST-3", "Synthetic", "Student", "RH", None, 1, 3),
+            ("TEST-1", "Synthetic", "Student", "RH", "2000-01-01", 3),
+            ("TEST-2", "Synthetic", "Student", "RH", "2099-12-31", 3),
+            ("TEST-3", "Synthetic", "Student", "RH", None, 3),
         ])
 
     def test_multiple_controls_history_and_old_identity_do_not_duplicate(self):
         self.account(1, activity="2099-01-01")
         self.db.executescript("""
-            INSERT INTO taismgr.tbbacct VALUES (1, ' rh ', '2099-02-01');
+            INSERT INTO taismgr.tbbacct VALUES (1, ' rh ', '2099-02-01 14:30:00');
             INSERT INTO taismgr.tbbacct VALUES (1, 'RH', NULL);
             INSERT INTO taismgr.tbbacct VALUES (1, 'PP', '2099-03-01');
             INSERT INTO saturn.sgbstdn VALUES (1);
             INSERT INTO saturn.spriden VALUES (1, 'OLD', 'Old', 'Name', 'N');
         """)
         self.assertEqual(self.db.execute(self.query).fetchall(), [
-            ("TEST-1", "Synthetic", "Student", "RH", "2099-02-01", 3, 1),
+            ("TEST-1", "Synthetic", "Student", "RH", "2099-02-01", 1),
         ])
 
     def test_no_rh_returns_empty_result_with_expected_columns(self):
@@ -75,11 +82,34 @@ class RHDelinquencyQueryTests(unittest.TestCase):
         self.assertEqual(cursor.fetchall(), [])
         self.assertEqual([column[0] for column in cursor.description], [
             "CWID", "First Name", "Last Name", "Delinquency Code",
-            "Account Activity Date", "RH Control Rows", "Report Row Count",
+            "Account Activity Date", "Report Row Count",
         ])
 
 
 class RHDelinquencyExportTests(unittest.TestCase):
+    def test_account_activity_exports_real_date_cells_and_preserves_blanks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "dates.xlsx"
+            _export_query(pd.DataFrame({
+                "Account Activity Date": ["2099-02-01", None],
+                "Feed Date": ["2099-02-01T14:30:00Z", None],
+            }), output)
+            workbook = load_workbook(output)
+            self.addCleanup(workbook.close)
+            sheet = workbook.active
+            self.assertTrue(sheet["A2"].is_date)
+            self.assertEqual(sheet["A2"].value, datetime(2099, 2, 1))
+            self.assertEqual(sheet["A2"].number_format.lower(), "yyyy-mm-dd")
+            self.assertIsNone(sheet["A3"].value)
+            self.assertEqual(sheet["B2"].value, datetime(2099, 2, 1, 14, 30))
+
+    def test_invalid_activity_date_does_not_save_workbook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "invalid.xlsx"
+            with self.assertRaises(InsightsConfigurationError):
+                _export_query(pd.DataFrame({"Account Activity Date": ["invalid"]}), output)
+            self.assertFalse(output.exists())
+
     def test_access_completeness_empty_export_and_existing_file(self):
         for administrator, count, empty, existing, success in (
             (False, 1, False, False, False),

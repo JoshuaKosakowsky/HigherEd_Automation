@@ -34,23 +34,29 @@ def _login_required() -> str:
 
 
 def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Convert ISO 8601 feed timestamps to timezone-free UTC Excel dates."""
-    feed_date_columns = [
+    """Prepare feed timestamps and account calendar dates as Excel date cells."""
+    date_columns = [
         column for column in dataframe.columns
-        if isinstance(column, str) and column.strip("'\"").endswith("Feed Date")
+        if isinstance(column, str) and (
+            column.strip("'\"").endswith("Feed Date")
+            or column.strip("'\"") == "Account Activity Date"
+        )
     ]
-    if not feed_date_columns:
+    if not date_columns:
         return dataframe
 
     export = dataframe.copy()
-    for column in feed_date_columns:
+    for column in date_columns:
         try:
             dates = pd.to_datetime(export[column], format="ISO8601", utc=True)
         except (TypeError, ValueError):
             raise InsightsConfigurationError(
                 f"Insights returned an unreadable {column} value; no workbook was saved."
             ) from None
-        export[column] = dates.dt.tz_localize(None)
+        export[column] = (
+            dates.dt.date if column.strip("'\"") == "Account Activity Date"
+            else dates.dt.tz_localize(None)
+        )
     return export
 
 

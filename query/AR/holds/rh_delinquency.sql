@@ -6,8 +6,7 @@
 WITH rh_accounts AS (
     SELECT
         a.tbbacct_pidm AS pidm,
-        MAX(a.tbbacct_activity_date) AS account_activity_date,
-        COUNT(*) AS rh_control_rows
+        CAST(MAX(a.tbbacct_activity_date) AS date) AS account_activity_date
     FROM taismgr.tbbacct a
     WHERE UPPER(TRIM(a.tbbacct_deli_code)) = 'RH'
       AND EXISTS (
@@ -22,7 +21,6 @@ SELECT
     s.spriden_last_name AS "Last Name",
     'RH' AS "Delinquency Code",
     a.account_activity_date AS "Account Activity Date",
-    a.rh_control_rows AS "RH Control Rows",
     COUNT(*) OVER () AS "Report Row Count"
 FROM rh_accounts a
 JOIN saturn.spriden s

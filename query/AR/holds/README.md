@@ -11,10 +11,11 @@ Former students qualify through any `SGBSTDN` record. Other holds, including
 CO and PP, do not exclude students from this manual RH review.
 
 Output has one row per current student identity: `CWID`, `First Name`,
-`Last Name`, `Delinquency Code`, `Account Activity Date`, and `RH Control Rows`.
+`Last Name`, `Delinquency Code`, and `Account Activity Date`.
 Only `SPRIDEN_CHANGE_IND IS NULL` identities are used. Multiple student-history
 or RH control records do not multiply students; the latest activity among RH
-control rows is displayed, and the control-row count flags duplicates.
+control rows is displayed as a date without a time component. Excel exports
+store it as a real date cell rather than text.
 Missing activity dates remain blank and do not exclude students.
 
 There is **no date cutoff**. The available `TBBACCT_ACTIVITY_DATE` records
