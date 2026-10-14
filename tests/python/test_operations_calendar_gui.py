@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMessageBox
 
 from app.gui.main import AutomationApplication
@@ -306,14 +307,80 @@ class CalendarGuiTests(unittest.TestCase):
         page.table.selectRow(0)
         self.assertIsNone(page._selected())
         self.assertFalse(page.review_button.isEnabled())
-        page._activate_row(page.table.item(0, 0))
-        self.assertEqual(page.table.rowCount(), 1)
+        control = page.group_buttons["fall"]
+        self.assertGreaterEqual(control.height(), 44)
+        QTest.mouseClick(control, Qt.MouseButton.LeftButton,
+                         pos=QPoint(control.width() - 10, control.height() // 2))
+        self.assertEqual(sum(not page.table.isRowHidden(i) for i in range(page.table.rowCount())), 1)
         self.assertEqual(page.attention.rowCount(), reminder_count)
-        page._activate_row(page.table.item(0, 0))
+        self.assertIs(page.group_buttons["fall"], control)
+        QTest.mouseClick(control, Qt.MouseButton.LeftButton)
+        self.assertEqual(sum(not page.table.isRowHidden(i) for i in range(page.table.rowCount())), 16)
         self.assertEqual(page.table.rowCount(), 16)
         page.table.selectRow(1)
         self.assertIsNotNone(page._selected())
         page.grab()
+
+    def test_group_control_handles_repeated_clicks_and_keyboard_without_rebuilding(self):
+        saved = self.store.save(self.grouped_data())
+        page = self.page()
+        control = page.group_buttons["fall"]
+        for index in range(8):
+            QTest.mouseClick(control, Qt.MouseButton.LeftButton)
+            self.assertEqual("fall" in page.collapsed_groups, index % 2 == 0)
+            self.assertIs(page.group_buttons["fall"], control)
+        control.setFocus()
+        QTest.keyClick(control, Qt.Key.Key_Space)
+        self.assertIn("fall", page.collapsed_groups)
+        self.assertIn("Expand", control.accessibleName())
+        QTest.keyClick(control, Qt.Key.Key_Space)
+        self.assertNotIn("fall", page.collapsed_groups)
+        self.assertIn("Collapse", control.accessibleName())
+        self.assertEqual(self.store.load(), saved)
+
+    def test_scrolled_group_button_stays_visible_after_toggle(self):
+        data = self.synthetic_calendar()
+        data = assign_group(replace(data, groups=(CalendarGroup("fall", "Fall Payment Deadline"),)),
+                            "fall", frozenset({"deadline"}))
+        self.store.save(data)
+        page = self.page()
+        index = next(i for i, row in enumerate(page.display_rows) if isinstance(row, CalendarGroup))
+        page.table.scrollToItem(page.table.item(index, 0))
+        self.qt.processEvents()
+        control = page.group_buttons["fall"]
+        for _ in range(4):
+            self.assertFalse(control.visibleRegion().isEmpty())
+            visible = control.visibleRegion().boundingRect()
+            QTest.mouseClick(control, Qt.MouseButton.LeftButton, pos=visible.center())
+            self.qt.processEvents()
+            self.assertFalse(control.visibleRegion().isEmpty())
+            self.assertEqual(page.table.currentRow(), index)
+
+    def test_collapsed_group_survives_filter_rebuild_with_no_stale_buttons(self):
+        self.store.save(self.grouped_data())
+        page = self.page()
+        QTest.mouseClick(page.group_buttons["fall"], Qt.MouseButton.LeftButton)
+        page.search.setText("Fall Payment Deadline")
+        self.qt.processEvents()
+        self.assertIn("fall", page.collapsed_groups)
+        self.assertEqual(sum(not page.table.isRowHidden(i) for i in range(page.table.rowCount())), 1)
+        QTest.mouseClick(page.group_buttons["fall"], Qt.MouseButton.LeftButton)
+        self.assertEqual(sum(not page.table.isRowHidden(i) for i in range(page.table.rowCount())), 16)
+        self.assertIsNone(page.table.cellWidget(1, 0))
+
+    def test_group_button_works_in_visible_area_after_horizontal_scrolling(self):
+        self.store.save(self.grouped_data())
+        page = self.page()
+        page.table.setColumnWidth(0, 1300)
+        page.table.horizontalScrollBar().setValue(page.table.horizontalScrollBar().maximum())
+        self.qt.processEvents()
+        control = page.group_buttons["fall"]
+        visible = control.visibleRegion().boundingRect()
+        self.assertFalse(visible.isEmpty())
+        QTest.mouseClick(control, Qt.MouseButton.LeftButton, pos=visible.center())
+        self.assertIn("fall", page.collapsed_groups)
+        self.qt.processEvents()
+        self.assertFalse(control.visibleRegion().isEmpty())
 
     def test_group_search_finds_members_and_category_filters_still_apply(self):
         self.store.save(self.grouped_data())

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
     QScrollArea, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from app.gui.services.access import AccessConfigurationError
@@ -619,6 +619,7 @@ class OperationsCalendarPage(QWidget):
         self.rows = []
         self.display_rows = []
         self.collapsed_groups = set()
+        self.group_buttons = {}
         self.attention_occurrences = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
@@ -787,21 +788,36 @@ class OperationsCalendarPage(QWidget):
         for group in sorted(self.data.groups, key=lambda g: g.name.casefold()):
             if grouped[group.id]:
                 self.display_rows.append(group)
-                if group.id not in self.collapsed_groups:
-                    self.display_rows.extend(grouped[group.id])
+                self.display_rows.extend(grouped[group.id])
+        self.table.clearSpans()
+        self.table.setRowCount(0)
+        self.group_buttons = {}
         self.table.setRowCount(len(self.display_rows))
         for index, row in enumerate(self.display_rows):
             if isinstance(row, CalendarGroup):
                 count = len({r.occurrence.event.id for r in grouped[row.id]})
-                title = ("▸ " if row.id in self.collapsed_groups else "▾ ") + row.name
-                for column, value in enumerate((f"{title}\n{count} related item(s) in view", "Independent dates", "")):
-                    item = QTableWidgetItem(value)
-                    item.setBackground(QColor(PALE_BLUE))
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                    item.setToolTip("Double-click to expand or collapse. Each item keeps its own dates. Use Groups… to change membership.")
-                    self.table.setItem(index, column, item)
+                header = QTableWidgetItem("")
+                header.setData(Qt.ItemDataRole.AccessibleTextRole, row.name)
+                self.table.setItem(index, 0, header)
+                self.table.setSpan(index, 0, 1, self.table.columnCount())
+                control = QToolButton(self.table)
+                control.setCheckable(True)
+                control.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                control.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                control.setMinimumHeight(44)
+                control.setStyleSheet(
+                    f"QToolButton {{ background: {PALE_BLUE}; border: 1px solid {LIGHT_BLUE}; "
+                    "border-radius: 4px; padding: 8px 12px; font-weight: 600; }"
+                    f"QToolButton:hover {{ background: {LIGHT_BLUE}; }}"
+                    f"QToolButton:focus {{ border: 2px solid {BLASTER_BLUE}; }}"
+                )
+                control.setProperty("groupName", row.name)
+                control.setProperty("itemCount", count)
+                control.clicked.connect(lambda checked=False, group_id=row.id: self._toggle_group(group_id))
+                self.group_buttons[row.id] = control
+                self._update_group_button(row.id)
+                self.table.setCellWidget(index, 0, control)
+                self.table.setRowHeight(index, 52)
                 continue
             occurrence = row.occurrence
             text = f"{'  ' if occurrence.event.group_id else ''}{'↳ ' if row.coverage else ''}{row.title}"
@@ -821,6 +837,7 @@ class OperationsCalendarPage(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole, row)
                     item.setData(Qt.ItemDataRole.AccessibleTextRole, tip)
                 self.table.setItem(index, column, item)
+        self._apply_group_visibility()
         proposed = len({(r.occurrence.event.id, r.occurrence.nominal) for r in self.rows if r.occurrence.needs_review})
         vacant = {name for row in self.rows for name in unassigned_targets(row.audience, self.access)}
         self.summary.setText(f"{len(self.rows)} visible deadline / coverage rows · {proposed} dates need review · {len(vacant)} unassigned. Overlapping bars show overlapping demand.")
@@ -843,20 +860,49 @@ class OperationsCalendarPage(QWidget):
 
     def _selected(self):
         index = self.table.currentRow()
-        if 0 <= index < len(self.display_rows) and not isinstance(self.display_rows[index], CalendarGroup):
+        if (0 <= index < len(self.display_rows) and not self.table.isRowHidden(index)
+                and not isinstance(self.display_rows[index], CalendarGroup)):
             return self.display_rows[index].occurrence
         return None
 
     def _activate_row(self, item):
         row = self.display_rows[item.row()]
-        if isinstance(row, CalendarGroup):
-            if row.id in self.collapsed_groups:
-                self.collapsed_groups.remove(row.id)
-            else:
-                self.collapsed_groups.add(row.id)
-            self._render()
-        else:
+        if not isinstance(row, CalendarGroup):
             self._edit_date(occurrence=row.occurrence)
+
+    def _update_group_button(self, group_id):
+        control = self.group_buttons[group_id]
+        expanded = group_id not in self.collapsed_groups
+        action = "Collapse" if expanded else "Expand"
+        name, count = control.property("groupName"), control.property("itemCount")
+        control.setText(f"{name} · {count} related item(s) · {action}")
+        control.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        control.setChecked(expanded)
+        control.setAccessibleName(f"{action} {name}")
+        control.setToolTip("Click anywhere on this button, or focus it and press Space, to expand or collapse. Each item keeps its own dates. Use Groups… to change membership.")
+
+    def _apply_group_visibility(self):
+        for index, row in enumerate(self.display_rows):
+            hidden = not isinstance(row, CalendarGroup) and row.occurrence.event.group_id in self.collapsed_groups
+            self.table.setRowHidden(index, hidden)
+
+    def _toggle_group(self, group_id):
+        if group_id not in self.group_buttons:
+            return
+        if group_id in self.collapsed_groups:
+            self.collapsed_groups.remove(group_id)
+        else:
+            self.collapsed_groups.add(group_id)
+        # Keep the actual button alive while hiding rows. Rebuilding the table
+        # during a click discards focus and can move the control out from under
+        # the pointer when the view is scrolled.
+        self._update_group_button(group_id)
+        self._apply_group_visibility()
+        index = next(i for i, row in enumerate(self.display_rows)
+                     if isinstance(row, CalendarGroup) and row.id == group_id)
+        self.table.setCurrentCell(index, 0)
+        self.table.scrollToItem(self.table.item(index, 0), QAbstractItemView.ScrollHint.EnsureVisible)
+        self._selection()
 
     def _groups(self):
         try:

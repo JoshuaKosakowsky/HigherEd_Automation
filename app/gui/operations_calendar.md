@@ -1,4 +1,4 @@
-# Bursar Office Calendar (0.15.0)
+# Bursar Office Calendar (0.15.1)
 
 Only active application administrators can open or edit this calendar. All
 administrators share the same calendar; assigning a staff member or role to an
@@ -31,8 +31,10 @@ Switching groups in that dialog retains pending membership edits; Save commits
 them together and Cancel discards them. Membership applies to the entire recurring
 schedule; future-only schedule editing retains its normal scope.
 
-The chart shows a heading above each group's matching items. Double-click the
-heading to collapse or expand it. Collapsing changes only the chart display;
+The chart shows a full-width **Expand / Collapse** button above each group's
+matching items. Click anywhere on the button once, or focus it with Tab and
+press Space. The button stays visible as the group opens or closes.
+Collapsing changes only the chart display;
 reminders remain visible. Search includes group names, and reminders include
 their group name. A group heading has no bar because the gaps between its
 independent activities should not imply continuous work or coverage. Groups with
