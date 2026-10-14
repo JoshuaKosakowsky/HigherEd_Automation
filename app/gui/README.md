@@ -261,6 +261,15 @@ the destination term. See
 [`query/AR/term_corrections/README.md`](../../query/AR/term_corrections/README.md)
 for publishing, classification, exclusions, and reconciliation before use.
 
+In 0.16.0, choose **Holds — RH delinquency review** for all students with RH in
+`TBBACCT_DELI_CODE`, including former students and accounts without a balance.
+It uses the same administrator connection/export setup and completeness check
+as the wrong-term payment report. No term or date input is required. Account
+activity is included for reference, but it does not establish when RH was set,
+so no age cutoff is applied. The workbook supports manual Banner review;
+it does not remove holds. Publishing and source details are in
+[`query/AR/holds/README.md`](../../query/AR/holds/README.md).
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

@@ -59,6 +59,14 @@ class InsightsQuery:
 
 QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
+        "rh_delinquency", "Holds", "RH delinquency review",
+        "AR/holds/rh_delinquency.sql",
+        "All students with RH in the account delinquency field, including former students. "
+        "No date cutoff: account activity does not establish when RH was assigned. "
+        "Account activity is included as context for manual Banner review.",
+        administrator_only=True, result_count_column="Report Row Count",
+    ),
+    InsightsQuery(
         "payments_without_charges", "Term corrections", "Payments in a term with no charges",
         "AR/term_corrections/payments_without_charges.sql",
         "Enter the payment's posted term (for example 202655 for Summer). "

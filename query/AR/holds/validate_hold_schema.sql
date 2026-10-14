@@ -1,7 +1,10 @@
-/* Read-only required-column check for the PP hold review report. */
+/* Read-only required-column check for delinquency outreach and RH review. */
 
 WITH required_columns (table_schema, table_name, column_name) AS (
     VALUES
+        ('TAISMGR', 'TBBACCT', 'PIDM'),
+        ('TAISMGR', 'TBBACCT', 'DELI_CODE'),
+        ('TAISMGR', 'TBBACCT', 'ACTIVITY_DATE'),
         ('TAISMGR', 'TBRACCD', 'PIDM'),
         ('TAISMGR', 'TBRACCD', 'AMOUNT'),
         ('TAISMGR', 'TBRACCD', 'DETAIL_CODE'),

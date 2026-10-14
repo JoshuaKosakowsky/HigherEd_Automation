@@ -1,4 +1,51 @@
-# Deliquent student accounts
+# Student account holds and delinquency reports
+
+## RH delinquency review
+
+`rh_delinquency.sql` returns every student whose account has
+`TBBACCT_DELI_CODE = RH`, using the same source as the refund workflow.
+Codes are trimmed and matched without case sensitivity. This is the account
+delinquency field, separate from `SPRHOLD` hold records. No SPRHOLD record,
+positive balance, transaction history, or current enrollment is required.
+Former students qualify through any `SGBSTDN` record. Other holds, including
+CO and PP, do not exclude students from this manual RH review.
+
+Output has one row per current student identity: `CWID`, `First Name`,
+`Last Name`, `Delinquency Code`, `Account Activity Date`, and `RH Control Rows`.
+Only `SPRIDEN_CHANGE_IND IS NULL` identities are used. Multiple student-history
+or RH control records do not multiply students; the latest activity among RH
+control rows is displayed, and the control-row count flags duplicates.
+Missing activity dates remain blank and do not exclude students.
+
+There is **no date cutoff**. The available `TBBACCT_ACTIVITY_DATE` records
+account maintenance and does not establish when RH was assigned. Filtering it
+as an RH start date could omit older holds after unrelated account changes.
+Review the date as context only; confirm RH age and disposition in Banner.
+The report does not remove RH or change Banner.
+
+### Publish and run
+
+1. Run `validate_hold_schema.sql` and resolve MISSING fields, including the
+   three TBBACCT fields required by this report.
+2. Paste `rh_delinquency.sql` into a native Banner Insights question named
+   **RH delinquency review**. No variables or date/term inputs are needed.
+3. Save in the staff AR collection and grant intended staff view/run access
+   through existing Insights permissions, as for the wrong-term payment report.
+4. Reconcile RH, non-RH, former-student, and missing-date examples against
+   Banner before operational use. Allow for Insights replication delays.
+
+Administrators can also choose **Connections → Holds — RH delinquency review**,
+select TEST or PROD, and save a new `.xlsx` workbook. This reuses the existing
+connection and export setup, rechecks administrator access before authentication,
+and preserves existing files. No new workflow permissions are needed.
+
+The SQL includes `Report Row Count`, counting the full result before API caps.
+Compare this with exported rows when running in Insights. The app validates
+the count and removes that internal column from Excel. Incomplete results
+are rejected without saving; use an Insights export if the API caps the list.
+An empty result means no qualifying students in the replicated data.
+
+## Delinquent student accounts outreach
 
 Run `validate_hold_schema.sql` in Banner Insights first and confirm every field
 is `FOUND`, then run `deliquent_student_accounts.sql`. Both queries are read-only.
