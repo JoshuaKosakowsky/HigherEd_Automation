@@ -3,7 +3,13 @@ param(
     [string]$OutputFile,
     [string]$DetailCodesFile,
     [string]$FilePattern,
-    [switch]$AllowUnmappedDetailCodes
+    [switch]$AllowUnmappedDetailCodes,
+    [ValidateSet("files", "sql")][string]$Source = "files",
+    [int]$FirstFiscalYear,
+    [int]$LastFiscalYear,
+    [string]$ExtractDir,
+    [int]$PageSize = 1000,
+    [switch]$ConfirmProd
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +32,12 @@ $Arguments = @(
     "-m"
     "workflows.trends.run_trends"
 )
+
+$Arguments += @("--source", $Source, "--page-size", "$PageSize")
+if ($FirstFiscalYear) { $Arguments += @("--first-fiscal-year", "$FirstFiscalYear") }
+if ($LastFiscalYear) { $Arguments += @("--last-fiscal-year", "$LastFiscalYear") }
+if ($ExtractDir) { $Arguments += @("--extract-dir", $ExtractDir) }
+if ($ConfirmProd) { $Arguments += "--confirm-prod" }
 
 if ($InputDir) {
     $Arguments += @(

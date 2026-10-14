@@ -31,3 +31,13 @@ The aging queries and `activity/tgiaccd_transactions.sql` use Insights/Metabase
 template tags (`{{...}}` and, where applicable, `[[...]]`).
 The other report families are native PostgreSQL-flavored SQL unless their README
 states otherwise.
+
+## Internal Historical Trends templates
+
+`trends/transactions_extract.sql` and `reference/detail_codes_extract.sql` are
+rendered by the application, not standalone Insights questions. Their
+`__...__` markers must be supplied by the validated Python extractors. They use
+the TBRACCD/SPRIDEN and TBBDETC fields covered by
+[the activity schema inventory](activity/validate_activity_schema.sql).
+See [Historical Trends](../../workflows/trends/README.md) for paging, count
+checks, shared-reference refresh, and output safeguards.

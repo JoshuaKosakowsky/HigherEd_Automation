@@ -114,11 +114,11 @@ def apply_theme(application: QApplication) -> None:
             text-align: left; padding: 12px; }}
         QPushButton#nav:hover, QPushButton#nav:checked {{ background: {BLASTER_BLUE}; color: {WHITE}; }}
         QPushButton#nav:focus {{ border: 1px solid {LIGHT_BLUE}; }}
-        QLineEdit, QPlainTextEdit, QComboBox, QDateEdit {{
+        QLineEdit, QPlainTextEdit, QComboBox, QDateEdit, QSpinBox {{
             background: {WHITE}; color: {TEXT}; border: 1px solid {LIGHT_BLUE};
             border-radius: 6px; padding: 9px; selection-background-color: {BLASTER_BLUE};
             selection-color: {WHITE}; }}
-        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus {{ border: 2px solid {BLASTER_BLUE}; }}
+        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QDateEdit:focus, QSpinBox:focus {{ border: 2px solid {BLASTER_BLUE}; }}
         /* Calendar navigation otherwise inherits dark text on Qt's blue header. */
         QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {PALE_BLUE}; }}
         QCalendarWidget QToolButton {{ background: {PALE_BLUE}; color: {DARK_BLUE};

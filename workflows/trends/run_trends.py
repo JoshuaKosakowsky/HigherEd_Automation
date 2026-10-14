@@ -26,7 +26,7 @@ from data_processing.trends.pipeline import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Analyze fiscal-year TGIACCD workbooks."
+            "Analyze fiscal-year TGIACCD workbooks or checked Insights SQL extracts."
         )
     )
 
@@ -65,6 +65,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument("--source", choices=("files", "sql"), default="files")
+    parser.add_argument("--first-fiscal-year", type=int)
+    parser.add_argument("--last-fiscal-year", type=int)
+    parser.add_argument("--extract-dir", type=Path)
+    parser.add_argument("--page-size", type=int, default=1000)
+    parser.add_argument("--confirm-prod", action="store_true",
+                        help="Confirm read-only PROD Insights extraction and saving account data locally.")
     return parser.parse_args()
 
 
@@ -86,9 +93,35 @@ def main() -> int:
         ),
     )
 
-    output_file = run_trends_pipeline(
-        config
-    )
+    if args.source == "sql":
+        from app.gui.models import WorkflowMode
+        from data_processing.trends.extract import TrendsExtractSettings, run_sql_trends_pipeline
+        from shared.insights.config import load_department_profiles
+        from shared.insights.session_auth import build_authenticated_client
+        from shared.progress import ProgressReporter
+
+        if not args.confirm_prod:
+            raise ValueError("SQL extraction requires --confirm-prod.")
+        if args.first_fiscal_year is None or args.last_fiscal_year is None:
+            raise ValueError("SQL extraction requires first and last fiscal years.")
+        settings = TrendsExtractSettings(args.first_fiscal_year, args.last_fiscal_year,
+            args.extract_dir or (config.output_file.parent / f"{config.output_file.stem}_sources"),
+            page_size=args.page_size)
+        if config.output_file.suffix.lower() != ".xlsx" or config.output_file.exists() or settings.extract_directory.exists():
+            raise ValueError("Choose a new output filename and extract directory.")
+        profile = load_department_profiles()[WorkflowMode.PRODUCTION.value]
+        if profile is None:
+            raise ValueError("PROD Insights is not configured.")
+        try:
+            client, _ = build_authenticated_client(profile.settings, browser="chrome",
+                experience_url=profile.experience_url, use_saved_mines_login=True)
+        except Exception:
+            raise ValueError("Could not connect to PROD Insights. Check configuration and browser sign-in.") from None
+        with client:
+            output_file = run_sql_trends_pipeline(client, settings, config,
+                progress=ProgressReporter(lambda update: print(update.stage, flush=True)))
+    else:
+        output_file = run_trends_pipeline(config)
 
     print(
         "Fiscal-year TGIACCD analysis created: "

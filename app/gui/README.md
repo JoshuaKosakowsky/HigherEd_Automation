@@ -29,7 +29,7 @@ layout; accent colors remain limited.
 - `services/parameters.py` preserves input parsing independently of the toolkit.
 - Each run has a review dialog. TEST is preferred where modes exist; production
   displays the workflow warning and requires an explicit Run in production action.
-- Refund Review and 1305 Graduate Contract Recon generate their default output
+- Refund Review, 1305 Graduate Contract Recon and Historical Trends generate their default output
   timestamps when the form opens and refresh them before each **Review & run**,
   including reruns on the same form. Manually entered or browsed output paths
   are preserved. Filenames keep second precision and existing overwrite protections.
@@ -501,10 +501,31 @@ The next useful migration steps are:
 1. decide whether Refund Review batch-resume controls belong
    in the GUI after the manual workflow has been operationally validated;
 2. explicitly approve workflows for the AR/Analyst and Cashier views;
-3. integrate Historical Trends after confirming its role and input/output selection;
-4. add a small structured recent-activity file now that more than one workflow is
+3. add a small structured recent-activity file now that more than one workflow is
    available.
 
 Adding a workflow should usually require a `WorkflowDefinition` and a thin
 adapter that calls its reusable Python API. Do not put business rules in page or
 button callbacks.
+
+## Historical Trends (administrator)
+
+Historical Trends is registered in Accounts Receivable for administrators. It
+uses the same Banner data and Outputs blocks, colors, source switching, and busy
+blocking as 1305 recon, without Workday inputs. Upload one annual TGIACCD workbook
+or CSV per fiscal year, or select Run SQL from PROD Insights. Upload mode derives
+years from filenames and does not apply hidden SQL year filters. SQL mode shows
+editable year controls with arrows and mouse-wheel scrolling and requires PROD
+confirmation. Both sources automatically use `detail_codes.json` beside the
+shared `gui_access.json`; users do not supply a reference file. SQL trends runs
+refresh it from TBBDETC automatically; uploads use the saved copy. Administrators
+can run **Refresh Banner Detail Codes** independently to initialize/update the
+shared reference without an Excel export. Checked pages, classification
+validation, atomic replacement and conflict checks preserve the previous file
+when refresh fails. A missing/syncing file blocks upload runs with setup
+instructions. Both paths use a new workbook in an existing approved output
+folder, cancellation, and progress. Checked SQL pages
+are saved as separate annual CSVs beside the analysis. SQL activity is selected
+by July–June Feed Dates; balances reflect the current replicated state.
+See [workflow instructions](../../workflows/trends/README.md) for safeguards,
+limitations, annual-source reuse, and command-line options.

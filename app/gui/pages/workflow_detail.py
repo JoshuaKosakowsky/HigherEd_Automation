@@ -11,7 +11,7 @@ from PySide6.QtCore import QDate, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QFrame, QLineEdit, QMessageBox, QPlainTextEdit,
-    QScrollArea, QVBoxLayout, QWidget,
+    QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from app.gui.models import ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode
@@ -74,7 +74,7 @@ class WorkflowDetailPage(QScrollArea):
                 parameter = replace(parameter, default=parameter.default_factory())
                 self.generated_defaults[parameter.key] = str(parameter.default)
             parameter_layout = form_layout
-            if definition.workflow_id == "graduate_contract_recon":
+            if definition.workflow_id in {"graduate_contract_recon", "trends"}:
                 group = ("Outputs" if parameter.key == "output_file" else
                          "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner")
                 if group not in input_groups:
@@ -90,7 +90,10 @@ class WorkflowDetailPage(QScrollArea):
                         group_layout.addWidget(label("Banner data source", "field"))
                         self.recon_source = QComboBox()
                         self.recon_source.setAccessibleName("Banner data source")
-                        self.recon_source.addItem("Upload Banner Insights file", MANUAL_SOURCE)
+                        self.recon_source.addItem(
+                            "Upload annual TGIACCD files" if definition.workflow_id == "trends" else "Upload Banner Insights file",
+                            MANUAL_SOURCE,
+                        )
                         if is_administrator:
                             self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
                         group_layout.addWidget(self.recon_source)
@@ -105,6 +108,13 @@ class WorkflowDetailPage(QScrollArea):
             elif parameter.kind == ParameterKind.NAME_LIST:
                 control = QPlainTextEdit("\n".join(str(name) for name in parameter.default or ()))
                 control.setFixedHeight(112)
+                field_label.setBuddy(control)
+            elif parameter.kind == ParameterKind.INTEGER:
+                control = QSpinBox()
+                control.setRange(int(parameter.minimum if parameter.minimum is not None else -2147483648),
+                                 int(parameter.maximum if parameter.maximum is not None else 2147483647))
+                control.setValue(int(parameter.default))
+                control.setKeyboardTracking(False)
                 field_label.setBuddy(control)
             elif parameter.kind == ParameterKind.DATE:
                 control = QDateEdit(QDate.fromString(str(parameter.default), "yyyy-MM-dd"))
@@ -215,7 +225,7 @@ class WorkflowDetailPage(QScrollArea):
         ) or (
             self.definition.workflow_id == "refund_review" and key in ("transaction_file", "context_file")
         ) or (
-            self.definition.workflow_id == "graduate_contract_recon" and key == "banner_file"
+            self.definition.workflow_id in {"graduate_contract_recon", "trends"} and key == "banner_file"
         )
 
     def _update_production_warning(self) -> None:
@@ -225,8 +235,10 @@ class WorkflowDetailPage(QScrollArea):
         )
 
     def _is_sql_source_parameter(self, key: str) -> bool:
-        return self.definition.workflow_id == "graduate_contract_recon" and key in {
-            "start_date", "end_date", "detail_codes"}
+        return (self.definition.workflow_id == "graduate_contract_recon" and key in {
+            "start_date", "end_date", "detail_codes"}) or (
+            self.definition.workflow_id == "trends" and key in {"first_fiscal_year", "last_fiscal_year"}
+        )
 
     def _update_source(self) -> None:
         manual = self._source_control.currentData() == MANUAL_SOURCE

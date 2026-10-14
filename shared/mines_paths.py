@@ -56,6 +56,13 @@ def get_shared_gui_access_path(
     )
 
 
+def get_shared_detail_codes_path(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Return the centrally maintained Banner reference beside GUI permissions."""
+    return get_shared_gui_access_path(environment).with_name("detail_codes.json")
+
+
 def ensure_hidden_directory(
     directory: Path,
     *,

@@ -59,6 +59,16 @@ def parse_parameters(
             if parameter.kind == ParameterKind.INPUT_FILE and not path.is_file():
                 raise ValueError(f"{parameter.label} was not found.")
             parsed[parameter.key] = path
+        elif parameter.kind == ParameterKind.INTEGER:
+            try:
+                value = int(raw_value)
+            except ValueError:
+                raise ValueError(f"{parameter.label} must be a whole number.") from None
+            if parameter.minimum is not None and value < parameter.minimum:
+                raise ValueError(f"{parameter.label} must be at least {parameter.minimum:g}.")
+            if parameter.maximum is not None and value > parameter.maximum:
+                raise ValueError(f"{parameter.label} must be no more than {parameter.maximum:g}.")
+            parsed[parameter.key] = value
         elif parameter.kind == ParameterKind.PERCENT:
             try:
                 value = float(raw_value)

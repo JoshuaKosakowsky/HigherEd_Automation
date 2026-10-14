@@ -17,10 +17,10 @@ from unittest.mock import PropertyMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl, QTimer
-from PySide6.QtGui import QDropEvent
+from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl, QTimer
+from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton, QSpinBox
 
 from app.gui.main import AutomationApplication
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode, WorkflowResult
@@ -100,7 +100,7 @@ class QtGuiTests(unittest.TestCase):
 
     def test_timestamped_outputs_refresh_on_selection_review_and_rerun(self):
         window = self.open_app()
-        for workflow_id in ("refund_review", "graduate_contract_recon"):
+        for workflow_id in ("refund_review", "graduate_contract_recon", "trends"):
             with self.subTest(workflow=workflow_id):
                 definition = get_workflow(workflow_id)
                 with patch("app.gui.workflow_registry.datetime") as clock:
@@ -109,7 +109,7 @@ class QtGuiTests(unittest.TestCase):
                     page = window.current_page
                     self.assertTrue(page.inputs["output_file"].text().endswith("20261013_090000.xlsx"))
                     for parameter in definition.parameters:
-                        if parameter.kind == ParameterKind.INPUT_FILE and parameter.required:
+                        if parameter.kind in {ParameterKind.INPUT_FILE, ParameterKind.MULTI_INPUT_FILE} and parameter.required:
                             source = self.root / f"{parameter.key}.xlsx"
                             source.touch()
                             page.inputs[parameter.key].setText(str(source))
@@ -290,6 +290,66 @@ class QtGuiTests(unittest.TestCase):
         for key in ("start_date", "end_date", "detail_codes"):
             self.assertNotIn(key, manual_values)
 
+    def test_admin_trends_matches_banner_output_blocks_and_source_switching(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("trends"))
+        page = window.current_page
+        self.assertNotIn("workday_file", page.inputs)
+        self.assertNotIn("worktag_file", page.inputs)
+        self.assertEqual(page.inputs["banner_file"].parentWidget().objectName(), "bannerInputs")
+        self.assertEqual(page.inputs["output_file"].parentWidget().objectName(), "workflowOutputs")
+        self.assertEqual(page.recon_source.count(), 2)
+        self.assertEqual(page.recon_source.currentData(), "manual")
+        self.assertTrue(page.production_warning.isHidden())
+        annual = self.root / "TGIACCD_fy2026.xlsx"; annual.touch()
+        page.inputs["banner_file"].setText(str(annual))
+        self.assertNotIn("detail_codes_file", page.inputs)
+        manual = page._parse_parameters()
+        self.assertEqual(manual["banner_file"], (annual,))
+        self.assertNotIn("first_fiscal_year", manual)
+        for key in ("first_fiscal_year", "last_fiscal_year"):
+            self.assertIsInstance(page.inputs[key], QSpinBox)
+            self.assertTrue(page.inputs[key].isHidden())
+        page.recon_source.setCurrentIndex(page.recon_source.findData("sql"))
+        self.assertTrue(page.inputs["banner_file"].isHidden())
+        self.assertFalse(page.production_warning.isHidden())
+        year = page.inputs["first_fiscal_year"]
+        self.assertFalse(year.isHidden())
+        year.setValue(2024); year.stepUp()
+        self.assertEqual(year.value(), 2025)
+        year.lineEdit().setText("2023"); year.interpretText()
+        self.assertEqual(year.value(), 2023)
+        year.setFocus()
+        wheel = QWheelEvent(QPointF(year.rect().center()),
+                            QPointF(year.mapToGlobal(year.rect().center())),
+                            QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(year, wheel)
+        self.assertEqual(year.value(), 2024)
+        parsed = page._parse_parameters()
+        self.assertEqual(parsed["first_fiscal_year"], 2024)
+        self.assertNotIn("banner_file", parsed)
+        contexts = []
+        page._confirm = lambda context: contexts.append(context) or False
+        page._run()
+        self.assertEqual(contexts[0].mode, WorkflowMode.PRODUCTION)
+        page.recon_source.setCurrentIndex(page.recon_source.findData("manual"))
+        page._run()
+        self.assertIsNone(contexts[1].mode)
+        results = queue.Queue()
+        page._confirm = lambda context: True
+        with patch.object(window.executor, "run_async", return_value=results):
+            page._run()
+        self.assertFalse(page.form.isEnabled())
+        self.assertFalse(page.run_button.isEnabled())
+        self.assertFalse(page.back_button.isEnabled())
+        self.assertFalse(page.recon_source.isEnabled())
+        self.assertFalse(year.isEnabled())
+        results.put(WorkflowResult(True, "Done", output_path=self.root / "result.xlsx"))
+        page._poll_result()
+        self.assertTrue(page.form.isEnabled())
+        self.assertTrue(page.run_button.isEnabled())
+
     def test_staff_view_and_missing_policy_fail_closed(self):
         window = self.open_app("STAFF")
         self.assertTrue(window.access_button.isHidden())
@@ -362,7 +422,8 @@ class QtGuiTests(unittest.TestCase):
             dialog = QApplication.activeModalWidget()
             combo = dialog.findChild(QComboBox)
             combo.setCurrentIndex(combo.findData("analyst"))
-            dialog.findChildren(QCheckBox)[0].setChecked(True)
+            next(check for check in dialog.findChildren(QCheckBox)
+                     if check.text() == "Student Testing Population").setChecked(True)
             controls = dialog.findChild(QDialogButtonBox)
             controls.button(QDialogButtonBox.StandardButton.Save).click()
 
@@ -436,7 +497,8 @@ class QtGuiTests(unittest.TestCase):
                     buttons["Add view"].click()
                 self.assertEqual(combo.currentData(), "collections")
                 self.assertTrue(all(not check.isChecked() for check in dialog.findChildren(QCheckBox)))
-                dialog.findChildren(QCheckBox)[0].setChecked(True)
+                next(check for check in dialog.findChildren(QCheckBox)
+                     if check.text() == "Student Testing Population").setChecked(True)
                 combo.setCurrentIndex(combo.findData("analyst"))
                 with patch.object(QInputDialog, "getText", return_value=("AR Specialist", True)):
                     buttons["Rename view"].click()

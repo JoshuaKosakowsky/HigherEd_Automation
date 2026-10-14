@@ -23,6 +23,7 @@ class ParameterKind(str, Enum):
 
     TEXT = "text"
     DATE = "date"
+    INTEGER = "integer"
     INPUT_FILE = "input_file"
     MULTI_INPUT_FILE = "multi_input_file"
     OUTPUT_FILE = "output_file"

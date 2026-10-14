@@ -6,8 +6,11 @@ from pathlib import Path
 
 from data_processing.shared.tgiaccd import (
     fiscal_year_from_filename,
-    iter_tgiaccd_rows,
 )
+
+from shared.cancellation import CancellationToken
+from shared.progress import ProgressReporter
+from .ingest import iter_trends_rows
 
 from .config import (
     ANNUAL_EXACT_REPORTING_GROUPS,
@@ -309,6 +312,7 @@ def analyze_tgiaccd_file(
     *,
     detail_codes: dict[str, dict[str, object]],
     config: TrendsConfig,
+    cancellation: CancellationToken | None = None,
 ) -> TrendsFileAnalysisResult:
     """
     Calculate fiscal-year and detail-code statistics.
@@ -361,9 +365,10 @@ def analyze_tgiaccd_file(
                 category_code
             ].append(group_name)
 
-    for row in iter_tgiaccd_rows(
+    for row in iter_trends_rows(
         path,
         required_columns=REQUIRED_COLUMNS,
+        cancellation=cancellation,
     ):
         analysis.row_count += 1
 
@@ -927,6 +932,8 @@ def analyze_all_files(
     *,
     detail_codes: dict[str, dict[str, object]],
     config: TrendsConfig,
+    cancellation: CancellationToken | None = None,
+    progress: ProgressReporter | None = None,
 ) -> TrendsAnalysisResult:
     fiscal_year_results: list[
         FiscalYearAnalysis
@@ -948,6 +955,10 @@ def analyze_all_files(
     ] = []
 
     for path in files:
+        if cancellation:
+            cancellation.check()
+        if progress:
+            progress.report(f"Analyzing {path.name}")
         print(
             f"Analyzing {path.name}...",
             flush=True,
@@ -957,6 +968,7 @@ def analyze_all_files(
             path,
             detail_codes=detail_codes,
             config=config,
+            cancellation=cancellation,
         )
 
         fiscal_year_results.append(

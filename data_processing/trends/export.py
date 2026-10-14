@@ -27,8 +27,14 @@ def _write_definitions_sheet(
     definitions = [
         (
             "Fiscal Year",
-            "Taken from the workbook filename. "
-            "TGIACCD_fy26.xlsx is FY2026.",
+            "Taken from the annual source filename. "
+            "TGIACCD_fy26.xlsx or TGIACCD_fy2026.csv is FY2026.",
+        ),
+        (
+            "SQL Source Scope",
+            "Direct SQL sources include all detail codes and terms by Feed Date "
+            "from July 1 through June 30. Balance values are current replicated "
+            "balances at extraction, not historical fiscal-year-end snapshots.",
         ),
         (
             "Total Amount by Detail Code",

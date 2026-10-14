@@ -17,6 +17,7 @@ from app.gui.services.canadian_tax import run_canadian_tax
 from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
+from app.gui.services.trends import run_trends, run_refresh_detail_codes
 from app.gui.services.report_watcher import run_setup_report_watcher
 from app.gui.services.textbook_brokers import run_textbook_brokers
 from app.gui.services.textbook_recon import run_recon
@@ -27,6 +28,38 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CURRENT_TERM = get_banner_term()
 LAST_MONTH = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
+    WorkflowDefinition(
+        workflow_id="refresh_detail_codes", name="Refresh Banner Detail Codes",
+        description="Refresh the shared charge/payment classifications and categories used by Historical Trends directly from Banner. Validates the complete result before replacing the shared reference.",
+        category="Accounts Receivable", runner=run_refresh_detail_codes,
+        administrator_only=True,
+        supported_modes=(WorkflowMode.PRODUCTION,),
+        production_warning="Reads Banner detail-code metadata from PROD Insights and updates detail_codes.json beside the shared GUI permissions file. No Banner records are changed. A failed refresh preserves the saved reference.",
+    ),
+    WorkflowDefinition(
+        workflow_id="trends", name="Historical Trends",
+        description="Analyze annual TGIACCD uploads or extract Banner activity by fiscal year (July–June Feed Dates) from PROD Insights in checked pages. Creates the existing analysis workbook; SQL runs also keep annual source CSVs. SQL balances are current replicated balances.",
+        category="Accounts Receivable", runner=run_trends,
+        administrator_only=True, cancellable=True,
+        production_warning="Reads all account transactions for the selected fiscal years from PROD Insights and saves annual source files and an analysis workbook. No Banner records are changed. Balances are current, not historical year-end snapshots.",
+        parameters=(
+            ParameterDefinition(key="banner_file", label="Annual TGIACCD files", kind=ParameterKind.MULTI_INPUT_FILE,
+                file_types=(("Annual Excel or CSV files", "*.xlsx *.csv"),),
+                help_text="Drop, browse, or paste one file path per line. Use one file per fiscal year named TGIACCD_fy2026.xlsx (or .csv). Uploaded years come from filenames; no hidden SQL year filters apply."),
+            ParameterDefinition(key="first_fiscal_year", label="First fiscal year (ending year)", kind=ParameterKind.INTEGER,
+                minimum=1900, maximum=9998,
+                default=str(date.today().year - (date.today().month < 7)),
+                help_text="FY2026 means July 1, 2025 through June 30, 2026. All detail codes and terms in that Feed Date range are included."),
+            ParameterDefinition(key="last_fiscal_year", label="Last fiscal year (ending year)", kind=ParameterKind.INTEGER,
+                minimum=1900, maximum=9998,
+                default=str(date.today().year - (date.today().month < 7)),
+                help_text="Defaults to the most recently completed fiscal year. A current or future year can be incomplete."),
+            ParameterDefinition(key="output_file", label="Save trends analysis as", kind=ParameterKind.OUTPUT_FILE,
+                default_factory=lambda: PROJECT_ROOT / "data" / "statistics" / f"TGIACCD_Fiscal_Year_Analysis_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
+                help_text="Choose an existing approved output folder and a new filename. SQL runs also create a matching _sources folder with one checked CSV per fiscal year. Source files and existing results are never overwritten."),
+        ),
+    ),
     WorkflowDefinition(
         workflow_id="canadian_tax", name="Canadian TL11A Review",
         description="Reconciles tuition paid from Insights, includes scholarships, checks course dates and converts USD to CAD using the published annual rate. Saves a review workbook and audit data.",

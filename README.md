@@ -100,6 +100,13 @@ Detail codes are entered explicitly with no defaults. See the
 [1305 workflow instructions](data_processing/graduate_contract_recon/README.md)
 for matching rules and the permission grant needed in existing shared policies.
 
+Administrators can run **Historical Trends** with direct PROD Insights extraction,
+checked monthly pages, and separate annual source CSVs. It uses July–June Feed
+Dates and preserves the existing analysis. **Refresh Banner Detail Codes**
+initializes/updates the shared reference from PROD; SQL trends runs also refresh
+it automatically, while uploads use the saved reference. See
+[Historical Trends instructions](workflows/trends/README.md).
+
 Administrators can run **Canadian TL11A Review** with a CWID and calendar tax
 year in the GUI. It defaults to TEST, reconciles paid tuition allocations,
 includes scholarships, excludes FEIT/CFEE, and checks course durations including
@@ -145,7 +152,7 @@ The following commands will now be available:
 | `test-automation` | Runs all automated repository tests. |
 | `start-population-testing` | Runs Population Testing with default settings. |
 | `start-refunds` | Runs the read-only refund review workflow. |
-| `start-trends` | Runs Historical Trends with default settings. |
+| `start-trends` | Runs Historical Trends from annual workbooks with default settings; administrators can also run checked PROD SQL extraction in the app. |
 | `start-textbook-brokers` | Runs Textbook Brokers. |
 | `archive-textbook-brokers` | Archives the current Textbook Brokers term after Banner upload. |
 | `setup-report-watcher` | Installs or updates the Cashier Downloads watcher for the signed-in employee. |

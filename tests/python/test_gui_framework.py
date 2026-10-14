@@ -49,7 +49,7 @@ from shared.user_settings import (
     get_automation_user_first_name,
     get_user_settings_path,
 )
-from shared.mines_paths import ensure_hidden_directory, get_shared_gui_access_path
+from shared.mines_paths import ensure_hidden_directory, get_shared_gui_access_path, get_shared_detail_codes_path
 
 
 class WorkflowRegistryTests(unittest.TestCase):
@@ -310,6 +310,14 @@ class MacReviewIdentityTests(unittest.TestCase):
             Path("C:/Mines") / "GRP-Bursar Office - General" / "Y-Brswork"
             / "Staff Folders" / ".highered_automation" / "gui_access.json",
         )
+
+    def test_shared_banner_reference_is_beside_permissions(self) -> None:
+        environment = {"OneDriveCommercial": "C:/Mines"}
+        self.assertEqual(get_shared_detail_codes_path(environment),
+                         get_shared_gui_access_path(environment).with_name("detail_codes.json"))
+        fallback = {"USERPROFILE": "C:/Users/Synthetic"}
+        self.assertEqual(get_shared_detail_codes_path(fallback),
+                         get_shared_gui_access_path(fallback).with_name("detail_codes.json"))
 
     def test_hidden_policy_directory_is_created_on_non_windows_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
