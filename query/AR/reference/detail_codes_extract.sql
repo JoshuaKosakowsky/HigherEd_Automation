@@ -7,6 +7,9 @@ SELECT
     UPPER(TRIM(d.tbbdetc_type_ind)) AS type,
     UPPER(TRIM(d.tbbdetc_dcat_code)) AS category,
     d.tbbdetc_desc AS detail_code_description,
+    TRIM(CAST(d.tbbdetc_priority AS text)) AS priority,
+    UPPER(TRIM(d.tbbdetc_detc_active_ind)) AS active,
+    UPPER(TRIM(d.tbbdetc_tiv_ind)) AS title_iv,
     COUNT(*) OVER () AS extract_remaining_count
 FROM taismgr.tbbdetc d
 WHERE __CURSOR_FILTER__

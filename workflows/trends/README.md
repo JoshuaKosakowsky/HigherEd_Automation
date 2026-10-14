@@ -44,6 +44,15 @@ codes), validates uniqueness and C/P types,
 nonempty categories and result completeness; and replaces the saved JSON only
 after validation. Extra Excel-derived metadata is retained for codes still
 present in Banner. Codes absent from Banner are removed from the new reference.
+The refreshed metadata includes `priority` from `TBBDETC_PRIORITY`, `active`
+from `TBBDETC_DETC_ACTIVE_IND`, and `title_iv` from `TBBDETC_TIV_IND`.
+Priority is stored as text, retaining leading zeros. Y/N indicators become
+JSON true/false, matching the Excel converter; blank values remain null.
+Unexpected values stop the refresh and preserve the saved reference. These
+fields are refreshed even if the saved file contains older Excel-derived values.
+Inactive and non-Title-IV codes are still included; no transaction population
+or financial classification rules change.
+
 No Banner records are changed. The refresh does not require a prior Excel export.
 Copying the existing `data/banner/detail_codes.json` there remains an optional
 bootstrap method.

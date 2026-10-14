@@ -23,7 +23,7 @@ from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.insights.client import InsightsAPIError
 
 COLUMNS = list(REQUIRED_COLUMNS) + ["extract_pidm", "extract_transaction", "extract_remaining_count"]
-METADATA = {"TUIT": {"type": "C", "category": "TUI", "detail_code_description": "Tuition"}}
+METADATA = {"TUIT": {"type": "C", "category": "TUI", "detail_code_description": "Tuition", "priority": "001", "active": True, "title_iv": False}}
 
 
 class FakeInsights:
@@ -35,7 +35,7 @@ class FakeInsights:
     def run_sql(self, sql):
         self.sql.append(sql)
         if "FROM taismgr.tbbdetc" in sql:
-            return pd.DataFrame([{"detail_code": "TUIT", **METADATA["TUIT"], "extract_remaining_count": 1}])
+            return pd.DataFrame([{"detail_code": "TUIT", **METADATA["TUIT"], "active": "Y", "title_iv": "N", "extract_remaining_count": 1}])
         start, end = re.findall(r"DATE '([0-9-]+)'", sql)
         cursor = re.search(r"> \((\d+), (\d+)\)", sql)
         key = tuple(map(int, cursor.groups())) if cursor else (-1, -1)

@@ -20,6 +20,8 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('TAISMGR', 'TBBDETC', 'DCAT_CODE'),
         ('TAISMGR', 'TBBDETC', 'TYPE_IND'),
         ('TAISMGR', 'TBBDETC', 'PRIORITY'),
+        ('TAISMGR', 'TBBDETC', 'DETC_ACTIVE_IND'),
+        ('TAISMGR', 'TBBDETC', 'TIV_IND'),
         ('SATURN', 'SPRIDEN', 'PIDM'),
         ('SATURN', 'SPRIDEN', 'ID'),
         ('SATURN', 'SPRIDEN', 'FIRST_NAME'),

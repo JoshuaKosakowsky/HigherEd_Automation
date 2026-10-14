@@ -15,7 +15,7 @@ from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.insights.client import InsightsAPIError
 from shared.insights.detail_codes import extract_detail_codes, refresh_detail_codes
 
-COLUMNS = ["detail_code", "type", "category", "detail_code_description", "extract_remaining_count"]
+COLUMNS = ["detail_code", "type", "category", "detail_code_description", "priority", "active", "title_iv", "extract_remaining_count"]
 
 
 class ReferenceExecutor:
@@ -31,7 +31,7 @@ class ReferenceExecutor:
         marker = re.search(r"> E?'((?:[^']|'')*)'", sql)
         eligible = [row for row in self.rows if marker is None or row[0] > marker.group(1).replace("''", "'").replace("\\\\", "\\")]
         limit = int(re.search(r"LIMIT (\d+)", sql).group(1))
-        return pd.DataFrame([list(row) + [len(eligible)] for row in eligible[:min(limit, self.cap)]], columns=COLUMNS)
+        return pd.DataFrame([list(row) + (["001", "Y", "N"] if len(row) == 4 else []) + [len(eligible)] for row in eligible[:min(limit, self.cap)]], columns=COLUMNS)
 
 
 class DetailCodeReferenceTests(unittest.TestCase):
@@ -54,6 +54,49 @@ class DetailCodeReferenceTests(unittest.TestCase):
         self.assertTrue(records["TUIT"]["refundable"])
         self.assertEqual(records["TUIT"]["type"], "C")
         self.assertNotIn("OLD1", records)
+
+    def test_refresh_updates_priority_and_boolean_flags_preserving_extra_fields(self):
+        self.path.write_text(json.dumps({"TUIT": {"priority": "999", "active": False,
+            "title_iv": False, "refundable": True}}))
+        executor = ReferenceExecutor(rows=[("TUIT", "C", "TUI", "Tuition", " 001 ", " y ", "Y")])
+        refresh_detail_codes(executor, self.path)
+        metadata = json.loads(self.path.read_text())["TUIT"]
+        self.assertEqual(metadata["priority"], "001")
+        self.assertIs(metadata["active"], True)
+        self.assertIs(metadata["title_iv"], True)
+        self.assertIs(metadata["refundable"], True)
+        sql = executor.calls[0]
+        self.assertIn("d.tbbdetc_priority", sql)
+        self.assertIn("d.tbbdetc_detc_active_ind", sql)
+        self.assertIn("d.tbbdetc_tiv_ind", sql)
+
+    def test_inactive_and_non_title_iv_codes_remain_in_reference(self):
+        result = extract_detail_codes(ReferenceExecutor(rows=[("OLD1", "C", "FEE", "Old", "000", "N", "N")]))
+        self.assertEqual(result["OLD1"]["priority"], "000")
+        self.assertIs(result["OLD1"]["active"], False)
+        self.assertIs(result["OLD1"]["title_iv"], False)
+
+    def test_blank_flags_and_priority_remain_null(self):
+        for values in ((None, None, None), ("", " ", "")):
+            result = extract_detail_codes(ReferenceExecutor(rows=[("NULL", "C", "FEE", "Unknown", *values)]))
+            self.assertIsNone(result["NULL"]["priority"])
+            self.assertIsNone(result["NULL"]["active"])
+            self.assertIsNone(result["NULL"]["title_iv"])
+
+    def test_missing_or_invalid_new_metadata_preserves_previous_reference(self):
+        for field in ("priority", "active", "title_iv"):
+            for missing in (True, False):
+                with self.subTest(field=field, missing=missing):
+                    self.path.write_text('{}')
+                    executor = ReferenceExecutor(); run_sql = executor.run_sql
+                    def bad(sql):
+                        frame = run_sql(sql)
+                        if missing: return frame.drop(columns=field)
+                        frame[field] = "INVALID"
+                        return frame
+                    executor.run_sql = bad
+                    with self.assertRaises(InsightsAPIError): refresh_detail_codes(executor, self.path)
+                    self.assertEqual(self.path.read_text(), '{}')
 
     def test_reference_accepts_text_codes_and_escapes_paging_cursor(self):
         rows = sorted([

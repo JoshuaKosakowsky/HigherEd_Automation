@@ -13,7 +13,33 @@ from shared.insights.client import InsightsAPIError
 from shared.progress import ProgressReporter
 
 QUERY_PATH = Path(__file__).resolve().parents[2] / "query" / "AR" / "reference" / "detail_codes_extract.sql"
-FIELDS = {"detail_code", "type", "category", "detail_code_description", "extract_remaining_count"}
+FIELDS = {"detail_code", "type", "category", "detail_code_description", "priority", "active", "title_iv", "extract_remaining_count"}
+
+
+def _indicator(value: object, field: str) -> bool | None:
+    """Keep unknown indicators distinct from a Banner N."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().upper()
+        if not cleaned:
+            return None
+        if cleaned in {"Y", "N"}:
+            return cleaned == "Y"
+    raise InsightsAPIError(f"Banner returned an invalid {field} indicator. The saved reference was preserved.")
+
+
+def _priority(value: object) -> str | None:
+    """Preserve Banner's priority text, including leading zeros."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if re.fullmatch(r"[0-9]{1,3}", cleaned):
+            return cleaned
+    raise InsightsAPIError("Banner returned an invalid priority. The saved reference was preserved.")
 
 
 def extract_detail_codes(
@@ -78,7 +104,10 @@ def extract_detail_codes(
             if not isinstance(kind, str) or kind not in {"C", "P"} or not isinstance(category, str) or not category.strip() or not isinstance(description, str):
                 raise InsightsAPIError("Banner returned an invalid charge/payment classification or category. The saved reference was preserved.")
             records[code] = {"type": kind, "category": category.strip().upper(),
-                             "detail_code_description": description.strip()}
+                             "detail_code_description": description.strip(),
+                             "priority": _priority(row["priority"]),
+                             "active": _indicator(row["active"], "Active"),
+                             "title_iv": _indicator(row["title_iv"], "Title IV")}
             cursor = code
         remaining -= len(result)
         if remaining == 0:
