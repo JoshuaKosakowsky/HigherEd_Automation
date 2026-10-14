@@ -19,11 +19,11 @@ from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMessageBox
 
 from app.gui.main import AutomationApplication
 from app.gui.pages.operations_calendar import (
-    CoverageDialog, EventDialog, OccurrenceDialog, OperationsCalendarPage,
+    CoverageDialog, EventDialog, GroupsDialog, OccurrenceDialog, OperationsCalendarPage,
 )
 from app.gui.services.operations_calendar import (
-    Audience, CalendarData, CalendarEvent, CalendarStore, Coverage, DateOverride, RolePerson,
-    occurrences, replace_override,
+    Audience, CalendarData, CalendarEvent, CalendarGroup, CalendarStore, Coverage, DateOverride, RolePerson,
+    occurrences, replace_override, assign_group,
 )
 from app.gui.theme import apply_theme
 from test_operations_calendar import synthetic_access_payload
@@ -291,6 +291,90 @@ class CalendarGuiTests(unittest.TestCase):
         page._reload()
         self.assertEqual(page.table.rowCount(), 0)
         self.assertFalse(page.add_button.isEnabled())
+
+    def grouped_data(self):
+        data = self.synthetic_calendar()
+        return assign_group(replace(data, groups=(CalendarGroup("fall", "Fall Payment Deadline"),)),
+                            "fall", frozenset(e.id for e in data.events))
+
+    def test_group_heading_collapses_without_hiding_reminders(self):
+        self.store.save(self.grouped_data())
+        page = self.page()
+        self.assertEqual(page.table.rowCount(), 16)
+        self.assertIsInstance(page.display_rows[0], CalendarGroup)
+        reminder_count = page.attention.rowCount()
+        page.table.selectRow(0)
+        self.assertIsNone(page._selected())
+        self.assertFalse(page.review_button.isEnabled())
+        page._activate_row(page.table.item(0, 0))
+        self.assertEqual(page.table.rowCount(), 1)
+        self.assertEqual(page.attention.rowCount(), reminder_count)
+        page._activate_row(page.table.item(0, 0))
+        self.assertEqual(page.table.rowCount(), 16)
+        page.table.selectRow(1)
+        self.assertIsNotNone(page._selected())
+        page.grab()
+
+    def test_group_search_finds_members_and_category_filters_still_apply(self):
+        self.store.save(self.grouped_data())
+        page = self.page()
+        page.search.setText("Fall Payment Deadline")
+        self.assertEqual(page.table.rowCount(), 16)
+        page.category.setCurrentIndex(page.category.findData("Tuition"))
+        self.assertEqual(page.table.rowCount(), 4)
+
+    def test_event_editor_can_change_group_without_changing_dates(self):
+        saved = self.store.save(self.grouped_data())
+        event = saved.events[0]
+        dialog = self.keep(EventDialog(None, saved, self.store.access(), event))
+        self.assertEqual(dialog.group.currentData(), "fall")
+        dialog.group.setCurrentIndex(0)
+        dialog._save()
+        self.assertEqual(dialog.result_event, replace(event, group_id=None))
+
+    def test_groups_dialog_moves_existing_items_and_preserves_dates(self):
+        saved = self.store.save(self.grouped_data())
+        dialog = self.keep(GroupsDialog(None, self.store))
+        with patch.object(QInputDialog, "getText", return_value=("Fee Assessment", True)):
+            dialog._add()
+        new_id = dialog.groups.currentData()
+        billing = next(dialog.items.item(i) for i in range(dialog.items.count())
+                       if dialog.items.item(i).data(Qt.ItemDataRole.UserRole) == "billing")
+        billing.setCheckState(Qt.CheckState.Checked)
+        dialog.groups.setCurrentIndex(dialog.groups.findData("fall"))
+        dialog.groups.setCurrentIndex(dialog.groups.findData(new_id))
+        dialog._save()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        current = self.store.load()
+        self.assertEqual(next(e.group_id for e in current.events if e.id == "billing"), new_id)
+        self.assertEqual([replace(e, group_id=None) for e in current.events],
+                         [replace(e, group_id=None) for e in saved.events])
+
+    def test_removing_group_keeps_events_and_cancel_does_not_save(self):
+        saved = self.store.save(self.grouped_data())
+        dialog = self.keep(GroupsDialog(None, self.store))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            dialog._remove()
+        dialog.reject()
+        self.assertEqual(self.store.load(), saved)
+        dialog = self.keep(GroupsDialog(None, self.store))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            dialog._remove()
+        dialog._save()
+        self.assertEqual(self.store.load().groups, ())
+        self.assertEqual([replace(e, group_id=None) for e in saved.events], list(self.store.load().events))
+
+    def test_group_dialog_rejects_stale_save_and_revoked_admin(self):
+        saved = self.store.save(self.grouped_data())
+        dialog = self.keep(GroupsDialog(None, self.store))
+        self.store.save(replace(saved, groups=(CalendarGroup("fall", "Renamed by another admin"),)))
+        dialog._save()
+        self.assertIn("Another administrator", dialog.error.text())
+        self.policy["users"]["SECOND"] = dict(self.policy["users"]["ADMIN"])
+        self.policy["users"]["ADMIN"]["active"] = False
+        self.write_policy()
+        dialog._save()
+        self.assertIn("active administrator", dialog.error.text())
 
 
 if __name__ == "__main__":

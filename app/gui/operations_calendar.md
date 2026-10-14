@@ -1,9 +1,57 @@
-# Bursar Office Calendar (0.13.0)
+# Bursar Office Calendar (0.15.0)
 
 Only active application administrators can open or edit this calendar. All
 administrators share the same calendar; assigning a staff member or role to an
 item does not grant them calendar access. The calendar is a visual planning
 aid, with no Started/In progress/Complete statuses and no external notifications.
+
+## Group related items with independent dates
+
+Use **Groups…** on the calendar to create a heading such as **Annual PCI Cycle**,
+**Fall Fee Assessment**, or **Fall Payment Deadline**. Select existing items and
+Save to organize the entries you have already made. Their dates, date approvals,
+recurrence, affected roles/people, and reminders are preserved. Categories remain
+separate filter labels; a group can contain items from different categories.
+
+For example, Annual PCI Cycle can contain three ordinary calendar items:
+
+- Review/update materials, with its own start date and duration.
+- Send the announcement, with its own date.
+- Quiz completion window, with its own start date and duration.
+
+Changing PCI Review to one day does not move the announcement or quiz window.
+Each part repeats according to its own schedule. There are no group-level
+dependencies, completion statuses, or dates that control other members.
+
+In **Add item** or **Edit schedule**, use **Group (optional)** to choose an
+existing group or **No group**. For bulk organization, Groups… lists all existing
+schedules, including those outside the currently displayed dates or filters.
+Checking an item already in another group moves it to the selected group.
+Switching groups in that dialog retains pending membership edits; Save commits
+them together and Cancel discards them. Membership applies to the entire recurring
+schedule; future-only schedule editing retains its normal scope.
+
+The chart shows a heading above each group's matching items. Double-click the
+heading to collapse or expand it. Collapsing changes only the chart display;
+reminders remain visible. Search includes group names, and reminders include
+their group name. A group heading has no bar because the gaps between its
+independent activities should not imply continuous work or coverage. Groups with
+no matching items in the selected view are hidden.
+
+Rename groups in Groups…. Removing a group detaches its members while preserving
+every calendar item and its dates. To remove an individual calendar item, select
+that item's row rather than the group heading.
+
+**Linked coverage** is different: its offsets still move with its parent event.
+Use that option when coverage should follow a deadline. Keep email coverage and
+counter coverage as separate grouped items when their dates should be edited
+independently; you can place your existing entries in the same group.
+
+Existing calendar files load without being rewritten or requiring data re-entry.
+The first explicit save uses format 4 and keeps the previous file in the existing
+backup. Update all calendar users to app 0.15.0 or newer before editing the shared
+calendar: older versions cannot read the grouping format. No production calendar
+entries are prefilled, moved, or grouped automatically.
 
 ## Choose affected roles or people
 

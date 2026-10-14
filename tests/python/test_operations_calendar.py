@@ -11,9 +11,9 @@ from pathlib import Path
 
 from app.gui.services.operations_calendar import (
     Audience, CalendarConflictError, CalendarData, CalendarError, CalendarEvent,
-    CalendarStore, Coverage, DateOverride, RolePerson, adjust_weekend,
+    CalendarStore, CalendarGroup, Coverage, DateOverride, RolePerson, adjust_weekend,
     audience_labels, audience_matches, nominal_dates, occurrences, reminder_entries, replace_event, replace_future,
-    replace_override, timeline_rows, unassigned_roles, unassigned_targets,
+    replace_override, timeline_rows, unassigned_roles, unassigned_targets, assign_group, remove_group,
 )
 
 
@@ -314,7 +314,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.path.read_bytes(), original)
         self.store.save(data)
         payload = json.loads(self.store.path.read_text())
-        self.assertEqual(payload["schemaVersion"], 3)
+        self.assertEqual(payload["schemaVersion"], 4)
         self.assertNotIn("positions", payload)
         self.assertEqual((self.root / ".operations_calendar.backup.json").read_bytes(), original)
 
@@ -393,6 +393,89 @@ class StoreTests(unittest.TestCase):
         loaded = self.store.load()
         self.assertEqual(loaded.events, saved.events)
         self.assertEqual(self.store.path.read_bytes(), before)
+
+    def pci_data(self):
+        return CalendarData(events=(
+            CalendarEvent("review", "Review PCI Materials", "PCI", date(2026, 3, 1), recurrence="annual", duration=7),
+            CalendarEvent("email", "PCI Announcement", "PCI", date(2026, 3, 15), recurrence="annual"),
+            CalendarEvent("quiz", "PCI Quiz Window", "PCI", date(2026, 4, 1), recurrence="annual", duration=30),
+        ), groups=(CalendarGroup("pci", "Annual PCI Cycle"),))
+
+    def test_grouping_existing_items_preserves_dates_recurrence_and_exceptions(self):
+        data = self.pci_data()
+        data = replace_override(data, DateOverride("quiz", date(2026, 4, 1), date(2026, 4, 2), True, duration=30))
+        grouped = assign_group(data, "pci", frozenset(e.id for e in data.events))
+        self.assertEqual(tuple(replace(e, group_id=None) for e in grouped.events), data.events)
+        self.assertEqual(grouped.overrides, data.overrides)
+        saved = self.store.save(grouped)
+        self.assertEqual(saved.events, grouped.events)
+        self.assertEqual(saved.groups, grouped.groups)
+
+    def test_shortening_and_moving_review_leaves_quiz_and_other_dates_unchanged(self):
+        data = assign_group(self.pci_data(), "pci", frozenset({"review", "email", "quiz"}))
+        before = occurrences(data, date(2026, 1, 1), date(2027, 12, 31))
+        changed = replace_event(data, replace(data.events[0], anchor=date(2026, 3, 10), duration=1))
+        after = occurrences(changed, date(2026, 1, 1), date(2027, 12, 31))
+        self.assertEqual([o for o in before if o.event.id != "review"],
+                         [o for o in after if o.event.id != "review"])
+        self.assertEqual([entry for entry in reminder_entries(data, self.store.access(), date(2026, 4, 1))
+                          if entry[0].occurrence.event.id != "review"],
+                         [entry for entry in reminder_entries(changed, self.store.access(), date(2026, 4, 1))
+                          if entry[0].occurrence.event.id != "review"])
+        review = next(o for o in after if o.event.id == "review")
+        self.assertEqual(review.end, review.actual)
+
+    def test_review_date_exception_does_not_move_other_group_members(self):
+        data = assign_group(self.pci_data(), "pci", frozenset({"review", "email", "quiz"}))
+        changed = replace_override(data, DateOverride("review", date(2026, 3, 1), date(2026, 3, 25), True))
+        before = occurrences(data, date(2026, 1, 1), date(2026, 12, 31))
+        after = occurrences(changed, date(2026, 1, 1), date(2026, 12, 31))
+        self.assertEqual([o for o in before if o.event.id != "review"],
+                         [o for o in after if o.event.id != "review"])
+
+    def test_removing_or_renaming_group_preserves_events_and_approvals(self):
+        data = assign_group(self.pci_data(), "pci", frozenset({"review", "quiz"}))
+        data = replace_override(data, DateOverride("quiz", date(2026, 4, 1), date(2026, 4, 2), True, duration=30))
+        renamed = replace(data, groups=(CalendarGroup("pci", "PCI Training"),))
+        saved = self.store.save(renamed)
+        self.assertEqual(saved.events, data.events)
+        self.assertEqual(saved.overrides, data.overrides)
+        removed = remove_group(data, "pci")
+        self.assertEqual(removed.groups, ())
+        self.assertEqual(removed.events, self.pci_data().events)
+        self.assertEqual(removed.overrides, data.overrides)
+
+    def test_invalid_groups_never_overwrite_valid_calendar(self):
+        saved = self.store.save(self.pci_data())
+        before = self.store.path.read_bytes()
+        for invalid in (replace(saved, groups=saved.groups * 2),
+                        replace(saved, groups=(*saved.groups, CalendarGroup("other", "ANNUAL PCI CYCLE"))),
+                        replace(saved, groups=(CalendarGroup("pci", ""),)),
+                        replace(saved, events=(replace(saved.events[0], group_id="missing"),))):
+            with self.subTest(data=invalid), self.assertRaises(CalendarError):
+                self.store.save(invalid)
+            self.assertEqual(self.store.path.read_bytes(), before)
+        with self.assertRaises(CalendarError):
+            assign_group(saved, "missing", frozenset({"review"}))
+        with self.assertRaises(CalendarError):
+            assign_group(saved, "pci", frozenset({"missing"}))
+
+    def test_current_work_pc_format_loads_without_rewriting_and_keeps_backup_on_save(self):
+        saved = self.store.save(self.data())
+        payload = json.loads(self.store.path.read_text())
+        payload["schemaVersion"] = 3
+        payload.pop("groups")
+        for event in payload["events"]:
+            event.pop("group_id")
+        self.store.path.write_text(json.dumps(payload), encoding="utf-8")
+        before = self.store.path.read_bytes()
+        loaded = self.store.load()
+        self.assertEqual(loaded.events, saved.events)
+        self.assertEqual(loaded.groups, ())
+        self.assertEqual(self.store.path.read_bytes(), before)
+        new = replace(loaded, groups=(CalendarGroup("fall", "Fall Payment Deadline"),))
+        self.store.save(assign_group(new, "fall", frozenset(e.id for e in new.events)))
+        self.assertEqual((self.root / ".operations_calendar.backup.json").read_bytes(), before)
 
 
 if __name__ == "__main__":

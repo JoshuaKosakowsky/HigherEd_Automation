@@ -87,6 +87,8 @@ Admins also have a shared **Bursar Office Calendar** with a Gantt timeline for
 recurring deadlines and linked coverage periods. Items apply to Everyone or
 existing staff roles, with optional selections of individual people beneath
 each role. Unassigned roles or people remain visible.
+Use **Groups…** to organize existing items under headings such as Annual PCI
+Cycle. Each part retains independent dates, recurrence, and reminders.
 Weekend adjustments are proposed for admin review, and reminders
 appear inside the app without task completion tracking. See the
 [Bursar Office Calendar instructions](app/gui/operations_calendar.md).

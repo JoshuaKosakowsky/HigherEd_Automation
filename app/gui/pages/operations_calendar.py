@@ -13,18 +13,18 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog,
     QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
-    QLineEdit, QMessageBox, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
     QScrollArea, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.gui.services.access import AccessConfigurationError
 from app.gui.services.operations_calendar import (
-    Audience, CalendarData, CalendarError, CalendarEvent, CalendarStore,
+    Audience, CalendarData, CalendarError, CalendarEvent, CalendarGroup, CalendarStore,
     Coverage, DateOverride, Occurrence, RolePerson, audience_labels, audience_matches,
     person_available, person_label, role_label,
     occurrences, reminder_entries, replace_event, replace_future, replace_override,
-    timeline_rows, unassigned_targets,
+    timeline_rows, unassigned_targets, assign_group, remove_group,
 )
 from app.gui.theme import BLASTER_BLUE, COLORADO_RED, LIGHT_BLUE, MUTED, PALE_BLUE, button, label
 from shared.mines_paths import MinesPathError
@@ -200,6 +200,12 @@ class EventDialog(QDialog):
         for category in sorted({e.category for e in data.events} | {"Billing", "Payment Deadline", "Tuition", "Other"}):
             self.category.addItem(category)
         self.category.setCurrentText(event.category if event else "Other")
+        self.group = QComboBox()
+        self.group.addItem("No group", None)
+        for group in sorted(data.groups, key=lambda g: g.name.casefold()):
+            self.group.addItem(group.name, group.id)
+        self.group.setCurrentIndex(max(0, self.group.findData(event.group_id if event else None)))
+        self.group.setToolTip("Related items share a heading. Their dates and reminders stay independent. Use Groups… on the calendar to create groups or organize existing items.")
         category_row = QWidget()
         category_layout = QHBoxLayout(category_row)
         category_layout.setContentsMargins(0, 0, 0, 0)
@@ -238,7 +244,7 @@ class EventDialog(QDialog):
         self.notes = QPlainTextEdit(event.notes if event else "")
         self.notes.setMaximumHeight(85)
         self.audience = AudienceEditor(access, event.audience if event else Audience())
-        for title, widget in (("Title", self.title), ("Category", category_row),
+        for title, widget in (("Title", self.title), ("Category", category_row), ("Group (optional)", self.group),
                               ("First / normal date", self.anchor), ("Length in days", self.duration),
                               ("Repeat", self.recurrence), ("Monthly selection", month_row),
                               ("", self.has_until), ("Last date", self.until),
@@ -253,7 +259,7 @@ class EventDialog(QDialog):
         form.setRowVisible(month_row, self.recurrence.currentData() == "monthly")
         self.has_until.toggled.connect(lambda checked: form.setRowVisible(self.until, checked))
         form.setRowVisible(self.until, self.has_until.isChecked())
-        fields.addWidget(label("Linked coverage periods", "section"))
+        fields.addWidget(label("Linked coverage (moves with this item's date)", "section"))
         self.coverage_table = QTableWidget(0, 3)
         table_setup(self.coverage_table, ("Coverage", "Days from event", "Affects"))
         self.coverage_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -336,8 +342,137 @@ class EventDialog(QDialog):
             self.title.text().strip(), self.category.currentText().strip(), anchor,
             self.recurrence.currentData(), months, until, self.weekend.currentData(),
             self.duration.value(), self.reminder.value(), audience, tags_from(self.tags.text()),
-            self.notes.toPlainText().strip(), tuple(self.coverage),
+            self.notes.toPlainText().strip(), tuple(self.coverage), self.group.currentData(),
         )
+        self.accept()
+
+
+class GroupsDialog(QDialog):
+    """Organize existing schedules without recreating or rescheduling them."""
+
+    def __init__(self, parent, store: CalendarStore):
+        super().__init__(parent)
+        self.store = store
+        self.data = store.load()
+        self.selected_group = None
+        self.setWindowTitle("Calendar Groups")
+        self.resize(720, 560)
+        layout = QVBoxLayout(self)
+        layout.addWidget(label("Related Items, Independent Dates", "section"))
+        layout.addWidget(label("Create a group such as Annual PCI Cycle, then select its existing items. Grouping keeps each item's dates, recurrence, roles, and reminders unchanged.", "muted"))
+        self.groups = QComboBox()
+        self.groups.setAccessibleName("Calendar group")
+        self.groups.currentIndexChanged.connect(self._load_group)
+        layout.addWidget(self.groups)
+        actions = QHBoxLayout()
+        actions.addWidget(button("New group…", self._add))
+        self.rename_button = button("Rename…", self._rename)
+        self.remove_button = button("Remove group", self._remove)
+        actions.addWidget(self.rename_button)
+        actions.addWidget(self.remove_button)
+        actions.addStretch()
+        layout.addLayout(actions)
+        layout.addWidget(label("Select the items in this group. Checking an item in another group moves it here.", "muted"))
+        self.items = QListWidget()
+        self.items.setAccessibleName("Items in the selected group")
+        layout.addWidget(self.items, 1)
+        self.error = label("", "error")
+        layout.addWidget(self.error)
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        controls.accepted.connect(self._save)
+        controls.rejected.connect(self.reject)
+        layout.addWidget(controls)
+        self._refresh()
+
+    def _remember(self):
+        if self.selected_group is not None:
+            selected = frozenset(self.items.item(i).data(Qt.ItemDataRole.UserRole)
+                                 for i in range(self.items.count())
+                                 if self.items.item(i).checkState() == Qt.CheckState.Checked)
+            self.data = assign_group(self.data, self.selected_group, selected)
+
+    def _refresh(self, selected=None):
+        self.selected_group = None
+        self.groups.blockSignals(True)
+        self.groups.clear()
+        for group in sorted(self.data.groups, key=lambda g: g.name.casefold()):
+            self.groups.addItem(group.name, group.id)
+        if selected is not None:
+            self.groups.setCurrentIndex(self.groups.findData(selected))
+        self.groups.blockSignals(False)
+        self._load_group()
+
+    def _load_group(self):
+        self._remember()
+        self.selected_group = self.groups.currentData()
+        self.items.clear()
+        names = {g.id: g.name for g in self.data.groups}
+        for event in sorted(self.data.events, key=lambda e: (e.title.casefold(), e.anchor, e.id)):
+            text = f"{event.title} · {event.category} · from {event.anchor:%b %d, %Y}"
+            if event.group_id and event.group_id != self.selected_group:
+                text += f" (in {names[event.group_id]})"
+            item = QListWidgetItem(text, self.items)
+            item.setToolTip(text)
+            item.setData(Qt.ItemDataRole.UserRole, event.id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if event.group_id == self.selected_group and self.selected_group else Qt.CheckState.Unchecked)
+        enabled = self.selected_group is not None
+        self.items.setEnabled(enabled)
+        self.rename_button.setEnabled(enabled)
+        self.remove_button.setEnabled(enabled)
+
+    def _name(self, title, current=""):
+        name, accepted = QInputDialog.getText(self, title, "Group name:", text=current)
+        if not accepted:
+            return None
+        name = name.strip()
+        if not name or len(name) > 200 or "\n" in name or "\r" in name:
+            self.error.setText("Enter a group name of 1–200 characters on one line.")
+            return None
+        if any(g.name.casefold() == name.casefold() and g.id != (self.selected_group if current else None)
+               for g in self.data.groups):
+            self.error.setText("A group with that name already exists.")
+            return None
+        self.error.setText("")
+        return name
+
+    def _add(self):
+        name = self._name("New Group")
+        if name is None:
+            return
+        self._remember()
+        group = CalendarGroup(uuid4().hex, name)
+        self.data = replace(self.data, groups=(*self.data.groups, group))
+        self._refresh(group.id)
+
+    def _rename(self):
+        group = next((g for g in self.data.groups if g.id == self.selected_group), None)
+        if group is None:
+            return
+        name = self._name("Rename Group", group.name)
+        if name is not None:
+            self._remember()
+            self.data = replace(self.data, groups=tuple(replace(g, name=name) if g.id == group.id else g for g in self.data.groups))
+            self._refresh(group.id)
+
+    def _remove(self):
+        if self.selected_group is None:
+            return
+        if QMessageBox.question(self, "Remove Group?", "Remove this group? Its calendar items and all their dates will be kept.",
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self._remember()
+        self.data = remove_group(self.data, self.selected_group)
+        self._refresh()
+
+    def _save(self):
+        self._remember()
+        try:
+            self.store.save(self.data)
+        except ERRORS as error:
+            self.error.setText(str(error))
+            return
         self.accept()
 
 
@@ -394,12 +529,12 @@ class EventLabelDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipRect(option.rect)
         rect = option.rect.adjusted(10, 2, -8, -2)
-        painter.setFont(option.font)
+        painter.setFont(styled.font)
         painter.setPen(styled.palette.text().color())
-        title = QFontMetrics(option.font).elidedText(lines[0], Qt.TextElideMode.ElideRight, rect.width())
+        title = QFontMetrics(styled.font).elidedText(lines[0], Qt.TextElideMode.ElideRight, rect.width())
         painter.drawText(rect.adjusted(0, 0, 0, -rect.height() // 2), Qt.AlignmentFlag.AlignVCenter, title)
         if len(lines) > 1:
-            small = QFont(option.font)
+            small = QFont(styled.font)
             small.setPointSizeF(max(8, small.pointSizeF() - 1))
             painter.setFont(small)
             painter.setPen(QColor(MUTED))
@@ -482,6 +617,8 @@ class OperationsCalendarPage(QWidget):
         self.data = CalendarData()
         self.access = None
         self.rows = []
+        self.display_rows = []
+        self.collapsed_groups = set()
         self.attention_occurrences = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
@@ -522,8 +659,10 @@ class OperationsCalendarPage(QWidget):
         self.review_button = button("Review / edit date", self._edit_date)
         self.series_button = button("Edit schedule", self._edit_series)
         self.remove_button = button("Remove item", self._remove)
+        self.groups_button = button("Groups…", self._groups)
         for widget in (self.add_button, self.review_button, self.series_button, self.remove_button):
             actions.addWidget(widget)
+        actions.addWidget(self.groups_button)
         actions.addStretch()
         actions.addWidget(button("Reload", self._reload))
         layout.addLayout(actions)
@@ -541,7 +680,7 @@ class OperationsCalendarPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.setItemDelegateForColumn(2, self.delegate)
         self.table.setItemDelegateForColumn(0, EventLabelDelegate(self.table))
-        self.table.itemDoubleClicked.connect(lambda _: self._edit_date())
+        self.table.itemDoubleClicked.connect(self._activate_row)
         self.table.itemSelectionChanged.connect(self._selection)
         layout.addWidget(self.table, 1)
         layout.addWidget(label("Upcoming, date review & staffing reminders", "section"))
@@ -619,7 +758,8 @@ class OperationsCalendarPage(QWidget):
             view, login = json.loads(target)
             if not audience_matches(row.audience, view, login):
                 return False
-        text = " ".join((row.title, row.occurrence.event.title, row.occurrence.event.category,
+        group = next((g.name for g in self.data.groups if g.id == row.occurrence.event.group_id), "")
+        text = " ".join((row.title, row.occurrence.event.title, row.occurrence.event.category, group,
                          *row.occurrence.tags, row.occurrence.notes,
                          *audience_labels(row.audience, self.access))).casefold()
         return self.search.text().strip().casefold() in text
@@ -637,10 +777,34 @@ class OperationsCalendarPage(QWidget):
         self.rows = [row for occurrence in occurrences(self.data, start, end)
                      for row in timeline_rows(occurrence)
                      if row.start <= end and row.end >= start and self._matches(row)]
-        self.table.setRowCount(len(self.rows))
-        for index, row in enumerate(self.rows):
+        grouped = {g.id: [] for g in self.data.groups}
+        self.display_rows = []
+        for row in self.rows:
+            if row.occurrence.event.group_id:
+                grouped[row.occurrence.event.group_id].append(row)
+            else:
+                self.display_rows.append(row)
+        for group in sorted(self.data.groups, key=lambda g: g.name.casefold()):
+            if grouped[group.id]:
+                self.display_rows.append(group)
+                if group.id not in self.collapsed_groups:
+                    self.display_rows.extend(grouped[group.id])
+        self.table.setRowCount(len(self.display_rows))
+        for index, row in enumerate(self.display_rows):
+            if isinstance(row, CalendarGroup):
+                count = len({r.occurrence.event.id for r in grouped[row.id]})
+                title = ("▸ " if row.id in self.collapsed_groups else "▾ ") + row.name
+                for column, value in enumerate((f"{title}\n{count} related item(s) in view", "Independent dates", "")):
+                    item = QTableWidgetItem(value)
+                    item.setBackground(QColor(PALE_BLUE))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                    item.setToolTip("Double-click to expand or collapse. Each item keeps its own dates. Use Groups… to change membership.")
+                    self.table.setItem(index, column, item)
+                continue
             occurrence = row.occurrence
-            text = f"{'↳ ' if row.coverage else ''}{row.title}"
+            text = f"{'  ' if occurrence.event.group_id else ''}{'↳ ' if row.coverage else ''}{row.title}"
             if not row.coverage and occurrence.tags:
                 text += " · " + ", ".join(occurrence.tags)
             affected = "; ".join(audience_labels(row.audience, self.access))
@@ -670,17 +834,42 @@ class OperationsCalendarPage(QWidget):
         self.attention.setRowCount(len(entries))
         self.attention.setFixedHeight(min(190, max(80, 48 * len(entries) + 48)))
         for index, (row, message) in enumerate(entries):
-            for column, value in enumerate((f"{row.start:%b %d, %Y}", row.title, message)):
+            group = next((g.name for g in self.data.groups if g.id == row.occurrence.event.group_id), None)
+            title = f"{group} · {row.title}" if group else row.title
+            for column, value in enumerate((f"{row.start:%b %d, %Y}", title, message)):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 self.attention.setItem(index, column, item)
 
     def _selected(self):
         index = self.table.currentRow()
-        return self.rows[index].occurrence if 0 <= index < len(self.rows) else None
+        if 0 <= index < len(self.display_rows) and not isinstance(self.display_rows[index], CalendarGroup):
+            return self.display_rows[index].occurrence
+        return None
+
+    def _activate_row(self, item):
+        row = self.display_rows[item.row()]
+        if isinstance(row, CalendarGroup):
+            if row.id in self.collapsed_groups:
+                self.collapsed_groups.remove(row.id)
+            else:
+                self.collapsed_groups.add(row.id)
+            self._render()
+        else:
+            self._edit_date(occurrence=row.occurrence)
+
+    def _groups(self):
+        try:
+            dialog = GroupsDialog(self, self.store)
+        except ERRORS as error:
+            QMessageBox.warning(self, "Groups unavailable", str(error))
+            return
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._reload()
 
     def _selection(self):
         self.add_button.setEnabled(self.access is not None)
+        self.groups_button.setEnabled(self.access is not None)
         for control in (self.review_button, self.series_button, self.remove_button):
             control.setEnabled(self.access is not None and self._selected() is not None)
 

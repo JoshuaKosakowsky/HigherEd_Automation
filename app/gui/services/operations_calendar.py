@@ -51,6 +51,12 @@ class Coverage:
 
 
 @dataclass(frozen=True)
+class CalendarGroup:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
 class CalendarEvent:
     id: str
     title: str
@@ -66,6 +72,7 @@ class CalendarEvent:
     tags: tuple[str, ...] = ()
     notes: str = ""
     coverage: tuple[Coverage, ...] = ()
+    group_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,7 @@ class CalendarData:
     source_digest: str | None = None
     updated_by: str | None = None
     updated_at: str | None = None
+    groups: tuple[CalendarGroup, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -225,12 +233,20 @@ def _unique_ids(items: tuple, description: str) -> None:
 
 def _parse(payload: object, digest: str | None, access: AccessConfiguration | None = None) -> CalendarData:
     try:
-        if not isinstance(payload, dict) or payload.get("schemaVersion") not in (1, 2, 3):
+        if not isinstance(payload, dict) or payload.get("schemaVersion") not in (1, 2, 3, 4):
             raise CalendarError("Unsupported Bursar Office Calendar format.")
         if payload["schemaVersion"] == 1:
             if access is None:
                 raise CalendarError("Staff access is required to convert the earlier calendar.")
             payload = _migrate_positions(payload, access)
+        groups = tuple(CalendarGroup(_text(item["id"], "group ID"), _text(item["name"], "group name"))
+                       for item in _list(payload.get("groups", [])))
+        _unique_ids(groups, "group")
+        if len({g.name.casefold() for g in groups}) != len(groups):
+            raise CalendarError("Group names must be unique.")
+        if any("\n" in g.name or "\r" in g.name for g in groups):
+            raise CalendarError("Use a single line for group names.")
+        group_ids = {g.id for g in groups}
         events = []
         for item in _list(payload.get("events", [])):
             coverage = tuple(Coverage(
@@ -256,7 +272,10 @@ def _parse(payload: object, digest: str | None, access: AccessConfiguration | No
                 _audience(item["audience"]),
                 _strings(item.get("tags", []), "billing detail"),
                 _text(item.get("notes", ""), "notes", empty=True, limit=4000), coverage,
+                _text(item["group_id"], "group ID") if item.get("group_id") is not None else None,
             )
+            if event.group_id is not None and event.group_id not in group_ids:
+                raise CalendarError("A calendar item refers to an unknown group.")
             if event.recurrence not in ("once", "annual", "monthly"):
                 raise CalendarError("Invalid recurrence.")
             if event.weekend not in ("keep", "monday", "friday"):
@@ -284,7 +303,7 @@ def _parse(payload: object, digest: str | None, access: AccessConfiguration | No
         if len({(o.event_id, o.nominal) for o in overrides}) != len(overrides):
             raise CalendarError("Duplicate date exception.")
         return CalendarData(events, tuple(overrides), digest,
-                            payload.get("updatedBy"), payload.get("updatedAt"))
+                            payload.get("updatedBy"), payload.get("updatedAt"), groups)
     except (KeyError, TypeError, AttributeError) as error:
         raise CalendarError("The Bursar Office Calendar contains malformed data.") from error
 
@@ -300,7 +319,8 @@ def _payload(data: CalendarData, actor: str) -> dict:
         return value
 
     return {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
+        "groups": dates([asdict(g) for g in data.groups]),
         "events": dates([asdict(e) for e in data.events]),
         "overrides": dates([asdict(o) for o in data.overrides]),
         "updatedBy": actor,
@@ -477,6 +497,25 @@ def replace_override(data: CalendarData, override: DateOverride) -> CalendarData
     remaining = tuple(o for o in data.overrides
                       if (o.event_id, o.nominal) != (override.event_id, override.nominal))
     return replace(data, overrides=remaining + (override,))
+
+
+def assign_group(data: CalendarData, group_id: str, event_ids: frozenset[str]) -> CalendarData:
+    """Regroup schedules without touching dates, approvals, or recurrence."""
+    if group_id not in {g.id for g in data.groups}:
+        raise CalendarError("The selected group no longer exists.")
+    if not event_ids <= {e.id for e in data.events}:
+        raise CalendarError("A selected calendar item no longer exists.")
+    return replace(data, events=tuple(
+        replace(e, group_id=group_id) if e.id in event_ids else
+        replace(e, group_id=None) if e.group_id == group_id else e
+        for e in data.events
+    ))
+
+
+def remove_group(data: CalendarData, group_id: str) -> CalendarData:
+    """Removing a group always preserves its events and date exceptions."""
+    data = assign_group(data, group_id, frozenset())
+    return replace(data, groups=tuple(g for g in data.groups if g.id != group_id))
 
 
 class CalendarStore:
