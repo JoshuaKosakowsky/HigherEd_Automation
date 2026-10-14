@@ -39,7 +39,8 @@ as `gui_access.json`:
 Run **Refresh Banner Detail Codes** from the Administrator view under Accounts
 Receivable to initialize or update this file. Review the PROD confirmation and
 complete normal Insights sign-in. This queries all TBBDETC codes, including
-inactive/historical codes, in checked pages; validates unique codes, C/P types,
+inactive/historical codes, in checked pages; treats detail codes as opaque nonblank text (including punctuation and shorter
+codes), validates uniqueness and C/P types,
 nonempty categories and result completeness; and replaces the saved JSON only
 after validation. Extra Excel-derived metadata is retained for codes still
 present in Banner. Codes absent from Banner are removed from the new reference.

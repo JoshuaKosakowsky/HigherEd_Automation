@@ -28,8 +28,8 @@ class ReferenceExecutor:
 
     def run_sql(self, sql):
         self.calls.append(sql)
-        marker = re.search(r"> '([A-Z0-9]+)'", sql)
-        eligible = [row for row in self.rows if marker is None or row[0] > marker.group(1)]
+        marker = re.search(r"> E?'((?:[^']|'')*)'", sql)
+        eligible = [row for row in self.rows if marker is None or row[0] > marker.group(1).replace("''", "'").replace("\\\\", "\\")]
         limit = int(re.search(r"LIMIT (\d+)", sql).group(1))
         return pd.DataFrame([list(row) + [len(eligible)] for row in eligible[:min(limit, self.cap)]], columns=COLUMNS)
 
@@ -55,6 +55,32 @@ class DetailCodeReferenceTests(unittest.TestCase):
         self.assertEqual(records["TUIT"]["type"], "C")
         self.assertNotIn("OLD1", records)
 
+    def test_reference_accepts_text_codes_and_escapes_paging_cursor(self):
+        rows = sorted([
+            ("01", "C", "FEE", "Short code"),
+            ("A'01", "C", "FEE", "Apostrophe code"),
+            ("A-01", "P", "FEE", "Punctuation code"),
+            ("ABCDE", "C", "TUI", "Longer code"),
+            ("A\\01", "C", "FEE", "Backslash code"),
+            ("ZZZZ", "P", "FEE", "Final code"),
+        ])
+        executor = ReferenceExecutor(cap=1, rows=rows)
+        records = extract_detail_codes(executor)
+        self.assertEqual(set(records), {row[0] for row in rows})
+        self.assertTrue(any("E'A''01'" in sql for sql in executor.calls))
+        self.assertTrue(any("E'A\\\\01'" in sql for sql in executor.calls))
+        self.assertTrue(any('COLLATE "C"' in sql for sql in executor.calls))
+
+    def test_invalid_value_error_identifies_bad_metadata_without_replacing_file(self):
+        for code in (None, "", "   ", "A\n01"):
+            with self.subTest(code=code):
+                self.path.write_text('{}')
+                executor = ReferenceExecutor(rows=[(code, "C", "FEE", "Synthetic")])
+                with self.assertRaisesRegex(InsightsAPIError, "invalid detail-code value") as caught:
+                    refresh_detail_codes(executor, self.path)
+                self.assertIn(repr(code), str(caught.exception))
+                self.assertEqual(self.path.read_text(), '{}')
+
     def test_api_cap_retries_without_skipping_codes(self):
         executor = ReferenceExecutor(cap=1)
         records = extract_detail_codes(executor)
@@ -75,11 +101,11 @@ class DetailCodeReferenceTests(unittest.TestCase):
                     if kind == "empty": return pd.DataFrame(columns=COLUMNS)
                     if kind == "missing": return frame.drop(columns="category")
                     if kind == "duplicate": frame["detail_code"] = "TUIT"
-                    if kind == "code": frame["detail_code"] = "BAD\'CODE"
+                    if kind == "code": frame["detail_code"] = ""
                     if kind == "type": frame["type"] = "X"
                     if kind == "category": frame["category"] = None
                     if kind == "count": frame["extract_remaining_count"] = 3.5
-                    if kind == "changing" and "> '" in sql: frame["extract_remaining_count"] = 999
+                    if kind == "changing" and "> E'" in sql: frame["extract_remaining_count"] = 999
                     return frame
                 executor.run_sql = bad
                 with self.assertRaises(InsightsAPIError): refresh_detail_codes(executor, self.path)

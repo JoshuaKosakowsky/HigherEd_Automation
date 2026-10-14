@@ -10,5 +10,5 @@ SELECT
     COUNT(*) OVER () AS extract_remaining_count
 FROM taismgr.tbbdetc d
 WHERE __CURSOR_FILTER__
-ORDER BY UPPER(TRIM(d.tbbdetc_detail_code))
+ORDER BY UPPER(TRIM(d.tbbdetc_detail_code)) COLLATE "C"
 LIMIT __PAGE_SIZE__;

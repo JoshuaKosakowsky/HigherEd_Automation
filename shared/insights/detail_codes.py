@@ -31,7 +31,13 @@ def extract_detail_codes(
             cancellation.check()
         if progress:
             progress.report("Extracting and checking Banner detail-code classifications")
-        predicate = "TRUE" if cursor is None else f"UPPER(TRIM(d.tbbdetc_detail_code)) > '{cursor}'"
+        # Reference codes are opaque Banner identifiers, unlike user-entered
+        # activity filters. Escape SQL literals rather than impose an alphabet.
+        escaped_cursor = cursor.replace("\\", "\\\\").replace("'", "''") if cursor is not None else None
+        cursor_literal = f"E'{escaped_cursor}'" if cursor is not None else None
+        predicate = "TRUE" if cursor is None else (
+            f'UPPER(TRIM(d.tbbdetc_detail_code)) COLLATE "C" > {cursor_literal}'
+        )
         result = executor.run_sql(template.replace("__CURSOR_FILTER__", predicate)
                                   .replace("__PAGE_SIZE__", str(page_size)))
         if cancellation:
@@ -60,8 +66,13 @@ def extract_detail_codes(
         for row in result.to_dict("records"):
             code = row["detail_code"]
             kind, category, description = row["type"], row["category"], row["detail_code_description"]
-            if not isinstance(code, str) or re.fullmatch(r"[A-Z0-9]{4}", code) is None:
-                raise InsightsAPIError("Banner returned an invalid detail code. The saved reference was preserved.")
+            if not isinstance(code, str) or not code.strip() or not code.isprintable() or code != code.strip():
+                # Detail-code metadata is not a student identifier. Include a
+                # bounded value so an administrator can diagnose bad source data.
+                raise InsightsAPIError(
+                    f"Banner returned an invalid detail-code value: {repr(code)[:80]} "
+                    f"({type(code).__name__}). The saved reference was preserved."
+                )
             if cursor is not None and code <= cursor:
                 raise InsightsAPIError("Banner returned duplicate or unordered detail codes.")
             if not isinstance(kind, str) or kind not in {"C", "P"} or not isinstance(category, str) or not category.strip() or not isinstance(description, str):
