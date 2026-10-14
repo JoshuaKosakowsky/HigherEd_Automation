@@ -120,7 +120,7 @@ class ConnectionsPage(QScrollArea):
         export.addWidget(label("Report", "field"))
         self.queries = QComboBox()
         self.queries.setAccessibleName("Insights query")
-        for query in QUERIES:
+        for query in sorted(QUERIES, key=lambda item: (item.group.casefold(), item.title.casefold())):
             self.queries.addItem(f"{query.group} — {query.title}", query.query_id)
         export.addWidget(self.queries)
         self.query_description = label("", "muted")

@@ -252,6 +252,15 @@ access rules. See
 [`data_processing/graduate_contract_recon/README.md`](../../data_processing/graduate_contract_recon/README.md)
 for source layouts, matching rules, output interpretation, and deployment.
 
+Choose **Term corrections — Payments in a term with no charges** and enter the
+payment's posted term (e.g. `202655`). This administrator report lists available
+CSH cash-payment credits only where no charge ever posted in that term. It uses
+the same SQL staff can run as a saved Insights question, rechecks administrator
+access, and rejects incomplete API results. It does not move payments or decide
+the destination term. See
+[`query/AR/term_corrections/README.md`](../../query/AR/term_corrections/README.md)
+for publishing, classification, exclusions, and reconciliation before use.
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

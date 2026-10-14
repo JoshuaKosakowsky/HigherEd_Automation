@@ -9,6 +9,9 @@ from pathlib import Path
 import pandas as pd
 
 from app.gui.models import WorkflowContext, WorkflowResult
+from app.gui.services.access import (
+    AccessConfigurationError, get_current_login, load_access_configuration,
+)
 from shared.insights.auth import InsightsAuthenticationError
 from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
 from shared.insights.browser_auth import InsightsBrowserAuthenticationError
@@ -19,6 +22,7 @@ from shared.insights.session_auth import (
     InsightsSessionError, build_authenticated_client, clear_cached_session,
 )
 from shared.insights.session_cache import DailyInsightsSessionCache, InsightsCredentialError
+from shared.mines_paths import get_shared_gui_access_path
 
 
 CONNECTION_SQL = Path(__file__).resolve().parents[3] / "query/insights_testing/connection_check.sql"
@@ -119,6 +123,10 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                 query = get_query(selected_query)
             except ValueError:
                 raise InsightsConfigurationError("Select an available Insights query.") from None
+            if query.administrator_only:
+                policy = load_access_configuration(get_shared_gui_access_path())
+                if not policy.is_administrator(get_current_login()):
+                    raise InsightsConfigurationError("Only an administrator can run this report in the app.")
             term_code = context.parameters.get("term_code")
             if term_code is not None and not isinstance(term_code, str):
                 raise InsightsConfigurationError("Enter a valid Banner term.")
@@ -160,6 +168,16 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                         client.run_sql(rendered_sql)
                         if query.term_variable else client.run_sql_file(query.sql_path)
                     )
+                if query.result_count_column is not None:
+                    column = query.result_count_column
+                    if column not in result.columns or any(
+                        str(value) != str(len(result)) for value in result[column]
+                    ):
+                        raise InsightsAPIError(
+                            "Insights returned incomplete or invalid report results. "
+                            "Run and export the report in Insights. No workbook was saved."
+                        )
+                    result = result.drop(columns=[column])
                 _export_query(result, output_path)
                 return WorkflowResult(
                     True,
@@ -177,6 +195,7 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
             "Sign-in may be needed tomorrow or earlier if the server expires your session."
         ))
     except (
+        AccessConfigurationError,
         InsightsAuthenticationError, InsightsBrowserAuthenticationError,
         InsightsAPIError, InsightsConfigurationError, InsightsSessionError,
         InsightsCredentialError,

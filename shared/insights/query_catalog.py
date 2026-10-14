@@ -20,6 +20,8 @@ class InsightsQuery:
     term_variable: str | None = None
     fall_term_only: bool = False
     requires_activity_parameters: bool = False
+    administrator_only: bool = False
+    result_count_column: str | None = None
 
     @property
     def sql_path(self) -> Path:
@@ -56,6 +58,15 @@ class InsightsQuery:
 
 
 QUERIES: tuple[InsightsQuery, ...] = (
+    InsightsQuery(
+        "payments_without_charges", "Term corrections", "Payments in a term with no charges",
+        "AR/term_corrections/payments_without_charges.sql",
+        "Enter the payment's posted term (for example 202655 for Summer). "
+        "Available cash-payment credits where no charge transaction ever posted; "
+        "review candidates only, with no automatic destination term or correction.",
+        term_variable="payment_term", administrator_only=True,
+        result_count_column="Report Row Count",
+    ),
     InsightsQuery(
         "banner_activity", "Activity", "Banner Activity by Date & Detail Code",
         "AR/activity/tgiaccd_transactions.sql",

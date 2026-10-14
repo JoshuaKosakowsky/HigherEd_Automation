@@ -19,6 +19,7 @@ class AccountsReceivableQueryDocumentationTests(unittest.TestCase):
             "sponsors": "validate_sponsor_schema.sql",
             "loans": "validate_loan_schema.sql",
             "holds": "validate_hold_schema.sql",
+            "term_corrections": "validate_term_corrections_schema.sql",
             "canadian_tax": "validate_canadian_tax_schema.sql",
         }
 
