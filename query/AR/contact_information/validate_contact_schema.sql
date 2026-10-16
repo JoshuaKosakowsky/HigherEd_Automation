@@ -2,6 +2,8 @@
 
 WITH required_columns (table_schema, table_name, column_name) AS (
     VALUES
+        ('TAISMGR', 'TBBACCT', 'PIDM'),
+        ('TAISMGR', 'TBBACCT', 'ACTIVITY_DATE'),
         ('GENERAL', 'GOREMAL', 'PIDM'),
         ('GENERAL', 'GOREMAL', 'EMAL_CODE'),
         ('GENERAL', 'GOREMAL', 'EMAIL_ADDRESS'),

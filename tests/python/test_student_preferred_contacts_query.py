@@ -23,6 +23,13 @@ class StudentPreferredContactsTests(unittest.TestCase):
         self.db.executescript("""
             ATTACH DATABASE ':memory:' AS saturn;
             ATTACH DATABASE ':memory:' AS general;
+            ATTACH DATABASE ':memory:' AS taismgr;
+            CREATE TABLE taismgr.tbbacct (
+                tbbacct_pidm INTEGER, tbbacct_activity_date TEXT
+            );
+            INSERT INTO taismgr.tbbacct VALUES
+                (1, '2099-10-01'), (2, '2099-10-01'), (3, '2099-10-01'),
+                (4, '2099-10-01');
             CREATE TABLE saturn.spriden (
                 spriden_pidm INTEGER, spriden_id TEXT, spriden_first_name TEXT,
                 spriden_last_name TEXT, spriden_change_ind TEXT
@@ -50,7 +57,13 @@ class StudentPreferredContactsTests(unittest.TestCase):
         """)
 
     def results(self):
-        return [dict(row) for row in self.db.execute(self.query.render_sql())]
+        # Adapt only PostgreSQL date arithmetic to fixed SQLite date literals.
+        # Identity/contact selection and MATERIALIZED scopes run unchanged.
+        sql = self.query.render_sql().replace(
+            "date_trunc('month', CURRENT_DATE) - INTERVAL '2 years'",
+            "'2097-10-01'",
+        ).replace("CURRENT_DATE + INTERVAL '1 day'", "'2099-10-17'")
+        return [dict(row) for row in self.db.execute(sql)]
 
     def test_duplicate_flags_do_not_multiply_students_and_ties_are_stable(self):
         self.db.executescript("""
@@ -105,6 +118,36 @@ class StudentPreferredContactsTests(unittest.TestCase):
             INSERT INTO saturn.sprtele VALUES
                 (2, 'CELL', NULL, '5550100', NULL, 'Y', NULL, 1);
         """)
+
+    def test_account_recency_boundaries_and_missing_dates(self):
+        self.add_complete_contacts()
+        self.db.execute('DELETE FROM taismgr.tbbacct WHERE tbbacct_pidm = 2')
+        self.assertEqual(self.results(), [])
+        for activity, qualifies in (
+            (None, False),
+            ('2097-09-30 23:59:59', False),
+            ('2097-10-01', True),
+            ('2099-10-16 23:59:59', True),
+            ('2099-10-17', False),
+        ):
+            with self.subTest(activity=activity):
+                self.db.execute('DELETE FROM taismgr.tbbacct WHERE tbbacct_pidm = 2')
+                self.db.execute('INSERT INTO taismgr.tbbacct VALUES (2, ?)', (activity,))
+                self.assertEqual([r['CWID'] for r in self.results()],
+                                 ['TEST-2'] if qualifies else [])
+
+    def test_account_history_does_not_duplicate_or_override_recent_account(self):
+        self.add_complete_contacts()
+        self.db.executescript("""
+            INSERT INTO taismgr.tbbacct VALUES
+                (2, '2000-01-01'), (2, NULL), (2, '2099-10-01'),
+                (2, '2100-01-01');
+        """)
+        self.assertEqual([r['CWID'] for r in self.results()], ['TEST-2'])
+        # A recent email does not make an old account qualify.
+        self.db.execute("UPDATE general.goremal SET goremal_activity_date = '2099-10-16'")
+        self.db.execute("UPDATE taismgr.tbbacct SET tbbacct_activity_date = '2000-01-01'")
+        self.assertEqual(self.results(), [])
 
     def test_each_missing_or_blank_contact_field_excludes_student(self):
         self.add_complete_contacts()

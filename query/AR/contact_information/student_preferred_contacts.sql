@@ -1,11 +1,20 @@
 /* Read-only student contact information lookup; does not identify outstanding checks.
    Shared by the app (TEST/PROD) and staff saved Insights questions.
-   Any SGBSTDN history identifies a student; no enrollment or email-age cutoff.
+   Student accounts must have TBBACCT activity in the last two years.
+   Account updates indicate recency, not enrollment or formal active status.
    Include only students whose selected email/phone and contact types are populated.
    Contacts follow the delinquency report's preference/status rules.
    Rank identity too so duplicate current records cannot multiply the output.
 */
-WITH student_identity AS (
+/* Restrict accounts before ranking identity/contacts. Keep date columns bare
+   so the database can use available date indexes; deduplicate control rows. */
+WITH recent_accounts AS MATERIALIZED (
+    SELECT DISTINCT a.tbbacct_pidm AS pidm
+    FROM taismgr.tbbacct a
+    WHERE a.tbbacct_activity_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '2 years'
+      AND a.tbbacct_activity_date < CURRENT_DATE + INTERVAL '1 day'
+),
+student_identity AS (
     SELECT
         s.spriden_pidm AS pidm,
         s.spriden_id AS cwid,
@@ -16,13 +25,14 @@ WITH student_identity AS (
             ORDER BY s.spriden_id, s.spriden_last_name, s.spriden_first_name
         ) AS identity_rank
     FROM saturn.spriden s
+    INNER JOIN recent_accounts a ON a.pidm = s.spriden_pidm
     WHERE s.spriden_change_ind IS NULL
       AND EXISTS (
           SELECT 1 FROM saturn.sgbstdn student
           WHERE student.sgbstdn_pidm = s.spriden_pidm
       )
 ),
-students AS (
+students AS MATERIALIZED (
     SELECT pidm, cwid, first_name, last_name
     FROM student_identity
     WHERE identity_rank = 1

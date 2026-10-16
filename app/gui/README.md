@@ -270,10 +270,11 @@ so no age cutoff is applied. The workbook supports manual Banner review;
 it does not remove holds. Publishing and source details are in
 [`query/AR/holds/README.md`](../../query/AR/holds/README.md).
 
-Choose **Contact — Student preferred contacts** for one row per current/former
-student with an active preferred email and primary phone. Select **PROD** for
-production data. Both contacts and their types must be populated; there is no
-email-age cutoff.
+Choose **Contact — Student preferred contacts** for students with account-record
+activity (`TBBACCT_ACTIVITY_DATE`) within two years of the current month, through
+today. This limits accounts before selecting preferred contacts; it is a recency
+filter, not formal active status. Select **PROD** for production data. Both
+contacts and their types must be populated; email age is not restricted.
 This replaces the OS_Checks lookup and does not identify outstanding checks.
 The same standalone SQL can be saved in Insights for staff; see
 [`query/AR/contact_information/README.md`](../../query/AR/contact_information/README.md)

@@ -110,8 +110,9 @@ QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
         "contact_lookup", "Contact", "Student preferred contacts",
         "AR/contact_information/student_preferred_contacts.sql",
-        "One row per current/former student, with active preferred email and primary phone. "
-        "Requires both contacts and their types; no enrollment or email-age cutoff. "
+        "Students with account-record activity in the last two years, with active preferred email "
+        "and primary phone. Requires both contacts and their types. "
+        "Account updates indicate recency, not formal active status. "
         "This does not identify outstanding checks.",
     ),
     InsightsQuery(
