@@ -111,9 +111,8 @@ QUERIES: tuple[InsightsQuery, ...] = (
         "contact_lookup", "Contact", "Student preferred contacts",
         "AR/contact_information/student_preferred_contacts.sql",
         "One row per current/former student, with active preferred email and primary phone. "
-        "Missing contacts remain blank; no enrollment or email-age cutoff. "
+        "Requires both contacts and their types; no enrollment or email-age cutoff. "
         "This does not identify outstanding checks.",
-        result_count_column="Report Row Count",
     ),
     InsightsQuery(
         "loan_all_enrollment", "Institutional loans", "All enrollment load categories",

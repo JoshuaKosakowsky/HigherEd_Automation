@@ -66,14 +66,14 @@ class StudentPreferredContactsTests(unittest.TestCase):
                 (1, 'CELL', '720', '5550101', '123', 'Y', NULL, 2);
         """)
         rows = self.results()
-        self.assertEqual([r['CWID'] for r in rows], ['TEST-1', 'TEST-2', 'TEST-3'])
+        self.assertEqual([r['CWID'] for r in rows], ['TEST-1'])
         self.assertEqual(rows[0]['Preferred Email'], 'a@example.invalid')
         self.assertEqual(rows[0]['Email Type'], 'UNIV')
         self.assertEqual(rows[0]['Preferred Phone'], '(720) 5550101 x123')
         self.assertEqual(rows[0]['Phone Type'], 'CELL')
-        self.assertTrue(all(r['Report Row Count'] == 3 for r in rows))
+        self.assertNotIn('Report Row Count', rows[0])
 
-    def test_only_valid_preferred_contacts_and_missing_contacts_retained(self):
+    def test_only_valid_preferred_contacts_and_incomplete_students_excluded(self):
         self.db.executescript("""
             INSERT INTO general.goremal VALUES
                 (2, 'UNIV', 'inactive@example.invalid', 'I', 'Y', '2099-01-01'),
@@ -89,24 +89,49 @@ class StudentPreferredContactsTests(unittest.TestCase):
                 (3, 'CELL', '303', '5550103', NULL, 'N', 'A', 1);
         """)
         rows = self.results()
-        self.assertEqual(rows[1]['Preferred Email'], 'personal@example.invalid')
-        self.assertEqual(rows[1]['Email Type'], 'PERS')
-        self.assertEqual(rows[1]['Preferred Phone'], '5550100')
-        self.assertIsNone(rows[2]['Preferred Email'])
-        self.assertIsNone(rows[2]['Preferred Phone'])
+        self.assertEqual([r['CWID'] for r in rows], ['TEST-2'])
+        self.assertEqual(rows[0]['Preferred Email'], 'personal@example.invalid')
+        self.assertEqual(rows[0]['Email Type'], 'PERS')
+        self.assertEqual(rows[0]['Preferred Phone'], '5550100')
 
     def test_empty_student_population(self):
         self.db.execute('DELETE FROM saturn.sgbstdn')
         self.assertEqual(self.results(), [])
 
-    def test_prod_export_uses_same_sql_and_rejects_incomplete_results(self):
+    def add_complete_contacts(self):
+        self.db.executescript("""
+            INSERT INTO general.goremal VALUES
+                (2, 'PERS', 'personal@example.invalid', 'A', 'Y', NULL);
+            INSERT INTO saturn.sprtele VALUES
+                (2, 'CELL', NULL, '5550100', NULL, 'Y', NULL, 1);
+        """)
+
+    def test_each_missing_or_blank_contact_field_excludes_student(self):
+        self.add_complete_contacts()
+        fields = (
+            ('general.goremal', 'goremal_email_address', 'personal@example.invalid'),
+            ('general.goremal', 'goremal_emal_code', 'PERS'),
+            ('saturn.sprtele', 'sprtele_phone_number', '5550100'),
+            ('saturn.sprtele', 'sprtele_tele_code', 'CELL'),
+        )
+        for table, column, original in fields:
+            for missing in (None, '', '   '):
+                with self.subTest(column=column, missing=missing):
+                    self.db.execute(f'UPDATE {table} SET {column} = ?', (missing,))
+                    self.assertEqual(self.results(), [])
+                    self.db.execute(f'UPDATE {table} SET {column} = ?', (original,))
+        self.assertEqual([r['CWID'] for r in self.results()], ['TEST-2'])
+
+    def test_prod_export_uses_same_sql_without_row_count_column(self):
+        self.add_complete_contacts()
         profile = InsightsDepartmentProfile(
             InsightsSettings('PROD', 'https://prod.example.edu', 7),
             'https://experience.example.edu/prod',
         )
         client = MagicMock()
         client.__enter__.return_value = client
-        complete = pd.DataFrame(self.results())
+        client.run_sql_file.return_value = pd.DataFrame(self.results())
+        self.assertIsNone(self.query.result_count_column)
         with tempfile.TemporaryDirectory() as directory, patch(
             'app.gui.services.insights.load_department_profiles',
             return_value={'PROD': profile},
@@ -114,29 +139,22 @@ class StudentPreferredContactsTests(unittest.TestCase):
             'app.gui.services.insights.build_authenticated_client',
             return_value=(client, 'cached session'),
         ) as build:
-            for incomplete in (False, True):
-                with self.subTest(incomplete=incomplete):
-                    client.run_sql_file.return_value = (
-                        complete.iloc[:1].copy() if incomplete else complete
-                    )
-                    output = Path(directory) / f'contacts-{incomplete}.xlsx'
-                    result = run_insights_connection(WorkflowContext(
-                        'insights_query_export',
-                        {'action': 'query_export', 'query_id': 'contact_lookup',
-                         'output_path': str(output)},
-                        WorkflowMode.PRODUCTION,
-                    ))
-                    self.assertEqual(result.success, not incomplete, result.message)
-                    self.assertEqual(output.exists(), not incomplete)
-                    if not incomplete:
-                        exported = pd.read_excel(output)
-                        self.assertEqual(exported['CWID'].tolist(),
-                                         ['TEST-1', 'TEST-2', 'TEST-3'])
-                        self.assertEqual(list(exported.columns), list(complete.columns[:-1]))
-                    else:
-                        self.assertIn('incomplete', result.message)
+            output = Path(directory) / 'contacts.xlsx'
+            result = run_insights_connection(WorkflowContext(
+                'insights_query_export',
+                {'action': 'query_export', 'query_id': 'contact_lookup',
+                 'output_path': str(output)},
+                WorkflowMode.PRODUCTION,
+            ))
+            self.assertTrue(result.success, result.message)
+            exported = pd.read_excel(output)
+            self.assertEqual(exported['CWID'].tolist(), ['TEST-2'])
+            self.assertEqual(list(exported.columns), [
+                'CWID', 'First Name', 'Last Name', 'Preferred Email',
+                'Email Type', 'Preferred Phone', 'Phone Type',
+            ])
             self.assertEqual(build.call_args.args[0].environment, 'PROD')
-        client.run_sql_file.assert_called_with(self.query.sql_path)
+        client.run_sql_file.assert_called_once_with(self.query.sql_path)
         client.run_sql.assert_not_called()
 
 

@@ -272,12 +272,13 @@ it does not remove holds. Publishing and source details are in
 
 Choose **Contact — Student preferred contacts** for one row per current/former
 student with an active preferred email and primary phone. Select **PROD** for
-production data. Missing contacts stay blank; there is no email-age cutoff.
+production data. Both contacts and their types must be populated; there is no
+email-age cutoff.
 This replaces the OS_Checks lookup and does not identify outstanding checks.
 The same standalone SQL can be saved in Insights for staff; see
 [`query/AR/contact_information/README.md`](../../query/AR/contact_information/README.md)
-for selection rules, publishing, and validation. App exports check completeness
-before saving and omit the technical row-count column.
+for selection rules, publishing, and validation. The report has no technical
+row-count column.
 
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,

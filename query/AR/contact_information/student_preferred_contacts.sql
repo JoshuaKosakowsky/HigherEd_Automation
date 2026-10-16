@@ -1,6 +1,7 @@
 /* Read-only student contact information lookup; does not identify outstanding checks.
    Shared by the app (TEST/PROD) and staff saved Insights questions.
    Any SGBSTDN history identifies a student; no enrollment or email-age cutoff.
+   Include only students whose selected email/phone and contact types are populated.
    Contacts follow the delinquency report's preference/status rules.
    Rank identity too so duplicate current records cannot multiply the output.
 */
@@ -80,11 +81,12 @@ SELECT
     email.email_address AS "Preferred Email",
     email.email_type AS "Email Type",
     phone.phone_number AS "Preferred Phone",
-    phone.phone_type AS "Phone Type",
-    COUNT(*) OVER () AS "Report Row Count"
+    phone.phone_type AS "Phone Type"
 FROM students s
-LEFT JOIN preferred_email email
+INNER JOIN preferred_email email
     ON email.pidm = s.pidm AND email.contact_rank = 1
-LEFT JOIN primary_phone phone
+INNER JOIN primary_phone phone
     ON phone.pidm = s.pidm AND phone.contact_rank = 1
+WHERE NULLIF(TRIM(email.email_type), '') IS NOT NULL
+  AND NULLIF(TRIM(phone.phone_type), '') IS NOT NULL
 ORDER BY s.cwid;
