@@ -15,8 +15,8 @@ source anomalies. Distinct PIDMs sharing a CWID are a source-data issue, not
 silently merged by this report.
 
 Accounts must have a `TAISMGR.TBBACCT` record with `TBBACCT_ACTIVITY_DATE`
-from the start of the current month minus **two years**, through today
-(inclusive). For a run on October 16, 2026, that means October 1, 2024 through
+from the start of the current month minus **eight years**, through today
+(inclusive). For a run on October 16, 2026, that means October 1, 2018 through
 October 16, 2026. Older, NULL-dated, future-only, and missing account records
 are excluded. Duplicate account records cannot multiply student rows.
 
@@ -83,7 +83,7 @@ Run `validate_contact_schema.sql` first and resolve every `MISSING` result.
 Confirm the local meanings of `UNIV`, `A`, `Y`, `I`, and NULL phone status.
 Compare selected contacts with Banner, including duplicate preference flags,
 exclusion of incomplete contacts, and former students. Confirm account activity
-against Banner, including records at the two-year boundary. Investigate duplicate
+against Banner, including records at the eight-year boundary. Investigate duplicate
 current identity records or CWIDs assigned to distinct PIDMs. Insights replication may lag.
 
 Synthetic SQLite tests execute the actual SQL with students, duplicate contact

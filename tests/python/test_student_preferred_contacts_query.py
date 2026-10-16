@@ -60,8 +60,8 @@ class StudentPreferredContactsTests(unittest.TestCase):
         # Adapt only PostgreSQL date arithmetic to fixed SQLite date literals.
         # Identity/contact selection and MATERIALIZED scopes run unchanged.
         sql = self.query.render_sql().replace(
-            "date_trunc('month', CURRENT_DATE) - INTERVAL '2 years'",
-            "'2097-10-01'",
+            "date_trunc('month', CURRENT_DATE) - INTERVAL '8 years'",
+            "'2091-10-01'",
         ).replace("CURRENT_DATE + INTERVAL '1 day'", "'2099-10-17'")
         return [dict(row) for row in self.db.execute(sql)]
 
@@ -125,8 +125,9 @@ class StudentPreferredContactsTests(unittest.TestCase):
         self.assertEqual(self.results(), [])
         for activity, qualifies in (
             (None, False),
-            ('2097-09-30 23:59:59', False),
-            ('2097-10-01', True),
+            ('2091-09-30 23:59:59', False),
+            ('2091-10-01', True),
+            ('2095-10-01', True),  # Four-year-old account is inside the new window.
             ('2099-10-16 23:59:59', True),
             ('2099-10-17', False),
         ):

@@ -1,6 +1,6 @@
 /* Read-only student contact information lookup; does not identify outstanding checks.
    Shared by the app (TEST/PROD) and staff saved Insights questions.
-   Student accounts must have TBBACCT activity in the last two years.
+   Student accounts must have TBBACCT activity in the last eight years.
    Account updates indicate recency, not enrollment or formal active status.
    Include only students whose selected email/phone and contact types are populated.
    Contacts follow the delinquency report's preference/status rules.
@@ -11,7 +11,7 @@
 WITH recent_accounts AS MATERIALIZED (
     SELECT DISTINCT a.tbbacct_pidm AS pidm
     FROM taismgr.tbbacct a
-    WHERE a.tbbacct_activity_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '2 years'
+    WHERE a.tbbacct_activity_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '8 years'
       AND a.tbbacct_activity_date < CURRENT_DATE + INTERVAL '1 day'
 ),
 student_identity AS (

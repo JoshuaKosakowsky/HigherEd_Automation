@@ -271,7 +271,7 @@ it does not remove holds. Publishing and source details are in
 [`query/AR/holds/README.md`](../../query/AR/holds/README.md).
 
 Choose **Contact — Student preferred contacts** for students with account-record
-activity (`TBBACCT_ACTIVITY_DATE`) within two years of the current month, through
+activity (`TBBACCT_ACTIVITY_DATE`) within eight years of the current month, through
 today. This limits accounts before selecting preferred contacts; it is a recency
 filter, not formal active status. Select **PROD** for production data. Both
 contacts and their types must be populated; email age is not restricted.
