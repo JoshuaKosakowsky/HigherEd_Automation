@@ -1,32 +1,74 @@
-# Contact information lookup
+# Student contact information lookup
 
-`OS_Checks.sql` returns current identity, preferred active university email, and
-primary telephone information for people whose qualifying email record changed
-within the last six years.
+`student_preferred_contacts.sql` replaces `OS_Checks.sql`. It returns one row
+per student PIDM, with CWID, first/last name, preferred email and its type,
+and preferred phone (including area code/extension) and its type.
+It does **not** query a check, payment, refund, or outstanding-check population.
 
-Despite its historical filename, the SQL does **not** query a check, payment,
-refund, or outstanding-check population. It should be treated only as a contact
-lookup until an authoritative outstanding-check population is joined to it.
+## Population and contact rules
 
-## Data model
+A student has any `SGBSTDN` record, including former students. `EXISTS` prevents
+multiple student terms from duplicating the student. Only current `SPRIDEN`
+identity rows qualify (`CHANGE_IND IS NULL`). Duplicate current identities
+are ranked by CWID/name to select one consistently per PIDM; investigate such
+source anomalies. Distinct PIDMs sharing a CWID are a source-data issue, not
+silently merged by this report.
 
-- `GOREMAL` supplies email type, address, status, preference, and activity date.
-- `SPRIDEN` supplies the current CWID and name.
-- `SPRTELE` supplies rows marked as the primary telephone.
+The old query required preferred active `UNIV` email changed within two years
+of the current month (the old README incorrectly said six years). That cutoff
+and the university-only population restriction are removed. There is no
+current-enrollment, balance, outstanding-check, or date restriction.
+Students remain in the output when either contact is missing; those cells
+are NULL/blank. No nonpreferred contacts are substituted.
 
-The filter requires:
+Contact selection follows the existing delinquency outreach report:
 
-- university email type `UNIV`
-- preferred indicator `Y`
-- active status `A`
-- email activity within six years of the current month
+- Email: nonblank, active (`A`), preferred (`Y`) `GOREMAL` address. University
+  (`UNIV`) wins among qualifying addresses, then latest activity (NULL last),
+  then address/type to break ties. A preferred personal address can therefore
+  be selected if no qualifying preferred university address exists.
+- Phone: nonblank primary (`Y`) `SPRTELE` number, excluding inactive (`I`)
+  records; NULL status is treated as active. Highest sequence number wins,
+  followed by number, area, extension, and phone type for ties.
 
-## Run order and validation
+Each contact is ranked before joining, avoiding the email-by-phone fan-out
+that repeated CWIDs in the old report. The output keeps only the selected
+contact types rather than repeating status/preference/activity metadata.
 
-1. Run `validate_contact_schema.sql` and resolve every `MISSING` result.
-2. Confirm that `UNIV`, `A`, and `Y` retain their expected local meanings.
-3. Check whether multiple primary telephone rows can exist for one PIDM; if so,
-   one person can appear more than once.
-4. If this is to become an outstanding-check report, first identify and validate
-   the authoritative check population and its PIDM relationship. Do not infer
-   outstanding-check status from email activity.
+## App export from PROD
+
+1. Open **Connections**, select **PROD**, and connect using the existing sign-in.
+2. Choose **Contact — Student preferred contacts** and export to a new `.xlsx`.
+3. The app checks `Report Row Count` against the returned number of rows and
+   removes that technical column from the workbook. An incomplete result is
+   rejected; use Insights export if the API cannot return the complete report.
+
+The existing `contact_lookup` query ID is preserved. TEST remains available
+with the same SQL; environment selection and export safeguards are unchanged.
+
+## Staff Insights report
+
+Create a native SQL question against the PROD Banner database, paste the
+contents of `student_preferred_contacts.sql`, and save it as **Student preferred
+contacts** in the appropriate staff collection. The SQL is standalone and
+requires no app placeholders or parameters. App and staff use the same file
+to avoid divergent contact rules. Update any saved question using `OS_Checks`;
+renaming a repository file does not update a published question automatically.
+
+Hide `Report Row Count` in the saved question's display if desired; it is a
+completeness control used by the app. Optional staff filters can target CWID
+or missing contacts on the saved result. Configure collection permissions
+through existing institutional access controls.
+
+## Validation
+
+Run `validate_contact_schema.sql` first and resolve every `MISSING` result.
+Confirm the local meanings of `UNIV`, `A`, `Y`, `I`, and NULL phone status.
+Compare selected contacts with Banner, including duplicate preference flags,
+missing contacts, and former students. Investigate duplicate current identity
+records or CWIDs assigned to distinct PIDMs. Insights replication may lag.
+
+Synthetic SQLite tests execute the actual SQL with students, duplicate contact
+flags, inactive/blank contacts, and identity history. They verify selection and
+row counts without production records or credentials; they do not establish
+live PROD schema compatibility. This report makes no Banner changes.

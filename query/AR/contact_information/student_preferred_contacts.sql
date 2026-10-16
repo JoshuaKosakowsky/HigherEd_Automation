@@ -1,0 +1,90 @@
+/* Read-only student contact information lookup; does not identify outstanding checks.
+   Shared by the app (TEST/PROD) and staff saved Insights questions.
+   Any SGBSTDN history identifies a student; no enrollment or email-age cutoff.
+   Contacts follow the delinquency report's preference/status rules.
+   Rank identity too so duplicate current records cannot multiply the output.
+*/
+WITH student_identity AS (
+    SELECT
+        s.spriden_pidm AS pidm,
+        s.spriden_id AS cwid,
+        s.spriden_first_name AS first_name,
+        s.spriden_last_name AS last_name,
+        ROW_NUMBER() OVER (
+            PARTITION BY s.spriden_pidm
+            ORDER BY s.spriden_id, s.spriden_last_name, s.spriden_first_name
+        ) AS identity_rank
+    FROM saturn.spriden s
+    WHERE s.spriden_change_ind IS NULL
+      AND EXISTS (
+          SELECT 1 FROM saturn.sgbstdn student
+          WHERE student.sgbstdn_pidm = s.spriden_pidm
+      )
+),
+students AS (
+    SELECT pidm, cwid, first_name, last_name
+    FROM student_identity
+    WHERE identity_rank = 1
+),
+
+/* Rank contacts before joining so duplicate preference flags cannot fan out. */
+preferred_email AS (
+    SELECT
+        e.goremal_pidm AS pidm,
+        TRIM(e.goremal_email_address) AS email_address,
+        e.goremal_emal_code AS email_type,
+        ROW_NUMBER() OVER (
+            PARTITION BY e.goremal_pidm
+            ORDER BY
+                CASE WHEN e.goremal_emal_code = 'UNIV' THEN 1 ELSE 2 END,
+                e.goremal_activity_date DESC NULLS LAST,
+                e.goremal_email_address,
+                e.goremal_emal_code
+        ) AS contact_rank
+    FROM general.goremal e
+    INNER JOIN students s ON s.pidm = e.goremal_pidm
+    WHERE e.goremal_preferred_ind = 'Y'
+      AND e.goremal_status_ind = 'A'
+      AND NULLIF(TRIM(e.goremal_email_address), '') IS NOT NULL
+),
+
+primary_phone AS (
+    SELECT
+        phone.sprtele_pidm AS pidm,
+        phone.sprtele_tele_code AS phone_type,
+        CASE WHEN NULLIF(TRIM(phone.sprtele_phone_area), '') IS NOT NULL
+            THEN '(' || TRIM(phone.sprtele_phone_area) || ') ' ELSE '' END
+        || TRIM(phone.sprtele_phone_number)
+        || CASE WHEN NULLIF(TRIM(phone.sprtele_phone_ext), '') IS NOT NULL
+            THEN ' x' || TRIM(phone.sprtele_phone_ext) ELSE '' END AS phone_number,
+        ROW_NUMBER() OVER (
+            PARTITION BY phone.sprtele_pidm
+            ORDER BY phone.sprtele_seqno DESC NULLS LAST,
+                phone.sprtele_phone_number,
+                phone.sprtele_phone_area,
+                phone.sprtele_phone_ext,
+                phone.sprtele_tele_code
+        ) AS contact_rank
+    FROM saturn.sprtele phone
+    INNER JOIN students s ON s.pidm = phone.sprtele_pidm
+    WHERE phone.sprtele_primary_ind = 'Y'
+      AND COALESCE(UPPER(TRIM(phone.sprtele_status_ind)), 'A') <> 'I'
+      AND NULLIF(TRIM(phone.sprtele_phone_number), '') IS NOT NULL
+)
+
+
+SELECT
+    s.cwid AS "CWID",
+    s.first_name AS "First Name",
+    s.last_name AS "Last Name",
+    email.email_address AS "Preferred Email",
+    email.email_type AS "Email Type",
+    phone.phone_number AS "Preferred Phone",
+    phone.phone_type AS "Phone Type",
+    COUNT(*) OVER () AS "Report Row Count"
+FROM students s
+LEFT JOIN preferred_email email
+    ON email.pidm = s.pidm AND email.contact_rank = 1
+LEFT JOIN primary_phone phone
+    ON phone.pidm = s.pidm AND phone.contact_rank = 1
+ORDER BY s.cwid;

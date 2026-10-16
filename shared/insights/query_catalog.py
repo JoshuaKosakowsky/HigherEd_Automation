@@ -108,9 +108,12 @@ QUERIES: tuple[InsightsQuery, ...] = (
         "Draft report: two months before this month; its detail-code list and grouping need review.",
     ),
     InsightsQuery(
-        "contact_lookup", "Contact", "Active school email and primary phone",
-        "AR/contact_information/OS_Checks.sql",
-        "Contact lookup; despite the filename, it does not identify outstanding checks.",
+        "contact_lookup", "Contact", "Student preferred contacts",
+        "AR/contact_information/student_preferred_contacts.sql",
+        "One row per current/former student, with active preferred email and primary phone. "
+        "Missing contacts remain blank; no enrollment or email-age cutoff. "
+        "This does not identify outstanding checks.",
+        result_count_column="Report Row Count",
     ),
     InsightsQuery(
         "loan_all_enrollment", "Institutional loans", "All enrollment load categories",

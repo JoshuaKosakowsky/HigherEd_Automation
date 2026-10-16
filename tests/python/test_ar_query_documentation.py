@@ -64,7 +64,7 @@ class AccountsReceivableQueryDocumentationTests(unittest.TestCase):
 
     def test_contact_query_is_not_presented_as_an_outstanding_check_report(self) -> None:
         query = (
-            AR_QUERY_ROOT / "contact_information" / "OS_Checks.sql"
+            AR_QUERY_ROOT / "contact_information" / "student_preferred_contacts.sql"
         ).read_text(encoding="utf-8").lower()
         readme = (
             AR_QUERY_ROOT / "contact_information" / "README.md"
