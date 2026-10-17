@@ -36,6 +36,14 @@ layout; accent colors remain limited.
   timestamps when the form opens and refresh them before each **Review & run**,
   including reruns on the same form. Manually entered or browsed output paths
   are preserved. Filenames keep second precision and existing overwrite protections.
+- Generated Banner terms, previous-month ranges and filenames, completed fiscal
+  years, and prior tax years are calculated when a workflow form opens and
+  refreshed before each **Review & run**. Returning to a form also refreshes
+  untouched defaults. Explicit edits and browsed paths remain selected, even
+  after changing a value back to its original default. No app restart is needed
+  after a month, year, fiscal-year or configured Banner term boundary.
+  Textbook Brokers keeps the prepared term for its archive step. Insights
+  activity report dates similarly refresh before export unless explicitly edited.
 - `services/execution.py` runs one task at a time on a worker thread and converts
   exceptions into staff-safe messages while preserving tracebacks in the log.
 - `shared/progress.py` supplies toolkit-independent progress updates;

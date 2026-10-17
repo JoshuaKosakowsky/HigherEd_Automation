@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowMode
+from app.gui.parameter_defaults import ParameterDefaults
 from app.gui.services.execution import WorkflowExecutor
 from app.gui.services.insights import run_insights_connection
 from app.gui.theme import button, card, label
@@ -25,6 +26,11 @@ from shared.insights.banner_activity import BannerActivityParameters
 from shared.insights.query_catalog import QUERIES, get_query
 
 
+def _current_month_start() -> str:
+    today = QDate.currentDate()
+    return QDate(today.year(), today.month(), 1).toString("yyyy-MM-dd")
+
+
 class ConnectionsPage(QScrollArea):
     busy_changed = Signal(bool)
 
@@ -33,6 +39,7 @@ class ConnectionsPage(QScrollArea):
         self.executor = executor
         self.authorize = authorize
         self.result_queue = None
+        self.parameter_defaults = ParameterDefaults()
         self.statuses: dict[str, str] = {}
         self.setWidgetResizable(True)
         body = QWidget()
@@ -137,6 +144,13 @@ class ConnectionsPage(QScrollArea):
         today = QDate.currentDate()
         self.start_date = QDateEdit(QDate(today.year(), today.month(), 1))
         self.end_date = QDateEdit(today)
+        self.parameter_defaults.track(
+            "start_date", self.start_date,
+            _current_month_start,
+        )
+        self.parameter_defaults.track(
+            "end_date", self.end_date, lambda: QDate.currentDate().toString("yyyy-MM-dd"),
+        )
         for control, name in (
             (self.start_date, "Start Feed Date (inclusive)"),
             (self.end_date, "End Feed Date (inclusive)"),
@@ -273,6 +287,7 @@ class ConnectionsPage(QScrollArea):
         if not self.profiles.get(environment):
             return
         if action == "query_export":
+            self.parameter_defaults.refresh()
             query = get_query(self.queries.currentData())
             term_code = self.term.text().strip() if query.term_variable else None
             try:
