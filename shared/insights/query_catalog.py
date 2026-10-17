@@ -108,10 +108,11 @@ QUERIES: tuple[InsightsQuery, ...] = (
         "Draft report: two months before this month; its detail-code list and grouping need review.",
     ),
     InsightsQuery(
-        "contact_lookup", "Contact", "Student preferred contacts",
+        "contact_lookup", "Contact", "Student contact information",
         "AR/contact_information/student_preferred_contacts.sql",
-        "Students with account-record activity in the last eight years, with active preferred email "
-        "and primary phone. Requires both contacts and their types. "
+        "Students with account-record activity in the last eight years, with active Mines (UNIV) email "
+        "and PR phone, falling back to CELL. Preference flags are not required. "
+        "Requires both contacts and their types. "
         "Account updates indicate recency, not formal active status. "
         "This does not identify outstanding checks.",
     ),

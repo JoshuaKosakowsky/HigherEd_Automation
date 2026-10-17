@@ -8,7 +8,6 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('GENERAL', 'GOREMAL', 'EMAL_CODE'),
         ('GENERAL', 'GOREMAL', 'EMAIL_ADDRESS'),
         ('GENERAL', 'GOREMAL', 'STATUS_IND'),
-        ('GENERAL', 'GOREMAL', 'PREFERRED_IND'),
         ('GENERAL', 'GOREMAL', 'ACTIVITY_DATE'),
         ('SATURN', 'SGBSTDN', 'PIDM'),
         ('SATURN', 'SPRIDEN', 'PIDM'),
@@ -20,7 +19,6 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('SATURN', 'SPRTELE', 'TELE_CODE'),
         ('SATURN', 'SPRTELE', 'PHONE_AREA'),
         ('SATURN', 'SPRTELE', 'PHONE_NUMBER'),
-        ('SATURN', 'SPRTELE', 'PRIMARY_IND'),
         ('SATURN', 'SPRTELE', 'STATUS_IND'),
         ('SATURN', 'SPRTELE', 'SEQNO'),
         ('SATURN', 'SPRTELE', 'PHONE_EXT')

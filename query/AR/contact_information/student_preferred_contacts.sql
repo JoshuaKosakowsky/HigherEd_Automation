@@ -3,7 +3,8 @@
    Student accounts must have TBBACCT activity in the last eight years.
    Account updates indicate recency, not enrollment or formal active status.
    Include only students whose selected email/phone and contact types are populated.
-   Contacts follow the delinquency report's preference/status rules.
+   Use active UNIV email and usable PR phone, falling back to CELL.
+   Email preferred and phone primary indicators do not affect selection.
    Rank identity too so duplicate current records cannot multiply the output.
 */
 /* Restrict accounts before ranking identity/contacts. Keep date columns bare
@@ -38,8 +39,8 @@ students AS MATERIALIZED (
     WHERE identity_rank = 1
 ),
 
-/* Rank contacts before joining so duplicate preference flags cannot fan out. */
-preferred_email AS (
+/* Rank usable contacts before joining so multiple records cannot fan out. */
+mines_email AS (
     SELECT
         e.goremal_pidm AS pidm,
         TRIM(e.goremal_email_address) AS email_address,
@@ -47,19 +48,18 @@ preferred_email AS (
         ROW_NUMBER() OVER (
             PARTITION BY e.goremal_pidm
             ORDER BY
-                CASE WHEN e.goremal_emal_code = 'UNIV' THEN 1 ELSE 2 END,
                 e.goremal_activity_date DESC NULLS LAST,
                 e.goremal_email_address,
                 e.goremal_emal_code
         ) AS contact_rank
     FROM general.goremal e
     INNER JOIN students s ON s.pidm = e.goremal_pidm
-    WHERE e.goremal_preferred_ind = 'Y'
+    WHERE e.goremal_emal_code = 'UNIV'
       AND e.goremal_status_ind = 'A'
       AND NULLIF(TRIM(e.goremal_email_address), '') IS NOT NULL
 ),
 
-primary_phone AS (
+contact_phone AS (
     SELECT
         phone.sprtele_pidm AS pidm,
         phone.sprtele_tele_code AS phone_type,
@@ -70,7 +70,9 @@ primary_phone AS (
             THEN ' x' || TRIM(phone.sprtele_phone_ext) ELSE '' END AS phone_number,
         ROW_NUMBER() OVER (
             PARTITION BY phone.sprtele_pidm
-            ORDER BY phone.sprtele_seqno DESC NULLS LAST,
+            ORDER BY
+                CASE WHEN phone.sprtele_tele_code = 'PR' THEN 1 ELSE 2 END,
+                phone.sprtele_seqno DESC NULLS LAST,
                 phone.sprtele_phone_number,
                 phone.sprtele_phone_area,
                 phone.sprtele_phone_ext,
@@ -78,7 +80,7 @@ primary_phone AS (
         ) AS contact_rank
     FROM saturn.sprtele phone
     INNER JOIN students s ON s.pidm = phone.sprtele_pidm
-    WHERE phone.sprtele_primary_ind = 'Y'
+    WHERE phone.sprtele_tele_code IN ('PR', 'CELL')
       AND COALESCE(UPPER(TRIM(phone.sprtele_status_ind)), 'A') <> 'I'
       AND NULLIF(TRIM(phone.sprtele_phone_number), '') IS NOT NULL
 )
@@ -88,14 +90,14 @@ SELECT
     s.cwid AS "CWID",
     s.first_name AS "First Name",
     s.last_name AS "Last Name",
-    email.email_address AS "Preferred Email",
+    email.email_address AS "Mines Email",
     email.email_type AS "Email Type",
-    phone.phone_number AS "Preferred Phone",
+    phone.phone_number AS "Phone Number",
     phone.phone_type AS "Phone Type"
 FROM students s
-INNER JOIN preferred_email email
+INNER JOIN mines_email email
     ON email.pidm = s.pidm AND email.contact_rank = 1
-INNER JOIN primary_phone phone
+INNER JOIN contact_phone phone
     ON phone.pidm = s.pidm AND phone.contact_rank = 1
 WHERE NULLIF(TRIM(email.email_type), '') IS NOT NULL
   AND NULLIF(TRIM(phone.phone_type), '') IS NOT NULL

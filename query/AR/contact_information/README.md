@@ -1,8 +1,8 @@
 # Student contact information lookup
 
 `student_preferred_contacts.sql` replaces `OS_Checks.sql`. It returns one row
-per qualifying student PIDM, with CWID, first/last name, preferred email and its type,
-and preferred phone (including area code/extension) and its type.
+per qualifying student PIDM, with CWID, first/last name, Mines email and its type,
+and phone (including area code/extension) and its type.
 It does **not** query a check, payment, refund, or outstanding-check population.
 
 ## Population and contact rules
@@ -24,8 +24,8 @@ This replaces the old email-update cutoff with an account-record recency
 filter: an unchanged email can still belong to a recently updated account.
 An account update can be administrative; it does not prove current enrollment,
 recent payment, an outstanding balance, or formal active status. Former students
-can qualify if their account was updated recently. There is no university-only
-email population restriction or enrollment/financial eligibility rule.
+can qualify if their account was updated recently. A qualifying active Mines
+email is required; there is no enrollment/financial eligibility rule.
 
 The query materializes the distinct recent-account population, then the student
 population before ranking contacts. This narrows the contact work and avoids
@@ -34,20 +34,24 @@ the account date column uncast so available indexes remain usable. Actual
 runtime depends on Insights replication, indexes, and the number of qualifying
 accounts; no live performance measurement has been made.
 
-Students are excluded if their selected preferred email, email type, primary
-phone, or phone type is NULL, empty, or whitespace-only. No nonpreferred
-contacts are substituted. Type checks apply after ranking; an incomplete
-selected contact does not cause an older contact to be substituted.
+Students are excluded if either qualifying contact is missing. Email and phone
+numbers must be nonblank, and their types must match the codes below. Email
+preference and phone primary indicators do not affect selection.
 
-Contact selection follows the existing delinquency outreach report:
+- Email: nonblank, active (`A`) `GOREMAL` address with type `UNIV` (Mines).
+  Latest activity wins (NULL last), then address/type to break ties. Personal
+  email is not substituted when no qualifying Mines address exists.
+- Phone: nonblank `SPRTELE` number of type `PR`, excluding inactive (`I`)
+  records; NULL status is treated as active. If no usable `PR` exists, select
+  `CELL`. Type priority comes first, then highest sequence number, followed
+  by number, area, extension, and type for ties. Blank/inactive `PR` records
+  do not block the `CELL` fallback. Other phone types are excluded.
 
-- Email: nonblank, active (`A`), preferred (`Y`) `GOREMAL` address. University
-  (`UNIV`) wins among qualifying addresses, then latest activity (NULL last),
-  then address/type to break ties. A preferred personal address can therefore
-  be selected if no qualifying preferred university address exists.
-- Phone: nonblank primary (`Y`) `SPRTELE` number, excluding inactive (`I`)
-  records; NULL status is treated as active. Highest sequence number wins,
-  followed by number, area, extension, and phone type for ties.
+Export columns are `CWID`, `First Name`, `Last Name`, `Mines Email`, `Email Type`,
+`Phone Number`, and `Phone Type`. `Mines Email` and `Phone Number` replace the
+former `Preferred Email` and `Preferred Phone` headers because the selection
+no longer follows preference flags. The existing SQL filename is retained
+for callers and saved-report references.
 
 Each contact is ranked before joining, avoiding the email-by-phone fan-out
 that repeated CWIDs in the old report. The output keeps only the selected
@@ -56,7 +60,7 @@ contact types rather than repeating status/preference/activity metadata.
 ## App export from PROD
 
 1. Open **Connections**, select **PROD**, and connect using the existing sign-in.
-2. Choose **Contact — Student preferred contacts** and export to a new `.xlsx`.
+2. Choose **Contact — Student contact information** and export to a new `.xlsx`.
 
 The SQL and workbook contain only the seven identity/contact columns. There
 is no `Report Row Count` column or report-specific row-count completeness check.
@@ -68,8 +72,8 @@ with the same SQL; environment selection and export safeguards are unchanged.
 ## Staff Insights report
 
 Create a native SQL question against the PROD Banner database, paste the
-contents of `student_preferred_contacts.sql`, and save it as **Student preferred
-contacts** in the appropriate staff collection. The SQL is standalone and
+contents of `student_preferred_contacts.sql`, and save it as **Student contact
+information** in the appropriate staff collection. The SQL is standalone and
 requires no app placeholders or parameters. App and staff use the same file
 to avoid divergent contact rules. Update any saved question using `OS_Checks`;
 renaming a repository file does not update a published question automatically.
@@ -80,14 +84,15 @@ collection permissions through existing institutional access controls.
 ## Validation
 
 Run `validate_contact_schema.sql` first and resolve every `MISSING` result.
-Confirm the local meanings of `UNIV`, `A`, `Y`, `I`, and NULL phone status.
-Compare selected contacts with Banner, including duplicate preference flags,
+Confirm the local meanings of `UNIV`, `PR`, `CELL`, `A`, `I`, and NULL phone status.
+Compare selected contacts with Banner, including multiple UNIV/PR records and CELL fallback,
 exclusion of incomplete contacts, and former students. Confirm account activity
 against Banner, including records at the eight-year boundary. Investigate duplicate
 current identity records or CWIDs assigned to distinct PIDMs. Insights replication may lag.
 
 Synthetic SQLite tests execute the actual SQL with students, duplicate contact
-flags, inactive/blank contacts, missing contact types, and identity history.
+records, ignored preference flags, PR/CELL priority, inactive/blank contacts,
+missing contact types, and identity history.
 They also cover old, missing, NULL-dated, duplicate, boundary, and future account
 records using a fixed run date. Only PostgreSQL date expressions are adapted
 for SQLite. They verify selection and export columns without production data

@@ -14,7 +14,7 @@ from shared.insights.config import InsightsDepartmentProfile, InsightsSettings
 from shared.insights.query_catalog import get_query
 
 
-class StudentPreferredContactsTests(unittest.TestCase):
+class StudentContactInformationTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.addCleanup(self.db.close)
@@ -65,7 +65,7 @@ class StudentPreferredContactsTests(unittest.TestCase):
         ).replace("CURRENT_DATE + INTERVAL '1 day'", "'2099-10-17'")
         return [dict(row) for row in self.db.execute(sql)]
 
-    def test_duplicate_flags_do_not_multiply_students_and_ties_are_stable(self):
+    def test_duplicate_contacts_do_not_multiply_students_and_ties_are_stable(self):
         self.db.executescript("""
             INSERT INTO general.goremal VALUES
                 (1, 'PERS', 'personal@example.invalid', 'A', 'Y', '2099-01-01'),
@@ -80,20 +80,20 @@ class StudentPreferredContactsTests(unittest.TestCase):
         """)
         rows = self.results()
         self.assertEqual([r['CWID'] for r in rows], ['TEST-1'])
-        self.assertEqual(rows[0]['Preferred Email'], 'a@example.invalid')
+        self.assertEqual(rows[0]['Mines Email'], 'a@example.invalid')
         self.assertEqual(rows[0]['Email Type'], 'UNIV')
-        self.assertEqual(rows[0]['Preferred Phone'], '(720) 5550101 x123')
+        self.assertEqual(rows[0]['Phone Number'], '(720) 5550101 x123')
         self.assertEqual(rows[0]['Phone Type'], 'CELL')
         self.assertNotIn('Report Row Count', rows[0])
 
-    def test_only_valid_preferred_contacts_and_incomplete_students_excluded(self):
+    def test_univ_email_and_cell_ignore_preference_flags_and_exclude_incomplete_students(self):
         self.db.executescript("""
             INSERT INTO general.goremal VALUES
                 (2, 'UNIV', 'inactive@example.invalid', 'I', 'Y', '2099-01-01'),
                 (2, 'UNIV', 'unpreferred@example.invalid', 'A', 'N', '2099-01-01'),
                 (2, 'UNIV', '   ', 'A', 'Y', '2099-01-01'),
                 (2, 'PERS', ' personal@example.invalid ', 'A', 'Y', NULL),
-                (3, 'UNIV', 'unpreferred@example.invalid', 'A', 'N', NULL);
+                (3, 'PERS', 'personal-only@example.invalid', 'A', 'Y', NULL);
             INSERT INTO saturn.sprtele VALUES
                 (2, 'HOME', NULL, '5550100', NULL, 'Y', NULL, 1),
                 (2, 'CELL', '303', '5550101', NULL, 'Y', ' i ', 99),
@@ -103,9 +103,47 @@ class StudentPreferredContactsTests(unittest.TestCase):
         """)
         rows = self.results()
         self.assertEqual([r['CWID'] for r in rows], ['TEST-2'])
-        self.assertEqual(rows[0]['Preferred Email'], 'personal@example.invalid')
-        self.assertEqual(rows[0]['Email Type'], 'PERS')
-        self.assertEqual(rows[0]['Preferred Phone'], '5550100')
+        self.assertEqual(rows[0]['Mines Email'], 'unpreferred@example.invalid')
+        self.assertEqual(rows[0]['Email Type'], 'UNIV')
+        self.assertEqual(rows[0]['Phone Number'], '(303) 5550102')
+
+    def test_pr_phone_wins_over_newer_primary_cell(self):
+        self.add_complete_contacts()
+        self.db.executescript("""
+            UPDATE saturn.sprtele SET sprtele_seqno = 999;
+            INSERT INTO saturn.sprtele VALUES
+                (2, 'PR', '303', '5550102', NULL, 'N', 'A', 1),
+                (2, 'PR', '303', '5550101', '42', NULL, NULL, 2);
+        """)
+        rows = self.results()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['Phone Type'], 'PR')
+        self.assertEqual(rows[0]['Phone Number'], '(303) 5550101 x42')
+
+    def test_unusable_pr_falls_back_to_cell(self):
+        self.add_complete_contacts()
+        self.db.executescript("""
+            UPDATE saturn.sprtele SET sprtele_primary_ind = 'N';
+            INSERT INTO saturn.sprtele VALUES
+                (2, 'PR', '303', '5550101', NULL, 'Y', 'I', 99),
+                (2, 'PR', '303', '   ', NULL, 'Y', 'A', 100),
+                (2, 'PR', '303', NULL, NULL, 'Y', 'A', 101),
+                (2, 'HOME', '303', '5550102', NULL, 'Y', 'A', 102);
+        """)
+        rows = self.results()
+        self.assertEqual(rows[0]['Phone Type'], 'CELL')
+        self.assertEqual(rows[0]['Phone Number'], '5550100')
+        self.db.execute("DELETE FROM saturn.sprtele WHERE sprtele_tele_code = 'CELL'")
+        self.assertEqual(self.results(), [])
+
+    def test_inactive_mines_email_does_not_fall_back_to_personal(self):
+        self.add_complete_contacts()
+        self.db.executescript("""
+            UPDATE general.goremal SET goremal_status_ind = 'I';
+            INSERT INTO general.goremal VALUES
+                (2, 'PERS', 'personal-only@example.invalid', 'A', 'Y', '2099-10-16');
+        """)
+        self.assertEqual(self.results(), [])
 
     def test_empty_student_population(self):
         self.db.execute('DELETE FROM saturn.sgbstdn')
@@ -114,7 +152,7 @@ class StudentPreferredContactsTests(unittest.TestCase):
     def add_complete_contacts(self):
         self.db.executescript("""
             INSERT INTO general.goremal VALUES
-                (2, 'PERS', 'personal@example.invalid', 'A', 'Y', NULL);
+                (2, 'UNIV', 'personal@example.invalid', 'A', 'N', NULL);
             INSERT INTO saturn.sprtele VALUES
                 (2, 'CELL', NULL, '5550100', NULL, 'Y', NULL, 1);
         """)
@@ -154,7 +192,7 @@ class StudentPreferredContactsTests(unittest.TestCase):
         self.add_complete_contacts()
         fields = (
             ('general.goremal', 'goremal_email_address', 'personal@example.invalid'),
-            ('general.goremal', 'goremal_emal_code', 'PERS'),
+            ('general.goremal', 'goremal_emal_code', 'UNIV'),
             ('saturn.sprtele', 'sprtele_phone_number', '5550100'),
             ('saturn.sprtele', 'sprtele_tele_code', 'CELL'),
         )
@@ -194,8 +232,8 @@ class StudentPreferredContactsTests(unittest.TestCase):
             exported = pd.read_excel(output)
             self.assertEqual(exported['CWID'].tolist(), ['TEST-2'])
             self.assertEqual(list(exported.columns), [
-                'CWID', 'First Name', 'Last Name', 'Preferred Email',
-                'Email Type', 'Preferred Phone', 'Phone Type',
+                'CWID', 'First Name', 'Last Name', 'Mines Email',
+                'Email Type', 'Phone Number', 'Phone Type',
             ])
             self.assertEqual(build.call_args.args[0].environment, 'PROD')
         client.run_sql_file.assert_called_once_with(self.query.sql_path)
