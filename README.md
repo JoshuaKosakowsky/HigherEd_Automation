@@ -162,6 +162,11 @@ The following commands will now be available:
 GUI architecture, developer launch instructions, and the rollout boundary are
 documented in [app/gui/README.md](app/gui/README.md).
 
+Developer verification uses the existing Python and PowerShell test runner.
+GitHub Actions runs it on a hosted Windows machine without installing anything
+on staff laptops. See [tests and CI instructions](tests/README.md) for local
+commands, GitHub results, and the separate branch rules needed before rollout.
+
 ## Cashier report filing watcher
 
 This optional role-specific tool watches the signed-in employee's Downloads

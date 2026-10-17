@@ -5,6 +5,7 @@ import os
 import queue
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -265,11 +266,12 @@ class InsightsConnectionServiceTests(unittest.TestCase):
             workbook = pd.read_excel(output)
             self.assertEqual(workbook.loc[0, "CWID"], "TEST-1")
             self.assertEqual(workbook.loc[0, "Amount"], 12.50)
-            sheet = load_workbook(output, read_only=True).active
-            self.assertEqual(sheet["C2"].value, datetime(2026, 9, 1))
-            self.assertEqual(sheet["C3"].value, datetime(2026, 9, 2, 13, 45, 30))
-            self.assertEqual(sheet["C2"].data_type, "d")
-            self.assertEqual(sheet["C2"].number_format.lower(), "yyyy-mm-dd hh:mm:ss")
+            with closing(load_workbook(output, read_only=True)) as exported:
+                sheet = exported.active
+                self.assertEqual(sheet["C2"].value, datetime(2026, 9, 1))
+                self.assertEqual(sheet["C3"].value, datetime(2026, 9, 2, 13, 45, 30))
+                self.assertEqual(sheet["C2"].data_type, "d")
+                self.assertEqual(sheet["C2"].number_format.lower(), "yyyy-mm-dd hh:mm:ss")
         self.assertEqual(build.call_args.args[0].environment, "TEST")
         self.assertEqual(
             client.run_sql_file.call_args.args[0].name,
