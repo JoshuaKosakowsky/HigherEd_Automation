@@ -20,12 +20,14 @@ pull requests targeting `main`, and manual requests through GitHub's Actions
 tab. Pushing a branch with an open pull request can produce both a push run
 and a pull-request run. Newer runs cancel older runs for the same workflow/ref.
 
-Each run uses a fresh GitHub-hosted Windows machine with Python 3.12. It checks
-out the tested revision, creates `.venv`, installs `requirements.txt`, checks
+Each run creates separate jobs on fresh GitHub-hosted Windows machines for
+Python 3.11 (the Mines-provided version) and Python 3.12. Each job checks out
+the tested revision, creates `.venv`, installs `requirements.txt`, checks
 dependency compatibility, and calls the existing `tests/run_tests.ps1` entry
 point through Windows PowerShell. Qt tests use the offscreen platform so GUI
-interactions do not need a visible desktop. Python 3.12 is the initial CI
-baseline; a passing run does not establish support for every newer Python.
+interactions do not need a visible desktop. Both jobs run the complete existing
+test command. A failure in one version does not cancel the other version's
+checks. Passing runs do not establish support for every newer Python.
 
 The optional refund and institutional-loan PostgreSQL test classes require
 `REFUNDS_TEST_DSN` and skip when it is unset. This initial workflow does not
@@ -45,8 +47,9 @@ hashes and version comments together when intentionally upgrading them.
 ## Read a result
 
 After the workflow file is committed and pushed, open the repository's
-**Actions** tab, select **CI**, and open a run. The job is named
-**Windows tests (Python 3.12)**. Expand a failed step to see its output.
+**Actions** tab, select **CI**, and open a run. The jobs are named
+**Windows tests (Python 3.11)** and **Windows tests (Python 3.12)**.
+Expand a failed step to see its output.
 
 - A failure during installation indicates a dependency or runner problem.
 - A test failure identifies the test and its assertion or traceback.
@@ -66,10 +69,12 @@ rules. The desktop updater currently follows its configured upstream and does
 not inspect CI results. A failed check on an existing `main` commit therefore
 does not by itself prevent that commit being offered by the updater.
 
-Before staff rollout, configure a GitHub branch rule/ruleset for `main` requiring
-pull requests and the successful **Windows tests (Python 3.12)** check, with
-bypass permissions reviewed. First let the check run so GitHub can recognize
-its name. Availability depends on repository visibility and the GitHub plan.
+For the protected release path, configure a GitHub branch rule/ruleset for `main`
+requiring pull requests and both successful **Windows tests (Python 3.11)** and
+**Windows tests (Python 3.12)** checks, with bypass permissions reviewed.
+Adding the 3.11 matrix job does not automatically add it to an existing branch
+rule: let it run, then select its name in the required checks. Availability
+depends on repository visibility and the GitHub plan.
 Then develop on a branch, open a pull request, inspect the checks, and merge
 after they pass. No second developer is needed to run CI; requiring another
 person's approval is a separate policy choice.
