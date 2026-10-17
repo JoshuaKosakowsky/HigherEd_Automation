@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.models import ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode
+from app.gui.parameter_defaults import ParameterDefaults
 from app.gui.progress import WorkflowProgressWidget
 from app.gui.services.drag_drop import FileInput
 from app.gui.services.execution import WorkflowExecutor
@@ -40,7 +41,7 @@ class WorkflowDetailPage(QScrollArea):
         self.active_context: WorkflowContext | None = None
         self.output_path: Path | None = None
         self.inputs = {}
-        self.generated_defaults: dict[str, str] = {}
+        self.parameter_defaults = ParameterDefaults()
         self.manual_banner_widgets = []
         self.sql_banner_widgets = []
         self.recon_source = None
@@ -72,7 +73,6 @@ class WorkflowDetailPage(QScrollArea):
         for parameter in definition.parameters:
             if parameter.default_factory is not None:
                 parameter = replace(parameter, default=parameter.default_factory())
-                self.generated_defaults[parameter.key] = str(parameter.default)
             parameter_layout = form_layout
             if definition.workflow_id in {"graduate_contract_recon", "trends"}:
                 group = ("Outputs" if parameter.key == "output_file" else
@@ -126,6 +126,8 @@ class WorkflowDetailPage(QScrollArea):
                 field_label.setBuddy(control)
             control.setAccessibleName(parameter.label)
             self.inputs[parameter.key] = control
+            if parameter.default_factory is not None:
+                self.parameter_defaults.track(parameter.key, control, parameter.default_factory)
             parameter_layout.addWidget(control)
             if self._is_sql_source_parameter(parameter.key):
                 self.sql_banner_widgets.extend((field_label, control))
@@ -248,16 +250,10 @@ class WorkflowDetailPage(QScrollArea):
             widget.setVisible(not manual)
         self._update_production_warning()
 
-    def _refresh_output_defaults(self) -> None:
-        """Refresh generated filenames while preserving staff-selected paths."""
-        for parameter in self.definition.parameters:
-            if parameter.kind != ParameterKind.OUTPUT_FILE or parameter.default_factory is None:
-                continue
-            control = self.inputs[parameter.key]
-            if control.text() == self.generated_defaults[parameter.key]:
-                value = str(parameter.default_factory())
-                control.setText(value)
-                self.generated_defaults[parameter.key] = value
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self.result_queue is None and not self.executor.is_running:
+            self.parameter_defaults.refresh()
 
     def _parse_parameters(self) -> dict:
         values = {
@@ -328,8 +324,8 @@ class WorkflowDetailPage(QScrollArea):
         if self.result_queue is not None or self.executor.is_running:
             return
         self.error.hide()
-        self._refresh_output_defaults()
         try:
+            self.parameter_defaults.refresh()
             parameters = self._parse_parameters()
         except ValueError as error:
             self.error.setText(str(error))
@@ -413,6 +409,8 @@ class WorkflowDetailPage(QScrollArea):
         if (self.textbook_step is not None and self.active_context is not None
                 and result.success and result.output_path
                 and self.active_context.parameters.get("step") == "prepare"):
+            # Archive the prepared term even if the open app crosses a term boundary.
+            self.parameter_defaults.preserve("term_code")
             self.inputs["term_code"].setText(str(self.active_context.parameters["term_code"]))
             self.textbook_step.setCurrentIndex(self.textbook_step.findData("archive"))
             QMessageBox.information(

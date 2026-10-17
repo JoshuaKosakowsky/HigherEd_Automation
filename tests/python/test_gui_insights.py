@@ -464,6 +464,34 @@ class ConnectionsPageTests(unittest.TestCase):
         save.assert_not_called()
         self.executor.run_async.assert_not_called()
 
+    def test_untouched_activity_dates_refresh_before_export_after_month_boundary(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("banner_activity"))
+        self.page.detail_codes.setText("HLTH")
+        with patch("app.gui.pages.connections.QDate", wraps=QDate) as clock, \
+             patch.object(QFileDialog, "getSaveFileName", return_value=("", "")):
+            for today in (QDate(2027, 1, 1), QDate(2028, 3, 1)):
+                clock.currentDate.return_value = today
+                self.page._run("query_export")
+                self.assertEqual(self.page.start_date.date(), QDate(today.year(), today.month(), 1))
+                self.assertEqual(self.page.end_date.date(), today)
+        self.executor.run_async.assert_not_called()
+
+    def test_explicit_activity_dates_survive_refresh_even_when_restored(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("banner_activity"))
+        self.page.detail_codes.setText("HLTH")
+        start = self.page.start_date.date()
+        end = self.page.end_date.date()
+        self.page.start_date.setDate(start.addDays(-1))
+        self.page.start_date.setDate(start)
+        self.page.end_date.setDate(end.addDays(-1))
+        self.page.end_date.setDate(end)
+        with patch("app.gui.pages.connections.QDate", wraps=QDate) as clock, \
+             patch.object(QFileDialog, "getSaveFileName", return_value=("", "")):
+            clock.currentDate.return_value = QDate(2027, 1, 1)
+            self.page._run("query_export")
+        self.assertEqual(self.page.start_date.date(), start)
+        self.assertEqual(self.page.end_date.date(), end)
+
     def test_saved_mines_login_can_be_removed_without_touching_insights_session(self):
         self.vault.load.return_value = SimpleNamespace(username="synthetic.user")
         self.page._refresh()

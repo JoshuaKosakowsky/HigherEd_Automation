@@ -25,8 +25,21 @@ from shared.banner.term import get_banner_term
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CURRENT_TERM = get_banner_term()
-LAST_MONTH = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+
+
+def _current_term_code() -> str:
+    return get_banner_term(date.today()).code
+
+
+def _previous_month_end() -> date:
+    return date.today().replace(day=1) - timedelta(days=1)
+
+
+def _last_completed_fiscal_year() -> str:
+    today = date.today()
+    return str(today.year - (today.month < 7))
+
+
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="refresh_detail_codes", name="Refresh Banner Detail Codes",
@@ -48,11 +61,11 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 help_text="Drop, browse, or paste one file path per line. Use one file per fiscal year named TGIACCD_fy2026.xlsx (or .csv). Uploaded years come from filenames; no hidden SQL year filters apply."),
             ParameterDefinition(key="first_fiscal_year", label="First fiscal year (ending year)", kind=ParameterKind.INTEGER,
                 minimum=1900, maximum=9998,
-                default=str(date.today().year - (date.today().month < 7)),
+                default_factory=_last_completed_fiscal_year,
                 help_text="FY2026 means July 1, 2025 through June 30, 2026. All detail codes and terms in that Feed Date range are included."),
             ParameterDefinition(key="last_fiscal_year", label="Last fiscal year (ending year)", kind=ParameterKind.INTEGER,
                 minimum=1900, maximum=9998,
-                default=str(date.today().year - (date.today().month < 7)),
+                default_factory=_last_completed_fiscal_year,
                 help_text="Defaults to the most recently completed fiscal year. A current or future year can be incomplete."),
             ParameterDefinition(key="output_file", label="Save trends analysis as", kind=ParameterKind.OUTPUT_FILE,
                 default_factory=lambda: PROJECT_ROOT / "data" / "statistics" / f"TGIACCD_Fiscal_Year_Analysis_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
@@ -71,7 +84,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             ParameterDefinition(key="cwid", label="Student CWID", kind=ParameterKind.TEXT,
                                 help_text="Enter the student's CWID. It is not included in progress messages."),
             ParameterDefinition(key="tax_year", label="Tax year", kind=ParameterKind.TEXT,
-                                default=str(date.today().year - 1), help_text="Calendar year of the courses, for example 2025."),
+                                default_factory=lambda: str(date.today().year - 1), help_text="Calendar year of the courses, for example 2025."),
             ParameterDefinition(key="output_directory", label="Output location", kind=ParameterKind.TEXT,
                                 default=PROJECT_ROOT / "data" / "canadian_tax",
                                 help_text="Creates a new timestamped subfolder on each run with tl11a_review.xlsx, source CSVs and manifest.json."),
@@ -149,8 +162,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 key="target_term",
                 label="Banner target term",
                 kind=ParameterKind.TEXT,
-                default=CURRENT_TERM.code,
-                help_text=f"Current term: {CURRENT_TERM.name} ({CURRENT_TERM.code}).",
+                default_factory=_current_term_code,
+                help_text="Defaults to the current Banner term using the configured term dates.",
             ),
             ParameterDefinition(
                 key="transaction_file",
@@ -201,7 +214,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                     / "data"
                     / "refunds"
                     / (
-                        f"refund_review_{CURRENT_TERM.code}_"
+                        f"refund_review_{_current_term_code()}_"
                         f"{datetime.now():%Y%m%d_%H%M%S}.xlsx"
                     )
                 ),
@@ -229,8 +242,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 key="term_code",
                 label="Banner term",
                 kind=ParameterKind.TEXT,
-                default=CURRENT_TERM.code,
-                help_text=f"Current term: {CURRENT_TERM.name} ({CURRENT_TERM.code}).",
+                default_factory=_current_term_code,
+                help_text="Defaults to the current Banner term using the configured term dates.",
             ),
         ),
     ),
@@ -260,7 +273,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             ),
             ParameterDefinition(
                 key="recon_month", label="Feed month (YYYY-MM)", kind=ParameterKind.TEXT,
-                default=LAST_MONTH, help_text="Reconcile transactions with Feed Dates in this month.",
+                default_factory=lambda: _previous_month_end().strftime("%Y-%m"),
+                help_text="Reconcile transactions with Feed Dates in this month.",
             ),
             ParameterDefinition(
                 key="frst_file", label="FRST extract", kind=ParameterKind.INPUT_FILE,
@@ -274,7 +288,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             ),
             ParameterDefinition(
                 key="output_file", label="Save recon as", kind=ParameterKind.OUTPUT_FILE,
-                default=PROJECT_ROOT / "data" / "textbook_brokers" / f"{LAST_MONTH} TBB Recon.xlsx",
+                default_factory=lambda: PROJECT_ROOT / "data" / "textbook_brokers" / f"{_previous_month_end():%Y-%m} TBB Recon.xlsx",
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
                 help_text="A new workbook is created. Existing files are never overwritten.",
             ),
@@ -297,10 +311,10 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 file_types=(("Excel or CSV", "*.xlsx *.xlsm *.csv"),),
                 help_text="Upload the complete Banner Activity by Date & Detail Code result for the same scope as Workday. Uploaded data is not narrowed by hidden date or code filters."),
             ParameterDefinition(key="start_date", label="Start date (inclusive)", kind=ParameterKind.DATE,
-                default=date.fromisoformat(LAST_MONTH + "-01").isoformat(),
+                default_factory=lambda: _previous_month_end().replace(day=1).isoformat(),
                 help_text="Workday Accounting Date and Banner Feed Date are filtered independently to this range."),
             ParameterDefinition(key="end_date", label="End date (inclusive)", kind=ParameterKind.DATE,
-                default=(date.today().replace(day=1) - timedelta(days=1)).isoformat(),
+                default_factory=lambda: _previous_month_end().isoformat(),
                 help_text="Use actual boundaries for a period, quarter, fiscal year, or multiple years."),
             ParameterDefinition(key="detail_codes", label="1305 Banner detail codes (comma-separated)", kind=ParameterKind.TEXT,
                 default="TPDT, TPLE, Z0LE",
