@@ -292,6 +292,15 @@ The same standalone SQL can be saved in Insights for staff; see
 for selection rules, publishing, and validation. The report has no technical
 row-count column.
 
+Administrators can also select **Contact — Refund check contacts for AP matching**
+in Connections. This separate read-only report selects RFND/RFDP accounts with
+feed dates from 200 days ago through today, provides student or borrower contacts,
+and preserves incomplete contacts with review flags. Match its Student CWID or
+Borrower CWID to AP's outstanding-check report; Banner activity does not determine
+whether a check remains uncashed. TEST/PROD selection, administrator checks,
+complete-result checks and new-file Excel export use the existing report service.
+See [the report's rules and validation](../../query/AR/contact_information/refund_check_contacts_README.md).
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

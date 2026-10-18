@@ -117,6 +117,15 @@ QUERIES: tuple[InsightsQuery, ...] = (
         "This does not identify outstanding checks.",
     ),
     InsightsQuery(
+        "refund_check_contacts", "Contact", "Refund check contacts for AP matching",
+        "AR/contact_information/refund_check_contacts.sql",
+        "RFND/RFDP accounts with feed dates from 200 days ago through today. "
+        "Student contacts for RFND; each borrower suffix and latest borrower contacts for RFDP. "
+        "Missing contacts and differing borrower records are flagged. "
+        "Match to AP's outstanding-check list to identify the actual payee and uncashed checks.",
+        administrator_only=True, result_count_column="Report Row Count",
+    ),
+    InsightsQuery(
         "loan_all_enrollment", "Institutional loans", "All enrollment load categories",
         "AR/loans/all_enrollment_load_categories_institutional_loans_summer.sql",
         "Requires a six-digit Banner term; the combined Summer enrollment report.",
