@@ -1,5 +1,9 @@
 # Student contact information lookup
 
+For the separate RFND/RFDP outreach source, see
+[Refund check contacts for AP matching](refund_check_contacts_README.md).
+The student lookup below retains its existing behavior.
+
 `student_preferred_contacts.sql` replaces `OS_Checks.sql`. It returns one row
 per qualifying student PIDM, with CWID, first/last name, Mines email and its type,
 and phone (including area code/extension) and its type.
