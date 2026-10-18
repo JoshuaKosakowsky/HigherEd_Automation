@@ -367,7 +367,7 @@ class InsightsConnectionServiceTests(unittest.TestCase):
     def test_term_query_renders_validated_sql_before_execution(self):
         client = MagicMock()
         client.__enter__.return_value = client
-        client.run_sql.return_value = pd.DataFrame(columns=["CWID"])
+        client.run_sql.return_value = pd.DataFrame(columns=["CWID", "__loan_row_count"])
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "loans.xlsx"
             with patch(

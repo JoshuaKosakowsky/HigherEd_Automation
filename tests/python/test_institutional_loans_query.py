@@ -1,506 +1,351 @@
+"""Execute the delivered SQL against synthetic data; no Banner credentials."""
 from __future__ import annotations
 
-import json
-import os
 import re
-import shutil
-import subprocess
+import sqlite3
+import tempfile
 import unittest
-from decimal import Decimal
+from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+from openpyxl import load_workbook
+
+from app.gui.models import WorkflowContext, WorkflowMode
+from app.gui.services.insights import run_insights_connection
+from shared.insights.query_catalog import QUERIES, get_query
+
+REPORT_DATE = date(2026, 10, 18)
+QUERY = get_query("loan_all_enrollment")
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-QUERY_PATH = (
-    REPOSITORY_ROOT
-    / "query"
-    / "AR"
-    / "loans"
-    / "less_than_half_time_institutional_loans.sql"
-)
-SCHEMA_PATH = QUERY_PATH.with_name("validate_loan_schema.sql")
-SUMMER_BAND_QUERY_PATH = QUERY_PATH.with_name(
-    "half_time_less_than_full_time_institutional_loans_summer.sql"
-)
-FULL_TIME_QUERY_PATH = QUERY_PATH.with_name(
-    "full_time_and_above_institutional_loans_summer.sql"
-)
-COMBINED_QUERY_PATH = QUERY_PATH.with_name(
-    "all_enrollment_load_categories_institutional_loans_summer.sql"
-)
-
-
-class InstitutionalLoansQueryContractTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.query = QUERY_PATH.read_text(encoding="utf-8")
-        cls.normalized = re.sub(r"\s+", " ", cls.query).upper()
-        cls.summer_band_query = SUMMER_BAND_QUERY_PATH.read_text(encoding="utf-8")
-        cls.summer_band_normalized = re.sub(
-            r"\s+", " ", cls.summer_band_query
-        ).upper()
-        cls.full_time_query = FULL_TIME_QUERY_PATH.read_text(encoding="utf-8")
-        cls.full_time_normalized = re.sub(
-            r"\s+", " ", cls.full_time_query
-        ).upper()
-        cls.combined_query = COMBINED_QUERY_PATH.read_text(encoding="utf-8")
-        cls.combined_normalized = re.sub(
-            r"\s+", " ", cls.combined_query
-        ).upper()
-
-    def test_uses_one_required_target_term_parameter(self) -> None:
-        self.assertEqual(self.query.count("{{target_term}}"), 1)
-        self.assertIn("P.TARGET_TERM", self.normalized)
-        self.assertNotIn("CAST('202655' AS VARCHAR(6))", self.normalized)
-
-    def test_loan_activity_is_scoped_to_target_term(self) -> None:
-        section = self.query[
-            self.query.index("loan_activity AS") :
-            self.query.index("loan_population AS")
-        ].upper()
-        self.assertIn("T.TBRACCD_TERM_CODE = P.TARGET_TERM", section)
-
-    def test_hours_include_only_enrollment_counting_statuses(self) -> None:
-        section = self.query[
-            self.query.index("registration_hours AS") :
-            self.query.index("loan_activity AS")
-        ].upper()
-        self.assertIn("SATURN.STVRSTS", section)
-        self.assertIn("STVRSTS_INCL_SECT_ENRL", section)
-        self.assertIn("= 'Y'", section)
-        self.assertIn("SFRSTCR_BILL_HR", section)
-        self.assertIn("AS BILLABLE_HOURS", section)
-
-    def test_zero_hour_loan_recipients_are_retained(self) -> None:
-        self.assertIn("LEFT JOIN REGISTRATION_HOURS", self.normalized)
-        self.assertIn(
-            "COALESCE(HOURS.CREDIT_HOURS, 0)",
-            self.normalized,
-        )
-
-    def test_output_distinguishes_enrollment_from_billing(self) -> None:
-        self.assertIn('AS "CREDIT HOURS"', self.normalized)
-        self.assertIn('AS "BILLABLE HOURS"', self.normalized)
-        self.assertNotIn('AS "NON-ENROLLED BILLABLE HOURS"', self.normalized)
-        self.assertNotIn('AS "BILLABLE REGISTRATION STATUS CODES"', self.normalized)
-        self.assertNotIn('AS "ENROLLMENT/BILLING NOTE"', self.normalized)
-
-    def test_requested_output_column_order_and_removed_summaries(self) -> None:
-        final_select = self.query[self.query.rindex("SELECT\n") :].upper()
-        headings = (
-            "FIRST NAME",
-            "DETAIL CODE",
-            "DETAIL CODE DESCRIPTION",
-            "DETAIL CODE LOAN ACTIVITY",
-            "LAST LOAN ACTIVITY DATE",
-            "LEVEL",
-        )
-        positions = [final_select.index(f'AS "{heading}"') for heading in headings]
-        self.assertEqual(positions, sorted(positions))
-        self.assertNotIn('AS "TOTAL SELECTED LOAN ACTIVITY"', final_select)
-        self.assertNotIn('AS "TRANSACTION COUNT"', final_select)
-        self.assertNotIn("COUNT(*) AS TRANSACTION_COUNT", self.normalized)
-
-    def test_less_than_half_time_thresholds_are_preserved(self) -> None:
-        self.assertRegex(
-            self.normalized,
-            r"STUDENT\.STUDENT_LEVEL = 'UG'.+?HOURS\.CREDIT_HOURS, 0\) < 6",
-        )
-        self.assertRegex(
-            self.normalized,
-            r"STUDENT\.STUDENT_LEVEL = 'GR'.+?HOURS\.CREDIT_HOURS, 0\) < 4\.5",
-        )
-
-    def test_summer_half_time_to_less_than_full_time_thresholds(self) -> None:
-        self.assertRegex(
-            self.summer_band_normalized,
-            r"STUDENT\.STUDENT_LEVEL = 'UG'.+?CREDIT_HOURS, 0\) >= 6"
-            r".+?CREDIT_HOURS, 0\) < 12",
-        )
-        self.assertRegex(
-            self.summer_band_normalized,
-            r"STUDENT\.STUDENT_LEVEL = 'GR'.+?CREDIT_HOURS, 0\) >= 4\.5"
-            r".+?CREDIT_HOURS, 0\) < 9",
-        )
-        self.assertNotIn("CREDIT_HOURS, 0) <= 12", self.summer_band_normalized)
-        self.assertNotIn("CREDIT_HOURS, 0) <= 9", self.summer_band_normalized)
-
-    def test_summer_band_report_preserves_the_same_output_columns(self) -> None:
-        original_select = self.query[self.query.rindex("SELECT\n") :]
-        summer_band_select = self.summer_band_query[
-            self.summer_band_query.rindex("SELECT\n") :
-        ]
-        self.assertEqual(summer_band_select, original_select)
-        self.assertEqual(self.summer_band_query.count("{{target_term}}"), 1)
-        for code in ("PERK", "CFDN", "CPAR", "CCOM", "CWLC", "L001"):
-            with self.subTest(code=code):
-                self.assertIn(f"('{code}')", self.summer_band_normalized)
-
-    def test_summer_full_time_and_above_thresholds(self) -> None:
-        self.assertRegex(
-            self.full_time_normalized,
-            r"STUDENT\.STUDENT_LEVEL = 'UG'.+?CREDIT_HOURS, 0\) >= 12",
-        )
-        self.assertRegex(
-            self.full_time_normalized,
-            r"STUDENT\.STUDENT_LEVEL = 'GR'.+?CREDIT_HOURS, 0\) >= 9",
-        )
-        full_time_filter = self.full_time_query[
-            self.full_time_query.index("    WHERE\n        (", self.full_time_query.index("report_rows AS")) :
-            self.full_time_query.rindex("\n)\n\nSELECT")
-        ].upper()
-        self.assertNotIn("CREDIT_HOURS, 0) <", full_time_filter)
-
-    def test_full_time_report_preserves_the_same_output_columns(self) -> None:
-        original_select = self.query[self.query.rindex("SELECT\n") :]
-        full_time_select = self.full_time_query[
-            self.full_time_query.rindex("SELECT\n") :
-        ]
-        self.assertEqual(full_time_select, original_select)
-        self.assertEqual(self.full_time_query.count("{{target_term}}"), 1)
-        for code in ("PERK", "CFDN", "CPAR", "CCOM", "CWLC", "L001"):
-            with self.subTest(code=code):
-                self.assertIn(f"('{code}')", self.full_time_normalized)
-
-    def test_combined_report_covers_each_summer_enrollment_band(self) -> None:
-        for fragment in (
-            "STUDENT.STUDENT_LEVEL = 'UG'",
-            "HOURS.CREDIT_HOURS, 0) < 6",
-            "HOURS.CREDIT_HOURS, 0) < 12",
-            "STUDENT.STUDENT_LEVEL = 'GR'",
-            "HOURS.CREDIT_HOURS, 0) < 4.5",
-            "HOURS.CREDIT_HOURS, 0) < 9",
-            "THEN 'LESS THAN HALF TIME'",
-            "THEN 'HALF TIME BUT LESS THAN FULL TIME'",
-            "THEN 'FULL TIME AND ABOVE'",
-            "WHERE STUDENT.STUDENT_LEVEL IN ('UG', 'GR')",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, self.combined_normalized)
-        self.assertIn(
-            'AS "ENROLLMENT LOAD CATEGORY"', self.combined_normalized
-        )
-
-    def test_combined_report_preserves_all_base_output_columns(self) -> None:
-        original_select = self.query[self.query.rindex("SELECT\n") :]
-        combined_select = self.combined_query[
-            self.combined_query.rindex("SELECT\n") :
-        ]
-        without_category = combined_select.replace(
-            '    r.enrollment_load_category AS "Enrollment Load Category",\n',
-            "",
-        )
-        self.assertEqual(without_category.rstrip(), original_select.rstrip())
-        self.assertEqual(self.combined_query.count("{{target_term}}"), 1)
-
-    def test_student_record_is_term_effective(self) -> None:
-        self.assertIn("S.SGBSTDN_TERM_CODE_EFF <= P.TARGET_TERM", self.normalized)
-        self.assertIn("ORDER BY S.SGBSTDN_TERM_CODE_EFF DESC", self.normalized)
-        self.assertIn("STUDENT.RECORD_RANK = 1", self.normalized)
-        self.assertIn("S.SGBSTDN_EXP_GRAD_DATE", self.normalized)
-        self.assertIn('AS "EXPECTED GRADUATION DATE"', self.normalized)
-
-    def test_total_earned_credits_use_overall_level_totals_only(self) -> None:
-        section = self.query[
-            self.query.index("accumulated_earned_credits AS") :
-            self.query.index("student_record_candidates AS")
-        ].upper()
-        self.assertIn("SATURN.SHRLGPA", section)
-        self.assertIn("SHRLGPA_HOURS_EARNED", section)
-        self.assertIn("SHRLGPA_GPA_TYPE_IND = 'O'", section)
-        self.assertNotIn("SHRLGPA_GPA_TYPE_IND = 'I'", section)
-        self.assertNotIn("SHRLGPA_GPA_TYPE_IND = 'T'", section)
-        self.assertIn('AS "TOTAL EARNED CREDIT HOURS"', self.normalized)
-
-    def test_returning_type_check_explains_yes_and_no_results(self) -> None:
-        self.assertIn("STUDENT.STUDENT_TYPE_CODE = 'X'", self.normalized)
-        self.assertIn("YES - X (RETURNING STUDENT)", self.normalized)
-        self.assertIn("NO - STUDENT TYPE IS BLANK", self.normalized)
-        self.assertIn("AS RETURNING_STUDENT_TYPE_CHECK", self.normalized)
-        self.assertIn('AS "RETURNING STUDENT TYPE CHECK"', self.normalized)
-        self.assertNotIn('AS "RETURNING STUDENT"', self.normalized)
-
-    def test_returning_source_is_documented_for_banner_users(self) -> None:
-        documentation = QUERY_PATH.with_name("README.md").read_text(
-            encoding="utf-8"
-        )
-        for term in ("SGASTDN", "Learner", "SGBSTDN_STYP_CODE", "STVSTYP"):
-            with self.subTest(term=term):
-                self.assertIn(term, documentation)
-        self.assertIn("`X` = Returning Student", documentation)
-        self.assertIn("`C` = Continuing", documentation)
-
-    def test_contact_fields_are_ranked_without_multiplying_report_rows(self) -> None:
-        self.assertIn("ADDRESS_CANDIDATES AS", self.normalized)
-        self.assertIn("EMAIL_CANDIDATES AS", self.normalized)
-        self.assertIn("PHONE_CANDIDATES AS", self.normalized)
-        self.assertIn("ROW_NUMBER() OVER", self.normalized)
-        self.assertIn("ADDRESS.ADDRESS_RANK = 1", self.normalized)
-        self.assertIn("PHONE.PHONE_RANK = 1", self.normalized)
-        for heading in (
-            "STREET",
-            "CITY",
-            "STATE",
-            "ZIP",
-            "SCHOOL EMAIL",
-            "PERSONAL EMAIL",
-            "PHONE NUMBER",
-        ):
-            with self.subTest(heading=heading):
-                self.assertIn(f'AS "{heading}"', self.normalized)
-
-    def test_contact_type_assumptions_are_explicit(self) -> None:
-        for code in ("MA", "PR", "UNIV", "PER1"):
-            with self.subTest(code=code):
-                self.assertIn(f"'{code}'::VARCHAR", self.normalized)
-
-    def test_original_detail_code_population_is_preserved(self) -> None:
-        for code in ("PERK", "CFDN", "CPAR", "CCOM", "CWLC", "L001"):
-            with self.subTest(code=code):
-                self.assertIn(f"('{code}')", self.normalized)
-        self.assertNotIn("('CLTL')", self.normalized)
-        self.assertNotIn("('LEWL')", self.normalized)
-
-    def test_schema_inventory_covers_report_sources(self) -> None:
-        schema = SCHEMA_PATH.read_text(encoding="utf-8").upper()
-        self.assertIn("('SATURN', 'STVRSTS', 'INCL_SECT_ENRL')", schema)
-        self.assertIn("('SATURN', 'SFRSTCR', 'BILL_HR')", schema)
-        self.assertIn("('SATURN', 'SGBSTDN', 'STYP_CODE')", schema)
-        self.assertIn("('SATURN', 'SGBSTDN', 'EXP_GRAD_DATE')", schema)
-        self.assertIn("('SATURN', 'SHRLGPA', 'HOURS_EARNED')", schema)
-        self.assertIn("('SATURN', 'SHRLGPA', 'GPA_TYPE_IND')", schema)
-        self.assertIn("('SATURN', 'STVSTYP', 'DESC')", schema)
-        self.assertIn("('SATURN', 'SPRADDR', 'STREET_LINE1')", schema)
-        self.assertIn("('GENERAL', 'GOREMAL', 'EMAIL_ADDRESS')", schema)
-        self.assertIn("('SATURN', 'SPRTELE', 'PHONE_NUMBER')", schema)
-        self.assertIn("'MISSING'", schema)
-        self.assertIn("'FOUND'", schema)
-
-
-class InstitutionalLoansPostgresTests(unittest.TestCase):
-    """Execute the report against temporary tables containing synthetic data."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.dsn = os.environ.get("REFUNDS_TEST_DSN")
-        cls.psql = os.environ.get("REFUNDS_TEST_PSQL") or shutil.which("psql")
-        if not cls.dsn:
-            raise unittest.SkipTest(
-                "Set REFUNDS_TEST_DSN for synthetic PostgreSQL tests"
-            )
-        if not cls.psql:
-            raise RuntimeError("REFUNDS_TEST_DSN is set but psql is unavailable")
-
-        query = QUERY_PATH.read_text(encoding="utf-8")
-        cls.query = re.sub(
-            r"\b(?:general|taismgr|saturn)\.", "pg_temp.", query
-        )
-        cls.query = cls.query.replace("{{target_term}}", "'209980'")
-        combined_query = COMBINED_QUERY_PATH.read_text(encoding="utf-8")
-        cls.combined_query = re.sub(
-            r"\b(?:general|taismgr|saturn)\.", "pg_temp.", combined_query
-        )
-        cls.combined_query = cls.combined_query.replace(
-            "{{target_term}}", "'209980'"
-        )
-
-    def run_report(self, report_query: str | None = None) -> list[dict]:
+class InstitutionalLoansQueryTests(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.addCleanup(self.db.close)
+        self.db.row_factory = sqlite3.Row
+        self.db.create_function("BTRIM", 1, lambda v: None if v is None else v.strip())
+        self.db.create_function("CONCAT", -1, lambda *v: "".join(str(x) for x in v if x is not None))
+        self.db.create_function("CONCAT_WS", -1, lambda sep, *v: sep.join(str(x) for x in v if x is not None))
+        for schema in ("saturn", "taismgr", "general"):
+            self.db.execute(f"ATTACH DATABASE ':memory:' AS {schema}")
         schemas = {
-            "sfrstcr": "pidm int, term_code text, rsts_code text, credit_hr numeric, bill_hr numeric",
-            "stvrsts": "code text, incl_sect_enrl text",
-            "tbraccd": "pidm int, term_code text, detail_code text, amount numeric, activity_date timestamp",
-            "sgbstdn": "pidm int, term_code_eff text, levl_code text, styp_code text, exp_grad_date date",
-            "shrlgpa": "pidm int, levl_code text, gpa_type_ind text, hours_earned numeric",
-            "spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
-            "stvstyp": "code text, desc text",
-            "tbbdetc": "detail_code text, desc text, type_ind text",
-            "spraddr": "pidm int, atyp_code text, seqno int, street_line1 text, street_line2 text, street_line3 text, city text, stat_code text, zip text, status_ind text, from_date date, to_date date",
-            "goremal": "pidm int, emal_code text, email_address text, status_ind text, preferred_ind text, activity_date timestamp",
-            "sprtele": "pidm int, seqno int, phone_area text, phone_number text, phone_ext text, primary_ind text, status_ind text",
+            "saturn.sfrstcr": "pidm INTEGER, term_code TEXT, rsts_code TEXT, credit_hr NUMERIC, bill_hr NUMERIC",
+            "saturn.stvrsts": "code TEXT, incl_sect_enrl TEXT",
+            "taismgr.tbraccd": "pidm INTEGER, term_code TEXT, detail_code TEXT, amount NUMERIC, activity_date TEXT",
+            "saturn.sgbstdn": "pidm INTEGER, term_code_eff TEXT, levl_code TEXT, styp_code TEXT, exp_grad_date TEXT",
+            "saturn.shrlgpa": "pidm INTEGER, levl_code TEXT, gpa_type_ind TEXT, hours_earned NUMERIC",
+            "saturn.spriden": "pidm INTEGER, id TEXT, last_name TEXT, first_name TEXT, change_ind TEXT",
+            "saturn.stvstyp": "code TEXT, desc TEXT",
+            "taismgr.tbbdetc": "detail_code TEXT, desc TEXT, type_ind TEXT",
+            "saturn.spraddr": "pidm INTEGER, atyp_code TEXT, seqno INTEGER, street_line1 TEXT, street_line2 TEXT, street_line3 TEXT, city TEXT, stat_code TEXT, zip TEXT, status_ind TEXT, from_date TEXT, to_date TEXT",
+            "general.goremal": "pidm INTEGER, emal_code TEXT, email_address TEXT, status_ind TEXT, preferred_ind TEXT, activity_date TEXT",
+            "saturn.sprtele": "pidm INTEGER, seqno INTEGER, phone_area TEXT, phone_number TEXT, phone_ext TEXT, primary_ind TEXT, status_ind TEXT",
+            "saturn.shrdgmr": "pidm INTEGER, seq_no INTEGER, grad_date TEXT, degc_code TEXT, levl_code TEXT, degs_code TEXT",
+            "saturn.stvdegs": "code TEXT, desc TEXT, award_status_ind TEXT",
+            "saturn.sfbetrm": "pidm INTEGER, term_code TEXT, ests_code TEXT, ests_date TEXT",
+            "saturn.stvests": "code TEXT, desc TEXT, third_party_wd_ind TEXT",
+            "saturn.sfrwdrl": "pidm INTEGER, term_code TEXT, seq_no INTEGER, ests_code TEXT, eff_wdrl_date TEXT",
+            "saturn.stvterm": "code TEXT, start_date TEXT, end_date TEXT",
         }
-        sql = ["BEGIN; SET LOCAL statement_timeout = '15s';"]
         for table, columns in schemas.items():
-            prefixed = ", ".join(
-                f"{table}_{column}" for column in columns.split(", ")
-            )
-            sql.append(f"CREATE TEMP TABLE {table} ({prefixed});")
+            name = table.split(".")[1]
+            definitions = ", ".join(f"{name}_{column}" for column in columns.split(", "))
+            self.db.execute(f"CREATE TABLE {table} ({definitions})")
+        self.insert("saturn.stvrsts", "RE", "Y")
+        self.insert("saturn.stvrsts", "WD", "N")
+        self.insert("saturn.stvdegs", "ZZ", "Synthetic Awarded", "A")
+        self.insert("saturn.stvdegs", "AW", "Synthetic Pending", "P")
+        self.insert("saturn.stvests", "ZZ", "Synthetic Withdrawal", "Y")
+        self.insert("saturn.stvests", "EL", "Eligible", "N")
+        self.insert("saturn.stvstyp", "C", "Continuing")
+        self.insert("saturn.stvstyp", "X", "Returning Student")
+        for code in ("PERK", "CFDN", "CPAR", "CCOM", "CWLC", "L001", "LEWL", "CLTL"):
+            self.insert("taismgr.tbbdetc", code, f"Synthetic {code}", "P")
+        for term, start, end in (
+            ("202480", "2024-08-15", "2024-12-20"),
+            ("202580", "2025-08-15", "2025-12-20"),
+            ("202610", "2026-01-10", "2026-05-15"),
+            ("202655", "2026-05-20", "2026-08-01"),
+            ("202680", "2026-08-15", "2026-12-20"),
+            ("202710", "2027-01-10", "2027-05-15"),
+        ):
+            self.insert("saturn.stvterm", term, start, end)
 
-        def insert(table: str, values: tuple) -> None:
-            literals = [
-                "NULL"
-                if value is None
-                else "'" + str(value).replace("'", "''") + "'"
-                for value in values
-            ]
-            sql.append(f"INSERT INTO {table} VALUES ({', '.join(literals)});")
+    def insert(self, table, *values):
+        self.db.execute(f"INSERT INTO {table} VALUES ({', '.join('?' for _ in values)})", values)
 
-        insert("stvrsts", ("RE", "Y"))
-        insert("stvrsts", ("WD", "N"))
-        insert("stvstyp", ("C", "Continuing"))
-        insert("stvstyp", ("X", "Returning Student"))
-        for code in ("PERK", "CFDN", "CPAR", "CCOM", "CWLC", "L001"):
-            insert("tbbdetc", (code, f"Synthetic {code}", "P"))
+    def day(self, days_ago):
+        return (REPORT_DATE - timedelta(days=days_ago)).isoformat()
 
-        # PIDM 1 is a returning undergraduate with five enrolled credits.
-        # Its withdrawn course and prior-term loan must not affect the report.
-        insert("sfrstcr", (1, "209980", "RE", 5, 5))
-        insert("sfrstcr", (1, "209980", "WD", 3, 3))
-        insert("tbraccd", (1, "209980", "PERK", 100, "2099-08-01"))
-        insert("tbraccd", (1, "209980", "CFDN", 50, "2099-08-02"))
-        insert("tbraccd", (1, "209910", "PERK", 900, "2099-01-01"))
-        insert(
-            "spraddr",
-            (1, "PR", 1, "1 Permanent Rd", None, None, "Golden", "CO", "80401", None, "2020-01-01", None),
-        )
-        insert(
-            "spraddr",
-            (1, "MA", 2, "2 Mailing St", "Apt 3", None, "Denver", "CO", "80202", None, "2024-01-01", None),
-        )
-        insert(
-            "goremal",
-            (1, "UNIV", "student@mines.edu", "A", "Y", "2025-01-01"),
-        )
-        insert(
-            "goremal",
-            (1, "PER1", "student@example.com", "A", None, "2025-01-02"),
-        )
-        insert("sprtele", (1, 1, "303", "5550101", None, "Y", None))
-        insert("sprtele", (1, 2, "720", "5550102", None, None, None))
-        # Overall rows are summed across levels; component I/T rows are ignored.
-        insert("shrlgpa", (1, "UG", "I", 15))
-        insert("shrlgpa", (1, "UG", "T", 5))
-        insert("shrlgpa", (1, "UG", "O", 20))
-        insert("shrlgpa", (1, "GR", "O", 2))
+    def borrower(self, pidm=1, level="UG", code="LEWL", amount=100):
+        self.insert("saturn.spriden", pidm, f"TEST-{pidm}", "Synthetic", f"Person{pidm}", None)
+        self.insert("saturn.sgbstdn", pidm, "202210", level, "C", self.day(20))
+        self.loan(pidm, code, amount)
 
-        # Boundary students at exactly half time must be excluded.
-        insert("sfrstcr", (2, "209980", "RE", 6, 6))
-        insert("tbraccd", (2, "209980", "PERK", 200, "2099-08-01"))
-        insert("sfrstcr", (4, "209980", "RE", Decimal("4.5"), Decimal("4.5")))
-        insert("tbraccd", (4, "209980", "PERK", 400, "2099-08-01"))
+    def loan(self, pidm, code="LEWL", amount=100, term="202210"):
+        self.insert("taismgr.tbraccd", pidm, term, code, amount, "2022-01-01")
 
-        # A four-credit graduate and a zero-hour undergraduate must be included.
-        insert("sfrstcr", (3, "209980", "RE", 4, 4))
-        insert("tbraccd", (3, "209980", "PERK", 300, "2099-08-01"))
-        insert("tbraccd", (5, "209980", "PERK", 500, "2099-08-01"))
+    def graduate(self, pidm=1, days=30, status="ZZ", seq=1, level="UG"):
+        self.insert("saturn.shrdgmr", pidm, seq, self.day(days), "BS", level, status)
 
-        # A dropped-only student can have billable hours but zero enrolled credits.
-        insert("sfrstcr", (6, "209980", "WD", 3, 3))
-        insert("tbraccd", (6, "209980", "PERK", 600, "2099-08-01"))
+    def register(self, pidm=1, term="202680", hours=6, status="RE", bill=None):
+        self.insert("saturn.sfrstcr", pidm, term, status, hours, hours if bill is None else bill)
 
-        # Exact Summer full-time boundaries belong in the highest band.
-        insert("sfrstcr", (7, "209980", "RE", 12, 12))
-        insert("tbraccd", (7, "209980", "PERK", 700, "2099-08-01"))
-        insert("sfrstcr", (8, "209980", "RE", 9, 9))
-        insert("tbraccd", (8, "209980", "PERK", 800, "2099-08-01"))
+    def withdraw(self, pidm=1, days=20, term="202655", effective=True, status="ZZ", seq=1):
+        self.insert("saturn.sfbetrm", pidm, term, status, self.day(days + 5 if effective else days))
+        if effective:
+            self.insert("saturn.sfrwdrl", pidm, term, seq, status, self.day(days))
 
-        levels = {
-            1: "UG",
-            2: "UG",
-            3: "GR",
-            4: "GR",
-            5: "UG",
-            6: "UG",
-            7: "UG",
-            8: "GR",
-        }
-        for pidm, level in levels.items():
-            insert("spriden", (pidm, f"TEST-{pidm}", "Synthetic", f"Person{pidm}", None))
-            insert("sgbstdn", (pidm, "209910", level, "C", "2099-05-01"))
-            insert(
-                "sgbstdn",
-                (
-                    pidm,
-                    "209980",
-                    level,
-                    "X" if pidm == 1 else "C",
-                    "2100-05-01" if pidm == 1 else None,
-                ),
-            )
-        # A future Returning record must not change PIDM 5's target-term flag.
-        insert("sgbstdn", (5, "210010", "UG", "X", "2101-05-01"))
+    def rows(self, term="202680"):
+        sql = QUERY.render_sql(term)
+        # Execute every CTE/join/window/filter unchanged. Adapt only PostgreSQL
+        # casts/date syntax and freeze CURRENT_DATE for deterministic boundaries.
+        sql = re.sub(r"::varchar\(\d+\)", "", sql)
+        sql = sql.replace("CURRENT_DATE - INTERVAL '365 days'", "date(CURRENT_DATE, '-365 days')")
+        sql = re.sub(r"CAST\((COALESCE\([^()]+\)|[a-z_]+\.[a-z_]+) AS date\)", r"date(\1)", sql)
+        sql = sql.replace("CURRENT_DATE", f"'{REPORT_DATE.isoformat()}'")
+        return [dict(row) for row in self.db.execute(sql)]
 
-        sql.append(
-            "SELECT COALESCE(JSON_AGG(report), '[]'::json) FROM ("
-            + (report_query or self.query).rstrip().removesuffix(";")
-            + ") report; ROLLBACK;"
-        )
-        result = subprocess.run(
-            [self.psql, "-X", "-qAt", "--set=ON_ERROR_STOP=1", "--dbname", self.dsn],
-            input="\n".join(sql),
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout, parse_float=Decimal)
+    def test_old_loans_all_seven_codes_and_reversals_are_retained(self):
+        for pidm, code in enumerate(("PERK", "CFDN", "CPAR", "CCOM", "CWLC", "L001", "LEWL", "CLTL"), 1):
+            self.borrower(pidm, code=code)
+            self.graduate(pidm)
+        self.loan(7, amount=-100)
+        self.loan(6, code="L001", amount=-150)
+        rows = self.rows()
+        self.assertEqual(len(rows), 7)
+        amounts = {r["Detail Code"]: r["Detail Code Loan Activity"] for r in rows}
+        self.assertEqual(amounts["LEWL"], 0)
+        self.assertEqual(amounts["L001"], -50)
+        self.assertNotIn("CLTL", amounts)
+        self.assertTrue(all(r["Credit Hours"] == 0 for r in rows))
+        self.assertTrue(all(r["__loan_row_count"] == 7 for r in rows))
 
-    def test_population_hours_term_scope_and_returning_flag(self) -> None:
-        rows = self.run_report()
-        self.assertEqual(
-            [row["ID"] for row in rows],
-            ["TEST-1", "TEST-1", "TEST-3", "TEST-5", "TEST-6"],
-        )
+    def test_awarded_indicator_and_calendar_day_window(self):
+        for pidm, days, status in ((1, 0, "ZZ"), (2, 365, "ZZ"), (3, 366, "ZZ"),
+                                  (4, -1, "ZZ"), (5, 10, "AW")):
+            self.borrower(pidm)
+            self.graduate(pidm, days, status)
+        self.assertEqual({r["ID"] for r in self.rows()}, {"TEST-1", "TEST-2"})
+        # A stale/expected graduation date alone never qualifies a borrower.
+        self.borrower(6)
+        self.assertEqual(len(self.rows()), 2)
 
-        first = rows[0]
-        self.assertEqual(first["Credit Hours"], 5)
-        self.assertEqual(first["Billable Hours"], 8)
-        self.assertEqual(
-            first["Returning Student Type Check"],
-            "Yes - X (Returning Student)",
-        )
-        self.assertEqual(first["Total Earned Credit Hours"], 22)
-        self.assertEqual(first["Expected Graduation Date"], "2100-05-01")
-        self.assertIn(first["Detail Code Loan Activity"], (50, 100))
-        self.assertNotIn("Total Selected Loan Activity", first)
-        self.assertNotIn("Transaction Count", first)
-        self.assertEqual(first["Street"], "2 Mailing St, Apt 3")
-        self.assertEqual(first["City"], "Denver")
-        self.assertEqual(first["State"], "CO")
-        self.assertEqual(first["Zip"], "80202")
-        self.assertEqual(first["School Email"], "student@mines.edu")
-        self.assertEqual(first["Personal Email"], "student@example.com")
-        self.assertEqual(first["Phone Number"], "(303) 5550101")
+    def test_multiple_awards_contacts_and_codes_do_not_multiply(self):
+        self.borrower()
+        self.graduate(seq=1)
+        self.graduate(days=10, seq=2, level="GR")
+        self.graduate(days=10, seq=3, level="UG")
+        self.loan(1, "PERK", 50)
+        self.insert("saturn.spraddr", 1, "PR", 1, "1 Permanent Rd", None, None, "Golden", "CO", "80401", None, "2020-01-01", None)
+        self.insert("saturn.spraddr", 1, "MA", 2, "2 Mailing St", "Apt 3", None, "Denver", "CO", "80202", None, "2020-01-01", None)
+        self.insert("general.goremal", 1, "UNIV", "old@example.edu", "A", "N", "2020-01-01")
+        self.insert("general.goremal", 1, "UNIV", "preferred@example.edu", "A", "Y", "2020-01-01")
+        self.insert("saturn.sprtele", 1, 1, "303", "5550101", None, "Y", None)
+        self.insert("saturn.sprtele", 1, 2, "720", "5550102", None, "N", None)
+        self.insert("saturn.spriden", 1, "OLD-ID", "Old", "Identity", "N")
+        rows = self.rows()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["Graduation Date"] for r in rows}, {self.day(10)})
+        self.assertEqual({r["Graduated Level"] for r in rows}, {"UG"})
+        self.assertEqual(rows[0]["Street"], "2 Mailing St, Apt 3")
+        self.assertEqual(rows[0]["School Email"], "preferred@example.edu")
+        self.assertEqual(rows[0]["Phone Number"], "(303) 5550101")
 
-        graduate = next(row for row in rows if row["ID"] == "TEST-3")
-        self.assertEqual(graduate["Credit Hours"], 4)
-        self.assertEqual(
-            graduate["Returning Student Type Check"],
-            "No - C (Continuing)",
-        )
+    def test_enrollment_boundaries_for_every_term_and_level(self):
+        cases = (("UG", 0, "Less Than Half Time"), ("UG", 5.5, "Less Than Half Time"),
+                 ("UG", 6, "Half Time but Less Than Full Time"), ("UG", 11.5, "Half Time but Less Than Full Time"),
+                 ("UG", 12, "Full Time and Above"), ("GR", 4, "Less Than Half Time"),
+                 ("GR", 4.5, "Half Time but Less Than Full Time"), ("GR", 4.6, "Half Time but Less Than Full Time"),
+                 ("GR", 8.5, "Half Time but Less Than Full Time"), ("GR", 9, "Full Time and Above"))
+        for pidm, (level, hours, category) in enumerate(cases, 1):
+            self.borrower(pidm, level)
+            self.graduate(pidm)
+            for term in ("202610", "202655", "202680"):
+                self.register(pidm, term, hours)
+        for term in ("202610", "202655", "202680"):
+            rows = {r["ID"]: r for r in self.rows(term)}
+            for pidm, (_, hours, category) in enumerate(cases, 1):
+                with self.subTest(term=term, pidm=pidm):
+                    self.assertEqual(rows[f"TEST-{pidm}"]["Enrollment Load Category"], category)
+                    self.assertEqual(rows[f"TEST-{pidm}"]["Credit Hours"], hours)
 
-        zero_hour = next(row for row in rows if row["ID"] == "TEST-5")
-        self.assertEqual(zero_hour["Credit Hours"], 0)
-        self.assertEqual(zero_hour["Billable Hours"], 0)
-        self.assertEqual(
-            zero_hour["Returning Student Type Check"],
-            "No - C (Continuing)",
-        )
-        self.assertEqual(zero_hour["Total Earned Credit Hours"], 0)
-        self.assertIsNone(zero_hour["Expected Graduation Date"])
+    def test_graduate_continuing_in_new_program_uses_term_effective_level(self):
+        self.borrower()
+        self.graduate(level="UG")
+        self.insert("saturn.sgbstdn", 1, "202680", "GR", "X", None)
+        self.insert("saturn.sgbstdn", 1, "202710", "UG", "C", None)
+        self.register(hours=4.5)
+        row = self.rows()[0]
+        self.assertEqual(row["Level"], "GR")
+        self.assertEqual(row["Graduated Level"], "UG")
+        self.assertEqual(row["Enrollment Load Category"], "Half Time but Less Than Full Time")
+        self.assertEqual(row["Returning Student Type Check"], "Yes - X (Returning Student)")
 
-        dropped = next(row for row in rows if row["ID"] == "TEST-6")
-        self.assertEqual(dropped["Credit Hours"], 0)
-        self.assertEqual(dropped["Billable Hours"], 3)
+    def test_withdrawals_prefer_effective_date_and_fall_back_to_header(self):
+        self.borrower(1)
+        self.withdraw(1, days=365)
+        self.borrower(2)
+        self.withdraw(2, days=20, effective=False)
+        rows = {r["ID"]: r for r in self.rows("202655")}
+        self.assertEqual(rows["TEST-1"]["Withdrawal Date"], self.day(365))
+        self.assertEqual(rows["TEST-1"]["Withdrawal Date Source"], "SFAWDRL effective date")
+        self.assertEqual(rows["TEST-2"]["Withdrawal Date Source"], "SFAREGS enrollment status date")
+        self.assertTrue(all(r["Selection Reason"] == "Recorded Withdrawal" for r in rows.values()))
 
-    def test_combined_report_assigns_every_boundary_once(self) -> None:
-        rows = self.run_report(self.combined_query)
-        categories = {
-            row["ID"]: row["Enrollment Load Category"] for row in rows
-        }
-        self.assertEqual(categories["TEST-1"], "Less Than Half Time")
-        self.assertEqual(
-            categories["TEST-2"], "Half Time but Less Than Full Time"
-        )
-        self.assertEqual(categories["TEST-3"], "Less Than Half Time")
-        self.assertEqual(
-            categories["TEST-4"], "Half Time but Less Than Full Time"
-        )
-        self.assertEqual(categories["TEST-5"], "Less Than Half Time")
-        self.assertEqual(categories["TEST-6"], "Less Than Half Time")
-        self.assertEqual(categories["TEST-7"], "Full Time and Above")
-        self.assertEqual(categories["TEST-8"], "Full Time and Above")
-        self.assertEqual(len(rows), 9)
+    def test_old_future_retracted_and_future_term_withdrawals_do_not_qualify(self):
+        for pidm in range(1, 5):
+            self.borrower(pidm)
+        self.withdraw(1, days=366)
+        self.withdraw(2, days=-1)
+        self.withdraw(3, days=10)
+        self.db.execute("UPDATE saturn.sfbetrm SET sfbetrm_ests_code = 'EL' WHERE sfbetrm_pidm = 3")
+        self.withdraw(4, days=10, term="202710")
+        self.assertEqual(self.rows(), [])
+
+    def test_latest_withdrawal_record_is_selected_without_fanout(self):
+        self.borrower()
+        self.withdraw(days=30)
+        self.insert("saturn.sfrwdrl", 1, "202655", 2, "ZZ", self.day(10))
+        self.withdraw(days=5, term="202680")
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Withdrawal Date"], self.day(5))
+
+    def test_stop_out_in_regular_term_but_never_summer_or_future_term(self):
+        self.borrower()
+        self.register(term="202610", hours=6)
+        rows = self.rows()
+        self.assertEqual(rows[0]["Selection Reason"], "Possible Stop-Out - Review")
+        self.assertEqual(rows[0]["Last Enrolled Term End - Proxy"], "2026-05-15")
+        self.assertEqual(self.rows("202655"), [])
+        self.assertEqual(self.rows("202710"), [])
+
+    def test_summer_attendance_can_precede_a_fall_stop_out(self):
+        self.borrower()
+        self.register(term="202655", hours=3)
+        row = self.rows()[0]
+        self.assertEqual(row["Last Enrolled Term"], "202655")
+        self.assertEqual(row["Selection Reason"], "Possible Stop-Out - Review")
+
+    def test_stop_out_proxy_window_and_missing_dates(self):
+        for pidm, days in ((1, 365), (2, 366), (3, -1), (4, None)):
+            self.borrower(pidm)
+            term = f"2026{pidm:02}"
+            self.register(pidm, term, hours=3)
+            self.insert("saturn.stvterm", term, "2026-01-01", None if days is None else self.day(days))
+        self.assertEqual([r["ID"] for r in self.rows()], ["TEST-1"])
+        self.db.execute("DELETE FROM saturn.stvterm WHERE stvterm_code = '202680'")
+        self.assertEqual(self.rows(), [])
+
+    def test_active_or_unknown_registration_never_establishes_absence(self):
+        for pidm, hours, status in ((1, 0, "RE"), (2, None, "RE"), (3, 3, "UNKNOWN")):
+            self.borrower(pidm)
+            self.register(pidm, "202610", 6)
+            self.register(pidm, hours=hours, status=status)
+        self.assertEqual(self.rows(), [])
+        self.graduate(2)
+        self.graduate(3)
+        self.assertTrue(all(r["Enrollment Load Category"] == "Needs Review" for r in self.rows()))
+
+    def test_dropped_courses_remain_billable_but_not_enrolled(self):
+        self.borrower()
+        self.graduate()
+        self.register(hours=3, status="WD", bill=3)
+        row = self.rows()[0]
+        self.assertEqual(row["Credit Hours"], 0)
+        self.assertEqual(row["Billable Hours"], 3)
+
+    def test_metadata_gaps_are_retained_and_flagged(self):
+        self.borrower()
+        self.graduate()
+        self.db.execute("DELETE FROM saturn.spriden")
+        self.db.execute("DELETE FROM saturn.sgbstdn")
+        self.db.execute("DELETE FROM taismgr.tbbdetc")
+        row = self.rows()[0]
+        self.assertIsNone(row["ID"])
+        self.assertEqual(row["Banner PIDM"], 1)
+        self.assertEqual(row["Enrollment Load Category"], "Needs Review")
+        self.assertIn("Missing current identity", row["Review Notes"])
+        self.assertIn("Missing term-effective student record", row["Review Notes"])
+        self.assertIn("Missing detail-code metadata", row["Review Notes"])
+
+    def test_multiple_qualifying_reasons_still_produce_one_code_row(self):
+        self.borrower()
+        self.graduate()
+        self.withdraw()
+        self.register(term="202610", hours=6)
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        for reason in ("Recent Graduate", "Recorded Withdrawal", "Possible Stop-Out - Review"):
+            self.assertIn(reason, rows[0]["Selection Reason"])
+
+    def test_earned_credits_remain_overall_only(self):
+        self.borrower()
+        self.graduate()
+        for level, kind, hours in (("UG", "I", 15), ("UG", "T", 5), ("UG", "O", 20), ("GR", "O", 2)):
+            self.insert("saturn.shrlgpa", 1, level, kind, hours)
+        self.assertEqual(self.rows()[0]["Total Earned Credit Hours"], 22)
+
+    def test_one_catalog_entry_validates_terms_and_uses_one_source(self):
+        self.assertEqual([q.query_id for q in QUERIES if q.group == "Institutional loans"], ["loan_all_enrollment"])
+        for term in ("202610", "202655", "202680"):
+            self.assertNotIn("{{", QUERY.render_sql(term))
+        for term in (None, "202699", "2026800", "2026ab", "202680'; SELECT 1; --"):
+            with self.subTest(term=term), self.assertRaises(ValueError):
+                QUERY.render_sql(term)
+
+    def test_schema_inventory_covers_every_synthetic_source_column(self):
+        schema = QUERY.sql_path.with_name("validate_loan_schema.sql").read_text(encoding="utf-8")
+        expected = set(re.findall(r"\('([A-Z]+)', '([A-Z]+)', '([A-Z_0-9]+)'\)", schema))
+        for database in ("saturn", "taismgr", "general"):
+            for row in self.db.execute(f"SELECT name FROM {database}.sqlite_master WHERE type = 'table'"):
+                table = row[0]
+                for column in self.db.execute(f"PRAGMA {database}.table_info({table})"):
+                    suffix = column[1][len(table) + 1:]
+                    self.assertIn((database.upper(), table.upper(), suffix.upper()), expected)
+
+    def test_app_export_checks_completeness_and_preserves_ids_and_zero_amount(self):
+        self.borrower()
+        self.graduate()
+        self.loan(1, amount=-100)
+        frame = pd.DataFrame(self.rows())
+        settings = MagicMock()
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.run_sql.return_value = frame
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "loans.xlsx"
+            context = WorkflowContext("insights_query_export", {
+                "action": "query_export", "query_id": "loan_all_enrollment",
+                "term_code": "202680", "output_path": str(output)}, WorkflowMode.TEST)
+            with patch("app.gui.services.insights.load_department_profiles", return_value={"TEST": settings}), patch(
+                "app.gui.services.insights.build_authenticated_client", return_value=(client, "synthetic")):
+                result = run_insights_connection(context)
+                self.assertTrue(result.success, result.message)
+                workbook = load_workbook(output)
+                try:
+                    values = list(workbook.active.values)
+                    headings = values[0]
+                    self.assertNotIn("__loan_row_count", headings)
+                    self.assertEqual(values[1][headings.index("ID")], "TEST-1")
+                    self.assertEqual(values[1][headings.index("Detail Code Loan Activity")], 0)
+                finally:
+                    workbook.close()
+                output.unlink()
+                capped = frame.copy()
+                capped["__loan_row_count"] = 2
+                for bad in (capped, frame.drop(columns=["__loan_row_count"])):
+                    client.run_sql.return_value = bad
+                    result = run_insights_connection(context)
+                    self.assertFalse(result.success)
+                    self.assertFalse(output.exists())
+                client.run_sql.return_value = frame.iloc[0:0]
+                result = run_insights_connection(context)
+                self.assertTrue(result.success, result.message)
+                self.assertTrue(output.exists())
 
 
 if __name__ == "__main__":

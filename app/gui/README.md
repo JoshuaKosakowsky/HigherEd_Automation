@@ -205,10 +205,14 @@ arbitrary SQL path. Available reports include current and previous calendar
 month transaction and payment activity, the existing historical loan activity
 draft, contact lookup, Parent PLUS sample, sponsored student summary,
 delinquent student accounts, refund
-review SQL, the two manual refund extracts, the Banner term sample, four
-institutional-loan enrollment reports, and two SHIP Fall exceptions. The loan
+review SQL, the two manual refund extracts, the Banner term sample, the
+institutional-loan recent graduate/leaver review, and two SHIP Fall exceptions. The loan
 and SHIP reports prompt for a six-digit Banner term. The SHIP reports require a
-Fall term ending in `80`. The term is validated and inserted as a quoted SQL
+Fall term ending in `80`. The loan report accepts Spring `10`, Summer `55`,
+or Fall `80`; it uses historical loan activity and a rolling 365-day exit
+window, and never infers a stop-out from missing Summer enrollment. Its
+source-count check rejects incomplete API results before saving. See
+[loan selection rules](../../query/AR/loans/README.md). The term is validated and inserted as a quoted SQL
 literal; no raw free-form SQL is accepted from the interface.
 
 In 0.11.0, **Activity — Banner Activity by Date & Detail Code** uses the same

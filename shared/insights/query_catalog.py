@@ -22,6 +22,7 @@ class InsightsQuery:
     requires_activity_parameters: bool = False
     administrator_only: bool = False
     result_count_column: str | None = None
+    allowed_term_suffixes: tuple[str, ...] = ()
 
     @property
     def sql_path(self) -> Path:
@@ -48,6 +49,8 @@ class InsightsQuery:
             raise ValueError("Enter a six-digit Banner term code.")
         if self.fall_term_only and not term.endswith("80"):
             raise ValueError("Enter a Fall Banner term ending in 80.")
+        if self.allowed_term_suffixes and term[-2:] not in self.allowed_term_suffixes:
+            raise ValueError("Enter a Spring (10), Summer (55), or Fall (80) Banner term.")
         marker = "{{" + self.term_variable + "}}"
         if marker not in sql or "[[" in sql:
             raise ValueError("This query's term template is not supported.")
@@ -126,28 +129,14 @@ QUERIES: tuple[InsightsQuery, ...] = (
         administrator_only=True, result_count_column="Report Row Count",
     ),
     InsightsQuery(
-        "loan_all_enrollment", "Institutional loans", "All enrollment load categories",
-        "AR/loans/all_enrollment_load_categories_institutional_loans_summer.sql",
-        "Requires a six-digit Banner term; the combined Summer enrollment report.",
+        "loan_all_enrollment", "Institutional loans", "Recent graduate and leaver review",
+        "AR/loans/institutional_loan_exit_review.sql",
+        "Historical institutional-loan recipients with graduation/withdrawal in the last "
+        "365 days or a recent possible stop-out; enrollment is evaluated for the input term. "
+        "Summer absence never establishes a stop-out. Review before sending to the loan company.",
         term_variable="target_term",
-    ),
-    InsightsQuery(
-        "loan_less_than_half", "Institutional loans", "Less than half time",
-        "AR/loans/less_than_half_time_institutional_loans.sql",
-        "Requires a six-digit Banner term; loan activity below half-time enrollment.",
-        term_variable="target_term",
-    ),
-    InsightsQuery(
-        "loan_half_to_full", "Institutional loans", "Half time to less than full time",
-        "AR/loans/half_time_less_than_full_time_institutional_loans_summer.sql",
-        "Requires a six-digit Banner term; Summer half-to-full-time band.",
-        term_variable="target_term",
-    ),
-    InsightsQuery(
-        "loan_full_time", "Institutional loans", "Full time and above",
-        "AR/loans/full_time_and_above_institutional_loans_summer.sql",
-        "Requires a six-digit Banner term; Summer full-time-and-above band.",
-        term_variable="target_term",
+        result_count_column="__loan_row_count",
+        allowed_term_suffixes=("10", "55", "80"),
     ),
     InsightsQuery(
         "parent_plus", "Financial aid", "Parent PLUS sample",
