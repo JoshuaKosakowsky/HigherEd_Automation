@@ -22,18 +22,35 @@ from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS
 
 
 REFUND_SHEETS = (
-    "Transact Refunds", "Check Refunds", "Parent Refunds", "System Refunds",
+    "Transact Refunds", "Check Refunds", "Parent Refunds", "Direct Deposit",
     "Third Party Reviews", "Refund Holds", "ACH Clearing", "ACH Reviews",
     "Mines Park Reviews", "Manual Reviews",
 )
 WORKBOOK_COLUMNS = REPORT_COLUMNS[:3] + [
     "tab_delivery", "tab_refund_amount", "tab_review_note",
 ] + REPORT_COLUMNS[3:]
+# Presentation overrides apply only to Direct Deposit; allocation fields stay intact.
+DIRECT_DEPOSIT_HEADERS = {
+    "cwid": "CWID",
+    "last_name": "Last_Name",
+    "first_name": "First_Name",
+    "tab_delivery": "Detail_Code_Delivery",
+    "tab_refund_amount": "Detail_Code_Refund_Amt",
+    "tab_review_note": "Detail_Code_Note",
+    "full_account_balance": "Current_Total_Balance",
+    "total_refund_amount": "Total_Owed_to_Student",
+    "proposed_student_delivery": "Proposed_DetailCode&Amt",
+}
+DIRECT_DEPOSIT_OMITTED_COLUMNS = {
+    "original_payment_row_count", "deceased_ind", "deceased_date",
+    "confidential_ind", "ambiguous_source_pool_count", "last_ar_activity_date",
+    "account_control_activity_date",
+}
 DELIVERY_SHEETS = {
     "AFRD (Transact)": "Transact Refunds",
     **{f"{code} (Transact)": "Transact Refunds" for code in CARD_PAYMENT_CODES},
     "RFND (CHECK)": "Check Refunds",
-    "ARFD (System)": "System Refunds",
+    "ARFD (System)": "Direct Deposit",
     "Refund Hold - Student": "Refund Holds",
     "AFRD (Transact) - May Be Too Old": "ACH Reviews",
     "ACHK Date Review": "ACH Reviews",
@@ -201,14 +218,20 @@ def export_refund_report(
             cancellation.check()
         worksheet = workbook.create_sheet(sheet)
         worksheet.freeze_panes = "A2"
-        worksheet.append(WORKBOOK_COLUMNS)
+        columns = [
+            column for column in WORKBOOK_COLUMNS
+            if sheet != "Direct Deposit" or column not in DIRECT_DEPOSIT_OMITTED_COLUMNS
+        ]
+        header_names = DIRECT_DEPOSIT_HEADERS if sheet == "Direct Deposit" else {}
+        headers = [header_names.get(column, column) for column in columns]
+        worksheet.append(headers)
         if progress_reporter:
             progress_reporter.report(f"Writing {sheet} worksheet", completed=0, total=len(grouped[sheet]))
         for completed, row in enumerate(grouped[sheet], 1):
             if cancellation:
                 cancellation.check()
             worksheet.append([
-                None if pd.isna(row[header]) else row[header] for header in WORKBOOK_COLUMNS
+                None if pd.isna(row[header]) else row[header] for header in columns
             ])
             if progress_reporter and (completed % 100 == 0 or completed == len(grouped[sheet])):
                 progress_reporter.report(f"Writing {sheet} worksheet", completed=completed, total=len(grouped[sheet]))
@@ -217,8 +240,9 @@ def export_refund_report(
         apply_default_font(worksheet)
         style_header_row(worksheet)
         format_table_columns(
-            worksheet, headers=WORKBOOK_COLUMNS,
-            currency_headers=CURRENCY_COLUMNS, count_headers=COUNT_COLUMNS,
+            worksheet, headers=headers,
+            currency_headers={header_names.get(column, column) for column in CURRENCY_COLUMNS},
+            count_headers=COUNT_COLUMNS,
         )
         for cell in worksheet[1]:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -229,7 +253,9 @@ def export_refund_report(
             "deceased_date", "last_ar_activity_date", "account_control_activity_date",
             "ed_activity_date", "plus_auth_activity_date",
         ):
-            column_number = WORKBOOK_COLUMNS.index(header) + 1
+            if header not in columns:
+                continue
+            column_number = columns.index(header) + 1
             for cells in worksheet.iter_cols(min_col=column_number, max_col=column_number, min_row=2):
                 for cell in cells:
                     cell.number_format = (

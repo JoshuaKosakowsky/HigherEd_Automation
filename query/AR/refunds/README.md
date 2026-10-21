@@ -20,7 +20,8 @@ they contain student-account data.
 
 The workbook separates refund methods and review queues into plain worksheets,
 without Excel tables. For mixed refunds, use `tab_refund_amount` for each tab's
-portion; account totals repeat as context. See the
+portion (`Detail_Code_Refund_Amt` on Direct Deposit); account totals repeat as
+context. See the
 [workbook tab guide](../../../workflows/refunds/README.md#workbook-tabs).
 
 Rename the files `refund_transactions.xlsx` and `refund_context.xlsx`, then put

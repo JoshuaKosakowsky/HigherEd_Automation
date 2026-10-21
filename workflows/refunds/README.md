@@ -118,7 +118,7 @@ The workbook has these tabs, including headers when a category is empty:
 - **Transact Refunds:** available ACH and credit-card portions.
 - **Check Refunds:** student `RFND (CHECK)` portions.
 - **Parent Refunds:** parent `RFDP` portions.
-- **System Refunds:** student `ARFD (System)` portions.
+- **Direct Deposit:** student `ARFD (System)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
 - **Refund Holds:** the entire account refund when RH is present, including any
   student and parent portions. No portion remains on a delivery or other review
@@ -142,6 +142,27 @@ once per tab. `tab_delivery` identifies that tab's method(s), and
 original account-level totals, across tabs. `tab_review_note` explains account
 review placement. Original report columns retain their values and relative
 order after these three fields, which follow the student's name.
+
+On **Direct Deposit** only, the displayed headers are renamed as follows;
+all other columns retain their order and names:
+
+| Original field | Displayed header |
+| --- | --- |
+| `cwid` | `CWID` |
+| `last_name` | `Last_Name` |
+| `first_name` | `First_Name` |
+| `tab_delivery` | `Detail_Code_Delivery` |
+| `tab_refund_amount` | `Detail_Code_Refund_Amt` |
+| `tab_review_note` | `Detail_Code_Note` |
+| `full_account_balance` | `Current_Total_Balance` |
+| `total_refund_amount` | `Total_Owed_to_Student` |
+| `proposed_student_delivery` | `Proposed_DetailCode&Amt` |
+
+That tab omits `original_payment_row_count`, `deceased_ind`, `deceased_date`,
+`confidential_ind`, `ambiguous_source_pool_count`, `last_ar_activity_date`, and
+`account_control_activity_date`. These fields remain available internally and
+on the other tabs. Sum **Detail_Code_Refund_Amt** on Direct Deposit when combining
+portions across tabs; **Total_Owed_to_Student** remains the account-level total.
 
 The sheets use ordinary cells with formatted headers, currency/date formats,
 frozen headers, and regular column filters. They contain no Excel Table objects.

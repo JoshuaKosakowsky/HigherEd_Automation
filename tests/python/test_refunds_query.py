@@ -16,7 +16,9 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
-from data_processing.refunds.export import WORKBOOK_COLUMNS
+from data_processing.refunds.export import (
+    DIRECT_DEPOSIT_HEADERS, DIRECT_DEPOSIT_OMITTED_COLUMNS, WORKBOOK_COLUMNS,
+)
 from data_processing.refunds.extract import ExtractSettings, render_extract_sql
 from data_processing.refunds.pipeline import run_refund_download_pipeline
 from tests.python import test_refunds_workflow as python_cases
@@ -793,8 +795,16 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 if row["cwid"] == "TEST-14":
                     self.assertNotIn("Possible Third Party refund", row["review_reasons"] or "")
             sheets = pd.read_excel(output, sheet_name=None)
-            for sheet in sheets.values():
-                self.assertEqual(sheet.columns.tolist(), WORKBOOK_COLUMNS)
+            for name, sheet in sheets.items():
+                expected_columns = (
+                    [DIRECT_DEPOSIT_HEADERS.get(column, column) for column in WORKBOOK_COLUMNS
+                     if column not in DIRECT_DEPOSIT_OMITTED_COLUMNS]
+                    if name == "Direct Deposit" else WORKBOOK_COLUMNS
+                )
+                self.assertEqual(sheet.columns.tolist(), expected_columns)
+            sheets["Direct Deposit"] = sheets["Direct Deposit"].rename(columns={
+                header: column for column, header in DIRECT_DEPOSIT_HEADERS.items()
+            })
             workbook = pd.concat([
                 sheet[["cwid", "tab_refund_amount"]]
                 for sheet in sheets.values() if not sheet.empty

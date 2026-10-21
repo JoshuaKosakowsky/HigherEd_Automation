@@ -525,8 +525,12 @@ class RefundAllocationTests(unittest.TestCase):
             output = Path(directory) / "refunds.xlsx"
             export_refund_report(pd.DataFrame([row]), output)
             sheets = pd.read_excel(output, sheet_name=None)
+            sheets["Direct Deposit"] = sheets["Direct Deposit"].rename(columns={
+                "CWID": "cwid", "Detail_Code_Refund_Amt": "tab_refund_amount",
+                "Detail_Code_Note": "tab_review_note",
+            })
             expected = {"Transact Refunds": 60, "ACH Clearing": 30, "ACH Reviews": 90,
-                        "System Refunds": 100, "Parent Refunds": 70}
+                        "Direct Deposit": 100, "Parent Refunds": 70}
             self.assertEqual({name: frame.tab_refund_amount.sum() for name, frame in sheets.items()
                               if not frame.empty}, expected)
             self.assertIn("09/15/2099", sheets["ACH Clearing"].iloc[0].tab_delivery)
@@ -1190,8 +1194,26 @@ class RefundExtractTests(unittest.TestCase):
             self.assertEqual(workbook.sheetnames, list(REFUND_SHEETS))
             for sheet in workbook:
                 headers = [cell.value for cell in sheet[1]]
-                self.assertEqual(headers, WORKBOOK_COLUMNS)
-                self.assertEqual([h for h in headers if not h.startswith("tab_")], REPORT_COLUMNS)
+                if sheet.title == "Direct Deposit":
+                    renamed = {
+                        "cwid": "CWID", "last_name": "Last_Name", "first_name": "First_Name",
+                        "tab_delivery": "Detail_Code_Delivery",
+                        "tab_refund_amount": "Detail_Code_Refund_Amt",
+                        "tab_review_note": "Detail_Code_Note",
+                        "full_account_balance": "Current_Total_Balance",
+                        "total_refund_amount": "Total_Owed_to_Student",
+                        "proposed_student_delivery": "Proposed_DetailCode&Amt",
+                    }
+                    omitted = {
+                        "original_payment_row_count", "deceased_ind", "deceased_date",
+                        "confidential_ind", "ambiguous_source_pool_count",
+                        "last_ar_activity_date", "account_control_activity_date",
+                    }
+                    self.assertEqual(headers, [renamed.get(h, h) for h in WORKBOOK_COLUMNS
+                                               if h not in omitted])
+                else:
+                    self.assertEqual(headers, WORKBOOK_COLUMNS)
+                    self.assertEqual([h for h in headers if not h.startswith("tab_")], REPORT_COLUMNS)
                 self.assertFalse(sheet.tables)
                 self.assertEqual(sheet.freeze_panes, "A2")
             workbook.close()
@@ -1237,7 +1259,7 @@ class RefundExtractTests(unittest.TestCase):
             "Transact Refunds": {"TEST-MIX": 50},
             "Check Refunds": {"TEST-MIX": 100, "TEST-CHCK": 25},
             "Parent Refunds": {"TEST-MIX": 75},
-            "System Refunds": {"TEST-SYS": 90, "TEST-WAIT": 60},
+            "Direct Deposit": {"TEST-SYS": 90, "TEST-WAIT": 60},
             "Refund Holds": {"TEST-HOLD": 50},
             "ACH Clearing": {"TEST-WAIT": 40},
             "ACH Reviews": {"TEST-OLD": 15, "TEST-DATE": 10},
@@ -1251,14 +1273,18 @@ class RefundExtractTests(unittest.TestCase):
             output = Path(directory) / "refunds.xlsx"
             export_refund_report(report, output)
             sheets = pd.read_excel(output, sheet_name=None)
+            sheets["Direct Deposit"] = sheets["Direct Deposit"].rename(columns={
+                "CWID": "cwid", "Detail_Code_Refund_Amt": "tab_refund_amount",
+                "Detail_Code_Note": "tab_review_note",
+            })
             for name, amounts in expected.items():
                 self.assertEqual(dict(zip(sheets[name].cwid, sheets[name].tab_refund_amount)), amounts)
             self.assertEqual(sum(frame.tab_refund_amount.sum() for frame in sheets.values()),
                              sum(row["total_refund_amount"] for row in rows))
             self.assertEqual(sheets["Transact Refunds"].iloc[0].total_refund_amount, 225)
-            self.assertEqual(sheets["System Refunds"].iloc[0].review_status,
+            self.assertEqual(sheets["Direct Deposit"].iloc[0].review_status,
                              "WAIT_CHECK_CLEARING")
-            self.assertEqual(sheets["System Refunds"].iloc[0].tab_review_note,
+            self.assertEqual(sheets["Direct Deposit"].iloc[0].tab_review_note,
                              "CHCK clearing wait: 40.00 becomes eligible on 09/17/2099.")
             self.assertEqual(sheets["Check Refunds"].loc[
                 sheets["Check Refunds"].cwid == "TEST-CHCK", "tab_review_note"
@@ -1274,8 +1300,21 @@ class RefundExtractTests(unittest.TestCase):
             for sheet in workbook:
                 self.assertFalse(sheet.tables)
                 self.assertIn("$", sheet.cell(2, WORKBOOK_COLUMNS.index("tab_refund_amount") + 1).number_format)
-                self.assertEqual(sheet.cell(2, WORKBOOK_COLUMNS.index("last_ar_activity_date") + 1).number_format,
-                                 "mm/dd/yyyy h:mm AM/PM")
+                if sheet.title == "Direct Deposit":
+                    headers = [cell.value for cell in sheet[1]]
+                    self.assertEqual(sheet.cell(2, headers.index("CWID") + 1).value, "TEST-SYS")
+                    self.assertEqual(sheet.cell(2, headers.index("Detail_Code_Delivery") + 1).value,
+                                     "ARFD (System) 90.00")
+                    self.assertEqual(sheet.cell(2, headers.index("Detail_Code_Refund_Amt") + 1).value, 90)
+                    self.assertEqual(sheet.cell(2, headers.index("Proposed_DetailCode&Amt") + 1).value,
+                                     "ARFD (System)")
+                    for header in ("Current_Total_Balance", "Total_Owed_to_Student"):
+                        self.assertIn("$", sheet.cell(2, headers.index(header) + 1).number_format)
+                    self.assertEqual(sheet.cell(2, headers.index("ed_activity_date") + 1).number_format,
+                                     "mm/dd/yyyy h:mm AM/PM")
+                else:
+                    self.assertEqual(sheet.cell(2, WORKBOOK_COLUMNS.index("last_ar_activity_date") + 1).number_format,
+                                     "mm/dd/yyyy h:mm AM/PM")
             workbook.close()
         pd.testing.assert_frame_equal(report, original)
 
