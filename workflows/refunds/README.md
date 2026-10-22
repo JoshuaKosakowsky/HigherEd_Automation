@@ -115,10 +115,10 @@ remains a review proposal, not approval to disburse funds.
 
 The workbook has these tabs, including headers when a category is empty:
 
-- **Transact Refunds:** available ACH and credit-card portions.
-- **Check Refunds:** student `RFND (CHECK)` portions.
-- **Parent Refunds:** parent `RFDP` portions.
-- **Direct Deposit:** student `ARFD (System)` portions.
+- **ACH or CC Refunds** (light yellow tab): available ACH and credit-card portions.
+- **Refund by Check** (light green tab): student `RFND (CHECK)` portions.
+- **Refund to Parent** (light orange tab): parent `RFDP` portions.
+- **Direct Deposit** (light blue tab): student `ARFD (System)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
 - **Refund Holds:** the entire account refund when RH is present, including any
   student and parent portions. No portion remains on a delivery or other review
@@ -137,14 +137,14 @@ statuses and reasons stay on the applicable method tabs: a tab assignment is
 **not approval to issue a refund**.
 
 Mixed refunds can appear on multiple tabs, but each account appears at most
-once per tab. `tab_delivery` identifies that tab's method(s), and
-`tab_refund_amount` contains only that portion. Sum **tab_refund_amount**, not the
-original account-level totals, across tabs. `tab_review_note` explains account
-review placement. Original report columns retain their values and relative
+once per tab. **Detail_Code_Delivery** identifies that tab's method(s), and
+**Detail_Code_Refund_Amt** contains only that portion. Sum this portion across
+tabs; account-level totals repeat as context. **Detail_Code_Note** explains
+account review placement. Retained report columns keep their values and relative
 order after these three fields, which follow the student's name.
 
-On **Direct Deposit** only, the displayed headers are renamed as follows;
-all other columns retain their order and names:
+All tabs use the same columns and displayed headers, matching Direct Deposit:
+other retained columns keep their original order and names.
 
 | Original field | Displayed header |
 | --- | --- |
@@ -158,11 +158,11 @@ all other columns retain their order and names:
 | `total_refund_amount` | `Total_Owed_to_Student` |
 | `proposed_student_delivery` | `Proposed_DetailCode&Amt` |
 
-That tab omits `original_payment_row_count`, `deceased_ind`, `deceased_date`,
+Every tab omits `original_payment_row_count`, `deceased_ind`, `deceased_date`,
 `confidential_ind`, `ambiguous_source_pool_count`, `last_ar_activity_date`, and
-`account_control_activity_date`. These fields remain available internally and
-on the other tabs. Sum **Detail_Code_Refund_Amt** on Direct Deposit when combining
-portions across tabs; **Total_Owed_to_Student** remains the account-level total.
+`account_control_activity_date`. These fields remain available internally.
+Sum **Detail_Code_Refund_Amt** when combining portions across tabs;
+**Total_Owed_to_Student** remains the account-level total.
 
 The sheets use ordinary cells with formatted headers, currency/date formats,
 frozen headers, and regular column filters. They contain no Excel Table objects.

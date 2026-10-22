@@ -22,15 +22,21 @@ from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS
 
 
 REFUND_SHEETS = (
-    "Transact Refunds", "Check Refunds", "Parent Refunds", "Direct Deposit",
+    "ACH or CC Refunds", "Refund by Check", "Refund to Parent", "Direct Deposit",
     "Third Party Reviews", "Refund Holds", "ACH Clearing", "ACH Reviews",
     "Mines Park Reviews", "Manual Reviews",
 )
+REFUND_TAB_COLORS = {
+    "Direct Deposit": "BDD7EE",  # Light blue
+    "ACH or CC Refunds": "FFF2CC",  # Light yellow
+    "Refund by Check": "E2EFDA",  # Light green
+    "Refund to Parent": "FCE4D6",  # Light orange
+}
 WORKBOOK_COLUMNS = REPORT_COLUMNS[:3] + [
     "tab_delivery", "tab_refund_amount", "tab_review_note",
 ] + REPORT_COLUMNS[3:]
-# Presentation overrides apply only to Direct Deposit; allocation fields stay intact.
-DIRECT_DEPOSIT_HEADERS = {
+# All worksheets share one presentation; allocation fields stay intact.
+WORKBOOK_HEADERS = {
     "cwid": "CWID",
     "last_name": "Last_Name",
     "first_name": "First_Name",
@@ -41,15 +47,15 @@ DIRECT_DEPOSIT_HEADERS = {
     "total_refund_amount": "Total_Owed_to_Student",
     "proposed_student_delivery": "Proposed_DetailCode&Amt",
 }
-DIRECT_DEPOSIT_OMITTED_COLUMNS = {
+WORKBOOK_OMITTED_COLUMNS = {
     "original_payment_row_count", "deceased_ind", "deceased_date",
     "confidential_ind", "ambiguous_source_pool_count", "last_ar_activity_date",
     "account_control_activity_date",
 }
 DELIVERY_SHEETS = {
-    "AFRD (Transact)": "Transact Refunds",
-    **{f"{code} (Transact)": "Transact Refunds" for code in CARD_PAYMENT_CODES},
-    "RFND (CHECK)": "Check Refunds",
+    "AFRD (Transact)": "ACH or CC Refunds",
+    **{f"{code} (Transact)": "ACH or CC Refunds" for code in CARD_PAYMENT_CODES},
+    "RFND (CHECK)": "Refund by Check",
     "ARFD (System)": "Direct Deposit",
     "Refund Hold - Student": "Refund Holds",
     "AFRD (Transact) - May Be Too Old": "ACH Reviews",
@@ -148,7 +154,7 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
     if parent > 0:
         if row["proposed_parent_delivery"] != "RFDP":
             return review("Manual Reviews", "Parent refund delivery requires review.")
-        portions.append(RefundPortion("Parent Refunds", "RFDP", parent))
+        portions.append(RefundPortion("Refund to Parent", "RFDP", parent))
 
     by_sheet: dict[str, list[RefundPortion]] = defaultdict(list)
     for portion in portions:
@@ -157,7 +163,7 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
         (sheet, {**row,
                  "tab_delivery": "; ".join(f"{part.delivery} {part.amount:.2f}" for part in parts),
                  "tab_refund_amount": sum((part.amount for part in parts), Decimal(0)),
-                 "tab_review_note": check_wait_note if sheet != "Parent Refunds" else None})
+                 "tab_review_note": check_wait_note if sheet != "Refund to Parent" else None})
         for sheet, parts in by_sheet.items()
     ]
 
@@ -217,12 +223,14 @@ def export_refund_report(
         if cancellation:
             cancellation.check()
         worksheet = workbook.create_sheet(sheet)
+        if sheet in REFUND_TAB_COLORS:
+            worksheet.sheet_properties.tabColor = REFUND_TAB_COLORS[sheet]
         worksheet.freeze_panes = "A2"
         columns = [
             column for column in WORKBOOK_COLUMNS
-            if sheet != "Direct Deposit" or column not in DIRECT_DEPOSIT_OMITTED_COLUMNS
+            if column not in WORKBOOK_OMITTED_COLUMNS
         ]
-        header_names = DIRECT_DEPOSIT_HEADERS if sheet == "Direct Deposit" else {}
+        header_names = WORKBOOK_HEADERS
         headers = [header_names.get(column, column) for column in columns]
         worksheet.append(headers)
         if progress_reporter:
