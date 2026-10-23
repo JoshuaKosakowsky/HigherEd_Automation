@@ -32,6 +32,9 @@ parameters are needed. The app reuses TEST/PROD connection controls, rejects
 incomplete API results using `Report Row Count`, removes that internal count
 from the workbook, and preserves existing files. All three date columns export
 as real Excel dates/timestamps. Publishing a saved Insights question is separate.
+App 0.19.1 preserves far-future hold dates such as 9999-12-31 as real Excel
+dates; these exceed pandas' default timestamp range. Invalid dates still stop
+the export without saving a workbook.
 
 Synthetic acceptance examples (today = 2099-10-02):
 
