@@ -5,6 +5,9 @@ import sqlite3
 import unittest
 from pathlib import Path
 
+from shared.insights.banner_activity import BannerDetailCodeParameters
+from shared.insights.query_catalog import get_query
+
 
 QUERY_ROOT = Path(__file__).resolve().parents[2] / "query" / "AR" / "activity"
 
@@ -180,6 +183,59 @@ class TgiaccdQueryTests(unittest.TestCase):
             r"\b(tbraccd|tbbdetc|spriden)_([a-z_]+)\b", self.query.lower()
         ):
             schema = "SATURN" if table == "spriden" else "TAISMGR"
+            self.assertIn(f"('{schema}', '{table.upper()}', '{suffix.upper()}')", inventory)
+
+    def wf_results(self, codes=("WOFF", "BDRC")):
+        query = get_query("wf_mines_balance_transactions").render_sql(
+            detail_codes=BannerDetailCodeParameters(codes),
+        )
+        cursor = self.db.execute(query)
+        return [column[0] for column in cursor.description], cursor.fetchall()
+
+    def test_wf_has_no_date_boundary_including_unfed_and_future_transactions(self):
+        for number, day, code, amount in (
+            (1, "1900-01-01", "WOFF", 100), (2, "2099-02-02", "BDRC", -25),
+            (3, "2199-12-31", "WOFF", 0), (4, None, "BDRC", -5),
+            (5, "2099-02-02", "TPDT", 999),
+        ):
+            self.add_transaction(number, day, code, amount)
+        _, rows = self.wf_results()
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(sum(row[4] for row in rows), 70)
+        self.assertEqual({row[9] for row in rows}, {None, "1900-01-01", "2099-02-02", "2199-12-31"})
+        self.assertTrue(all(row[-1] == 4 for row in rows))
+
+    def test_wf_preserves_tgiaccd_columns_signs_metadata_and_duplicate_transactions(self):
+        self.db.execute("INSERT INTO taismgr.tbbdetc VALUES ('WOFF', 'Synthetic write-off', 'C')")
+        self.add_transaction(1, "2099-02-02", "WOFF", -15)
+        self.add_transaction(2, "2099-02-02", "WOFF", -15)
+        self.add_transaction(3, None, "BDRC", None, pidm=2)
+        columns, rows = self.wf_results()
+        original_columns, _ = self.results("2099-02-02", "2099-02-02")
+        self.assertEqual(columns, original_columns + ["Report Row Count"])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(sum(row[4] or 0 for row in rows), -30)
+        known = [row for row in rows if row[0] == 'TPS-TEST']
+        self.assertEqual(len(known), 2)
+        self.assertTrue(all(row[3] == 'Synthetic student reference RA' for row in known))
+        self.assertTrue(all(row[10] == 'Synthetic write-off' for row in known))
+        missing = next(row for row in rows if row[0] is None)
+        self.assertIsNone(missing[10])
+        self.assertIsNone(missing[4])
+
+    def test_wf_codes_are_replaceable_and_empty_results_keep_contract(self):
+        self.add_transaction(1, None, "TPDT", -10)
+        columns, rows = self.wf_results()
+        self.assertEqual(rows, [])
+        self.assertEqual(len(columns), 13)
+        _, rows = self.wf_results(("TPDT",))
+        self.assertEqual([row[2] for row in rows], ['TPDT'])
+
+    def test_wf_uses_only_existing_validated_schema_columns(self):
+        query = get_query('wf_mines_balance_transactions').sql_path.read_text()
+        inventory = (QUERY_ROOT / 'validate_activity_schema.sql').read_text().upper()
+        for table, suffix in re.findall(r"\b(tbraccd|tbbdetc|spriden)_([a-z_]+)\b", query.lower()):
+            schema = 'SATURN' if table == 'spriden' else 'TAISMGR'
             self.assertIn(f"('{schema}', '{table.upper()}', '{suffix.upper()}')", inventory)
 
 

@@ -5,6 +5,59 @@ identity information from `SPRIDEN`.
 
 ## Reports
 
+### `wf_mines_balance_transactions.sql`: W&F - Mines Balance Recon source
+
+This is the all-date Banner source for the future **W&F - Mines Balance Recon**
+(working name). It returns the same twelve transaction columns and raw signs as
+`tgiaccd_transactions.sql`, including stored Balance, Description, Feed Document
+and Transaction User. It does not perform reconciliation or combine the
+collections-hold report with these transactions.
+
+The owner requested **WOFF** and **BDRC** as defaults with **no time boundary**.
+There are no feed-date parameters, term restrictions, enrollment requirements,
+CO-hold joins or positive-balance filters. Old, future-dated and NULL-feed-date
+transactions all remain eligible. Zero, negative and NULL amounts are preserved
+for source review. Legitimate duplicate transactions are retained. Missing
+identity/detail metadata stays visible through the same LEFT JOINs as the
+existing TGIACCD extract. Do not interpret these raw amounts as a calculated
+current account balance or assign a Workday accounting treatment from this SQL.
+
+To publish in Insights:
+
+1. Run the existing `validate_activity_schema.sql`; this extract uses no new
+   Banner columns. Resolve missing fields before operational use.
+2. Paste `wf_mines_balance_transactions.sql` into a separate native question
+   named **W&F - Mines Balance Recon transactions**.
+3. Configure `detail_codes` as the same required, multi-value Field Filter
+   described below, mapped to TBRACCD_DETAIL_CODE with alias
+   `t.tbraccd_detail_code`. Set saved-question defaults to **WOFF**, **BDRC**
+   and enable **Always require a value**. These are editable defaults, not a
+   permanent SQL restriction. There are no start/end date variables.
+4. Save under existing approved staff permissions. Validate the complete
+   Insights download against a matching all-history TGIACCD source extract.
+
+In app **0.20.0**, administrators select **Connections → Activity — W&F - Mines
+Balance Recon transactions**, choose TEST or PROD, and save a new workbook.
+The code box defaults to `WOFF, BDRC`, accepts replacement selections and
+requires at least one validated four-letter/digit code. No date controls appear;
+the original 1305/date-range export keeps its existing dates and behavior.
+
+`Report Row Count` counts the full SQL result and is removed from app workbooks,
+leaving the original twelve-column source contract. The app rejects missing,
+invalid or capped counts without saving a partial workbook. This all-date path
+does not partition by dates or impose a fallback time boundary. If the API caps
+the result, use the full Insights export and check its row count. Excel feed
+dates retain real date/time cells and NULL dates stay blank. Existing output
+files are preserved.
+
+Synthetic acceptance examples: a WOFF transaction from 1900, a BDRC transaction
+with a NULL feed date and a future WOFF transaction all qualify; TPDT does not
+qualify under the defaults. A WOFF reversal of -15 retains -15. Two otherwise
+identical transactions remain two rows. Replacing the codes with HLTH extracts
+HLTH across all dates. Tests execute actual SQL against synthetic SQLite data
+and inspect mocked app exports; live PostgreSQL execution, local code meanings,
+data volume and source reconciliation still require institutional validation.
+
 ### `tgiaccd_transactions.sql`: staff-selectable Banner extract
 
 Publish this SQL as a saved native question named **Banner Activity by Date &

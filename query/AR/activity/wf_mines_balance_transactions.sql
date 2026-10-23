@@ -1,0 +1,32 @@
+/* W&F - Mines Balance Recon: all-date Banner transaction source (working name).
+   detail_codes: required Field Filter mapped to TBRACCD_DETAIL_CODE;
+   table/field alias t.tbraccd_detail_code. Saved-question defaults: WOFF, BDRC.
+   No feed-date, term, enrollment, balance or CO-hold filter. NULL feed dates
+   and signed reversals remain included. This is an extract, not a recon result.
+   Preserve the TGIACCD source contract; no transaction deduplication/netting.
+   Report Row Count detects API truncation and is removed by the app exporter.
+*/
+SELECT
+    s.spriden_id AS "'ID'",
+    TRIM(COALESCE(s.spriden_last_name, '') || ', ' ||
+         COALESCE(s.spriden_first_name, '')) AS "'Name'",
+    t.tbraccd_detail_code AS "'Detail Code'",
+    t.tbraccd_desc AS "'Description'",
+    t.tbraccd_amount AS "'Amount'",
+    t.tbraccd_balance AS "'Balance'",
+    t.tbraccd_term_code AS "'Term'",
+    t.tbraccd_aidy_code AS "'Aid Year'",
+    t.tbraccd_feed_doc_code AS "'Feed Document'",
+    t.tbraccd_feed_date AS "'Feed Date'",
+    d.tbbdetc_desc AS detail_code_description,
+    t.tbraccd_user AS "Transaction User",
+    COUNT(*) OVER () AS "Report Row Count"
+FROM taismgr.tbraccd t
+LEFT JOIN saturn.spriden s
+    ON s.spriden_pidm = t.tbraccd_pidm
+   AND s.spriden_change_ind IS NULL
+LEFT JOIN taismgr.tbbdetc d
+    ON d.tbbdetc_detail_code = t.tbraccd_detail_code
+WHERE {{detail_codes}}
+ORDER BY t.tbraccd_feed_date, t.tbraccd_feed_doc_code,
+         t.tbraccd_pidm, t.tbraccd_tran_number;

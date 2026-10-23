@@ -21,6 +21,42 @@ class SQLExecutor(Protocol):
 
 
 @dataclass(frozen=True)
+class BannerDetailCodeParameters:
+    """Explicit detail-code selection without a feed-date restriction."""
+
+    detail_codes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.detail_codes, tuple) or not self.detail_codes:
+            raise ValueError("Select at least one detail code.")
+        if any(
+            not isinstance(code, str) or re.fullmatch(r"[A-Z0-9]{4}", code) is None
+            for code in self.detail_codes
+        ):
+            raise ValueError("Detail codes must contain four letters or digits, separated by commas.")
+
+    @classmethod
+    def from_inputs(cls, detail_codes: str) -> BannerDetailCodeParameters:
+        if not isinstance(detail_codes, str):
+            raise ValueError("Enter detail codes separated by commas.")
+        if not detail_codes.strip():
+            raise ValueError("Select at least one detail code.")
+        return cls(tuple(dict.fromkeys(code.strip().upper() for code in detail_codes.split(","))))
+
+    def render_sql(self, template: str) -> str:
+        if "{{detail_codes}}" not in template:
+            raise ValueError("The Banner activity query is missing a required parameter.")
+        rendered = template.replace(
+            "{{detail_codes}}", "t.tbraccd_detail_code IN (" + ", ".join(
+                f"'{code}'" for code in self.detail_codes
+            ) + ")",
+        )
+        if "{{" in rendered or "}}" in rendered or "[[" in rendered:
+            raise ValueError("The Banner activity query has an unsupported parameter.")
+        return rendered
+
+
+@dataclass(frozen=True)
 class BannerActivityParameters:
     """Inclusive feed dates and explicitly selected Banner detail codes."""
 
@@ -36,13 +72,7 @@ class BannerActivityParameters:
             raise ValueError("End Feed Date must be on or after Start Feed Date.")
         if self.end_date == date.max:
             raise ValueError("End Feed Date must be earlier than 9999-12-31.")
-        if not isinstance(self.detail_codes, tuple) or not self.detail_codes:
-            raise ValueError("Select at least one detail code.")
-        if any(
-            not isinstance(code, str) or re.fullmatch(r"[A-Z0-9]{4}", code) is None
-            for code in self.detail_codes
-        ):
-            raise ValueError("Detail codes must contain four letters or digits, separated by commas.")
+        BannerDetailCodeParameters(self.detail_codes)
 
     @classmethod
     def from_inputs(cls, start_date: str, end_date: str, detail_codes: str) -> BannerActivityParameters:
@@ -55,11 +85,7 @@ class BannerActivityParameters:
                 dates.append(date.fromisoformat(value))
             except ValueError:
                 raise ValueError("Enter valid start and end feed dates as YYYY-MM-DD.") from None
-        if not isinstance(detail_codes, str):
-            raise ValueError("Enter detail codes separated by commas.")
-        if not detail_codes.strip():
-            raise ValueError("Select at least one detail code.")
-        codes = tuple(dict.fromkeys(code.strip().upper() for code in detail_codes.split(",")))
+        codes = BannerDetailCodeParameters.from_inputs(detail_codes).detail_codes
         return cls(dates[0], dates[1], codes)
 
     def render_sql(self, template: str) -> str:
@@ -67,17 +93,12 @@ class BannerActivityParameters:
         replacements = {
             "{{start_date}}": f"'{self.start_date.isoformat()}'",
             "{{end_date}}": f"'{self.end_date.isoformat()}'",
-            "{{detail_codes}}": "t.tbraccd_detail_code IN (" + ", ".join(
-                f"'{code}'" for code in self.detail_codes
-            ) + ")",
         }
         for marker, value in replacements.items():
             if marker not in template:
                 raise ValueError("The Banner activity query is missing a required parameter.")
             template = template.replace(marker, value)
-        if "{{" in template or "}}" in template or "[[" in template:
-            raise ValueError("The Banner activity query has an unsupported parameter.")
-        return template
+        return BannerDetailCodeParameters(self.detail_codes).render_sql(template)
 
 
 def extract_banner_activity(

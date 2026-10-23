@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from shared.insights.banner_activity import BannerActivityParameters
+from shared.insights.banner_activity import BannerActivityParameters, BannerDetailCodeParameters
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,6 +23,7 @@ class InsightsQuery:
     administrator_only: bool = False
     result_count_column: str | None = None
     allowed_term_suffixes: tuple[str, ...] = ()
+    default_detail_codes: tuple[str, ...] = ()
 
     @property
     def sql_path(self) -> Path:
@@ -31,9 +32,16 @@ class InsightsQuery:
     def render_sql(
         self, term_code: str | None = None, *,
         activity: BannerActivityParameters | None = None,
+        detail_codes: BannerDetailCodeParameters | None = None,
     ) -> str:
         """Render only the explicitly supported, validated report parameters."""
         sql = self.sql_path.read_text(encoding="utf-8")
+        if self.default_detail_codes:
+            if detail_codes is None or activity is not None or term_code is not None:
+                raise ValueError("Enter detail codes for this all-date report.")
+            return detail_codes.render_sql(sql)
+        if detail_codes is not None:
+            raise ValueError("This query does not take an all-date detail-code selection.")
         if self.requires_activity_parameters:
             if activity is None or term_code is not None:
                 raise ValueError("Enter feed dates and detail codes for this report.")
@@ -61,6 +69,15 @@ class InsightsQuery:
 
 
 QUERIES: tuple[InsightsQuery, ...] = (
+    InsightsQuery(
+        "wf_mines_balance_transactions", "Activity", "W&F - Mines Balance Recon transactions",
+        "AR/activity/wf_mines_balance_transactions.sql",
+        "All-date transaction source for the future W&F - Mines Balance Recon. "
+        "Defaults to WOFF and BDRC; replace codes as needed. "
+        "Includes transactions with no feed date. No hold or positive-balance filter.",
+        administrator_only=True, result_count_column="Report Row Count",
+        default_detail_codes=("WOFF", "BDRC"),
+    ),
     InsightsQuery(
         "collections_tracking", "Holds", "Collections tracking",
         "AR/holds/collections_tracking.sql",
