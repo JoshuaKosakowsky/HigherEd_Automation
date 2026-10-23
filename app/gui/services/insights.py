@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -33,6 +34,23 @@ def _login_required() -> str:
     raise InsightsSessionError("Sign-in is required. Click Connect and sign in.")
 
 
+def _excel_calendar_date(value: object) -> date | None:
+    """Keep valid Banner dates beyond pandas' nanosecond timestamp range."""
+    if pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        return value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise TypeError("Expected an ISO calendar date.")
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.date()
+
+
 def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
     """Prepare feed timestamps and account calendar dates as Excel date cells."""
     date_columns = [
@@ -48,15 +66,19 @@ def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
     export = dataframe.copy()
     for column in date_columns:
         try:
-            dates = pd.to_datetime(export[column], format="ISO8601", utc=True)
+            if column.strip("'\"") in {"Account Activity Date", "From Date", "To Date"}:
+                # Native dates support Banner's far-future hold end dates (9999).
+                export[column] = pd.Series(
+                    [_excel_calendar_date(value) for value in export[column]],
+                    index=export.index, dtype=object,
+                )
+            else:
+                dates = pd.to_datetime(export[column], format="ISO8601", utc=True)
+                export[column] = dates.dt.tz_localize(None)
         except (TypeError, ValueError):
             raise InsightsConfigurationError(
                 f"Insights returned an unreadable {column} value; no workbook was saved."
             ) from None
-        export[column] = (
-            dates.dt.date if column.strip("'\"") in {"Account Activity Date", "From Date", "To Date"}
-            else dates.dt.tz_localize(None)
-        )
     return export
 
 

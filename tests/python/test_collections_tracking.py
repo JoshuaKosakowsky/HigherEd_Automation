@@ -3,7 +3,7 @@ import re
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +11,8 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from app.gui.models import WorkflowContext, WorkflowMode
-from app.gui.services.insights import run_insights_connection
+from app.gui.services.insights import _export_query, run_insights_connection
+from shared.insights.config import InsightsConfigurationError
 from shared.insights.query_catalog import get_query
 
 
@@ -110,7 +111,7 @@ class CollectionsTrackingTests(unittest.TestCase):
         ])
 
     def test_app_export_dates_completeness_and_administrator_access(self):
-        self.account(1)
+        self.account(1, end="9999-12-31")
         self.transaction(1, -50, feed="2099-10-02 14:30:00")
         frame = pd.read_sql_query(self.query, self.db)
         query = get_query("collections_tracking")
@@ -158,8 +159,38 @@ class CollectionsTrackingTests(unittest.TestCase):
                                 self.assertEqual(sheet['E2'].value, datetime(2099, 10, 2, 14, 30))
                                 self.assertEqual(sheet['G2'].value, datetime(2099, 1, 1))
                                 self.assertTrue(sheet['H2'].is_date)
+                                self.assertEqual(sheet['H2'].value, datetime(9999, 12, 31))
                         finally:
                             workbook.close()
+
+    def test_calendar_dates_preserve_far_future_dates_and_blanks_in_excel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'hold-dates.xlsx'
+            _export_query(pd.DataFrame({
+                'From Date': ['1900-01-01', None, date(2099, 1, 1), pd.NaT],
+                'To Date': ['9999-12-31', '9999-12-31T00:00:00Z',
+                            datetime(9999, 12, 31), None],
+            }), output)
+            workbook = load_workbook(output)
+            try:
+                sheet = workbook.active
+                for row in (2, 3, 4):
+                    self.assertEqual(sheet.cell(row, 2).value, datetime(9999, 12, 31))
+                    self.assertTrue(sheet.cell(row, 2).is_date)
+                self.assertEqual(sheet['A2'].value, datetime(1900, 1, 1))
+                self.assertIsNone(sheet['A3'].value)
+                self.assertIsNone(sheet['A5'].value)
+                self.assertIsNone(sheet['B5'].value)
+            finally:
+                workbook.close()
+
+    def test_invalid_hold_dates_still_reject_export(self):
+        for value in ('not-a-date', '9999-02-30', 123):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'invalid.xlsx'
+                with self.assertRaisesRegex(InsightsConfigurationError, 'unreadable To Date'):
+                    _export_query(pd.DataFrame({'To Date': [value]}), output)
+                self.assertFalse(output.exists())
 
 
 if __name__ == '__main__':
