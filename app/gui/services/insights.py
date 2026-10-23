@@ -39,7 +39,7 @@ def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
         column for column in dataframe.columns
         if isinstance(column, str) and (
             column.strip("'\"").endswith("Feed Date")
-            or column.strip("'\"") == "Account Activity Date"
+            or column.strip("'\"") in {"Account Activity Date", "From Date", "To Date"}
         )
     ]
     if not date_columns:
@@ -54,7 +54,7 @@ def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
                 f"Insights returned an unreadable {column} value; no workbook was saved."
             ) from None
         export[column] = (
-            dates.dt.date if column.strip("'\"") == "Account Activity Date"
+            dates.dt.date if column.strip("'\"") in {"Account Activity Date", "From Date", "To Date"}
             else dates.dt.tz_localize(None)
         )
     return export

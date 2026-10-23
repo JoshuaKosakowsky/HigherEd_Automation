@@ -1,5 +1,55 @@
 # Student account holds and delinquency reports
 
+## Collections tracking
+
+`collections_tracking.sql` supports analyst reconciliation of accounts formally
+sent to the collections agency, identified by a `CO` hold whose to date is
+strictly after the database's `CURRENT_DATE`. Codes are trimmed and matched
+without case sensitivity; comparisons ignore time of day. Holds ending today
+or with NULL end dates do not qualify. There is no from-date cutoff: even a
+future-start hold qualifies under the requested end-date rule.
+
+The owner requested all qualifying accounts, including zero and credit balances,
+with one row per student using the latest qualifying from date. NULL from dates
+rank last; equal from dates use the latest to date. Exact duplicate holds yield
+the same displayed values. The report uses current SPRIDEN identities
+(`SPRIDEN_CHANGE_IND IS NULL`), assumed unique per PIDM. There is no enrollment
+or SGBSTDN filter; the qualifying CO hold defines the account population.
+
+Output: `CWID`, `First Name`, `Last Name`, `Current Account Balance`,
+`Latest Feed Date`, `Hold Code`, `From Date`, `To Date`. The balance uses the
+delinquency report's all-term charges-minus-payments method with TBBDETC types
+C/P, signed reversals and rounding to cents. Future terms are included. Unknown
+detail types, missing amounts or no transactions leave the balance blank while
+retaining the account; a blank is not a known zero. Missing feed dates remain
+blank. Latest Feed Date is the maximum across all account transactions, not a
+referral date, last payment date or agency-specific activity date.
+
+Run `validate_hold_schema.sql` first, including its TBRACCD FEED_DATE check.
+Paste the SQL into a native Insights question, or choose **Connections →
+Holds — Collections tracking** in app 0.19.0 with administrator access. No
+parameters are needed. The app reuses TEST/PROD connection controls, rejects
+incomplete API results using `Report Row Count`, removes that internal count
+from the workbook, and preserves existing files. All three date columns export
+as real Excel dates/timestamps. Publishing a saved Insights question is separate.
+
+Synthetic acceptance examples (today = 2099-10-02):
+
+- CO ending 2099-10-03 qualifies; ending 2099-10-02, even at 23:59, does not.
+- Two qualifying CO holds starting January 1 and March 1 yield March 1's dates
+  once, without multiplying the balance. A newer expired hold does not win.
+- Charges 100, charge reversal -25, payment 20 and payment reversal -5 produce
+  60, including across terms. Balances 0 and -50 remain in the output.
+- A qualifying hold with no transaction rows remains with blank balance/feed
+  date; an unknown detail type leaves balance blank for reconciliation.
+
+Tests execute the actual SQL in SQLite with date syntax and the clock adapted,
+and exercise the mocked app export. Before operational use, validate native
+PostgreSQL execution and reconcile balances against TSAAREV and dates against
+SOAHOLD, including duplicates, paid accounts and blanks. Confirm unique current
+identities and detail-code definitions. Insights replication delay still applies.
+The existing delinquency outreach report's any-CO exclusion is unchanged.
+
 ## RH delinquency review
 
 `rh_delinquency.sql` returns every student whose account has

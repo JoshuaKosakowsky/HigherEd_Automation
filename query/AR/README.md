@@ -13,7 +13,7 @@ first configured in a new Insights environment.
 | [Sponsors](sponsors/README.md) | Sponsored-student contracts and student/sponsor balances | `sponsored_student_summary.sql` |
 | [Loans](loans/README.md) | Historical institutional-loan borrowers with recent graduation/withdrawal or possible stop-out, classified by input-term enrollment | `institutional_loan_exit_review.sql` |
 | [Term corrections](term_corrections/README.md) | Available cash payments posted to a term with no charge history | `payments_without_charges.sql` |
-| [Holds](holds/README.md) | All-student RH account delinquency review; separate delinquency outreach list excluding CO, with balances, contacts, and a PP indicator | `rh_delinquency.sql`, `deliquent_student_accounts.sql` |
+| [Holds](holds/README.md) | RH account delinquency review; delinquency outreach excluding CO; collections tracking for CO holds ending after today | `rh_delinquency.sql`, `deliquent_student_accounts.sql`, `collections_tracking.sql` |
 | [Canadian tax](canadian_tax/README.md) | TL11A source-data preparation for a CWID/year, fee review and exchange-rate provenance | API transaction, enrollment and term-effective program templates |
 
 ## Shared operating principles
