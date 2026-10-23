@@ -25,6 +25,11 @@ layout; accent colors remain limited.
   users underneath; select a whole role or specific people without creating new
   permission views. See [Bursar Office Calendar instructions](operations_calendar.md).
 - Calendar **Groups…** organizes existing schedules under expandable headings.
+  Compact group timelines retain individual deadline and coverage marks while
+  collapsed. Optional semester labels use Mines colors (Fall Colorado Red,
+  Spring Blaster Blue, Summer Muted Blue, General Silver), with a semester filter.
+  Existing calendar files load without re-entry; update all calendar editors to
+  0.18.0 before saving the new format. Dates and reminders remain independent.
   Group membership is independent of categories and does not link dates;
   existing linked coverage retains its deadline-relative behavior.
 - file inputs accept direct paths, Browse selection, and native Explorer/Finder

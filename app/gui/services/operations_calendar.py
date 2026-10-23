@@ -20,6 +20,9 @@ from app.gui.services.access import AccessConfiguration, load_access_configurati
 from shared.mines_paths import ensure_hidden_directory
 
 
+SEMESTER_LABELS = {"fall": "Fall", "spring": "Spring", "summer": "Summer", "general": "General / no semester"}
+
+
 class CalendarError(ValueError):
     """Invalid calendar data or unauthorized operation."""
 
@@ -73,6 +76,7 @@ class CalendarEvent:
     notes: str = ""
     coverage: tuple[Coverage, ...] = ()
     group_id: str | None = None
+    semester: str | None = None
 
 
 @dataclass(frozen=True)
@@ -233,7 +237,7 @@ def _unique_ids(items: tuple, description: str) -> None:
 
 def _parse(payload: object, digest: str | None, access: AccessConfiguration | None = None) -> CalendarData:
     try:
-        if not isinstance(payload, dict) or payload.get("schemaVersion") not in (1, 2, 3, 4):
+        if not isinstance(payload, dict) or payload.get("schemaVersion") not in (1, 2, 3, 4, 5):
             raise CalendarError("Unsupported Bursar Office Calendar format.")
         if payload["schemaVersion"] == 1:
             if access is None:
@@ -273,7 +277,10 @@ def _parse(payload: object, digest: str | None, access: AccessConfiguration | No
                 _strings(item.get("tags", []), "billing detail"),
                 _text(item.get("notes", ""), "notes", empty=True, limit=4000), coverage,
                 _text(item["group_id"], "group ID") if item.get("group_id") is not None else None,
+                _text(item["semester"], "semester") if item.get("semester") is not None else None,
             )
+            if event.semester is not None and event.semester not in SEMESTER_LABELS:
+                raise CalendarError("Choose Fall, Spring, Summer, General / no semester, or Not assigned.")
             if event.group_id is not None and event.group_id not in group_ids:
                 raise CalendarError("A calendar item refers to an unknown group.")
             if event.recurrence not in ("once", "annual", "monthly"):
@@ -319,7 +326,7 @@ def _payload(data: CalendarData, actor: str) -> dict:
         return value
 
     return {
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "groups": dates([asdict(g) for g in data.groups]),
         "events": dates([asdict(e) for e in data.events]),
         "overrides": dates([asdict(o) for o in data.overrides]),

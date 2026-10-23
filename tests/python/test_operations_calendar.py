@@ -314,7 +314,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.path.read_bytes(), original)
         self.store.save(data)
         payload = json.loads(self.store.path.read_text())
-        self.assertEqual(payload["schemaVersion"], 4)
+        self.assertEqual(payload["schemaVersion"], 5)
         self.assertNotIn("positions", payload)
         self.assertEqual((self.root / ".operations_calendar.backup.json").read_bytes(), original)
 
@@ -467,6 +467,7 @@ class StoreTests(unittest.TestCase):
         payload.pop("groups")
         for event in payload["events"]:
             event.pop("group_id")
+            event.pop("semester")
         self.store.path.write_text(json.dumps(payload), encoding="utf-8")
         before = self.store.path.read_bytes()
         loaded = self.store.load()
@@ -476,6 +477,47 @@ class StoreTests(unittest.TestCase):
         new = replace(loaded, groups=(CalendarGroup("fall", "Fall Payment Deadline"),))
         self.store.save(assign_group(new, "fall", frozenset(e.id for e in new.events)))
         self.assertEqual((self.root / ".operations_calendar.backup.json").read_bytes(), before)
+
+    def test_grouped_work_pc_file_preserves_dates_review_reminders_and_backup(self):
+        data = self.data()
+        data = replace(data, groups=(CalendarGroup("billing", "Billing Cycle"),))
+        data = assign_group(data, "billing", frozenset({"deadline"}))
+        data = replace_override(data, DateOverride("deadline", date(2026, 9, 12), date(2026, 9, 16), True))
+        saved = self.store.save(data)
+        payload = json.loads(self.store.path.read_text())
+        payload["schemaVersion"] = 4
+        for event in payload["events"]:
+            event.pop("semester")
+        self.store.path.write_text(json.dumps(payload), encoding="utf-8")
+        before = self.store.path.read_bytes()
+        loaded = self.store.load()
+        self.assertEqual(loaded.events, saved.events)
+        self.assertEqual(loaded.groups, saved.groups)
+        self.assertEqual(loaded.overrides, saved.overrides)
+        self.assertIsNone(loaded.events[0].semester)
+        self.assertEqual(self.store.path.read_bytes(), before)
+        reminders = reminder_entries(loaded, self.store.access(), date(2026, 9, 10))
+        for semester in ("spring", "summer", "fall", "general", None):
+            changed = replace_event(loaded, replace(loaded.events[0], semester=semester))
+            self.assertEqual(changed.overrides, saved.overrides)
+            self.assertEqual(changed.groups, saved.groups)
+            entries = reminder_entries(changed, self.store.access(), date(2026, 9, 10))
+            self.assertEqual([(replace(row.occurrence.event, semester=None), row.start, row.end, message)
+                              for row, message in entries],
+                             [(row.occurrence.event, row.start, row.end, message) for row, message in reminders])
+        updated = self.store.save(replace_event(loaded, replace(loaded.events[0], semester="spring")))
+        self.assertEqual(updated.events[0].semester, "spring")
+        self.assertEqual(updated.overrides, saved.overrides)
+        self.assertEqual((self.root / ".operations_calendar.backup.json").read_bytes(), before)
+        self.assertEqual(json.loads(self.store.path.read_text())["schemaVersion"], 5)
+
+    def test_invalid_semester_never_overwrites_calendar(self):
+        saved = self.store.save(self.data())
+        before = self.store.path.read_bytes()
+        for semester in ("winter", "", 123, [], True):
+            with self.subTest(semester=semester), self.assertRaises(CalendarError):
+                self.store.save(replace(saved, events=(replace(saved.events[0], semester=semester),)))
+            self.assertEqual(self.store.path.read_bytes(), before)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import calendar
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date
 from uuid import uuid4
 
@@ -25,12 +25,57 @@ from app.gui.services.operations_calendar import (
     person_available, person_label, role_label,
     occurrences, reminder_entries, replace_event, replace_future, replace_override,
     timeline_rows, unassigned_targets, assign_group, remove_group,
+    SEMESTER_LABELS, TimelineRow,
 )
-from app.gui.theme import BLASTER_BLUE, COLORADO_RED, LIGHT_BLUE, MUTED, PALE_BLUE, button, label
+from app.gui.theme import (
+    BLASTER_BLUE, COLORADO_RED, LIGHT_BLUE, MUTED, MUTED_BLUE, PALE_BLUE, SILVER, button, label,
+)
 from shared.mines_paths import MinesPathError
 
 
 ERRORS = (CalendarError, AccessConfigurationError, OSError, MinesPathError)
+
+
+SEMESTER_COLORS = {"fall": COLORADO_RED, "spring": BLASTER_BLUE, "summer": MUTED_BLUE, "general": SILVER}
+
+
+def semester_label(event: CalendarEvent) -> str:
+    return SEMESTER_LABELS.get(event.semester, "Not assigned")
+
+
+@dataclass(frozen=True)
+class TimelineMark:
+    row: TimelineRow
+    left: float
+    right: float
+    lane: int
+
+
+def timeline_marks(rows: tuple[TimelineRow, ...], start: date, end: date, width: int) -> tuple[TimelineMark, ...]:
+    """Pack visible marks into lanes so nearby deadlines never conceal each other."""
+    scale = max(width, 1) / ((end - start).days + 1)
+    bounds = []
+    for row in rows:
+        if row.start > end or row.end < start:
+            continue
+        left = (max(row.start, start) - start).days * scale
+        right = ((min(row.end, end) - start).days + 1) * scale
+        # Reserve the diamond's actual drawn width, including on a year view.
+        if row.start == row.end:
+            center = (left + right) / 2
+            left, right = center - 7, center + 7
+        else:
+            right = max(right, left + 3)
+        bounds.append((row, left, right))
+    lanes, marks = [], []
+    for row, left, right in sorted(bounds, key=lambda item: (item[1], item[2], item[0].title)):
+        lane = next((i for i, last in enumerate(lanes) if last + 4 <= left), len(lanes))
+        if lane == len(lanes):
+            lanes.append(right)
+        else:
+            lanes[lane] = right
+        marks.append(TimelineMark(row, left, right, lane))
+    return tuple(marks)
 
 
 def date_control(day: date) -> QDateEdit:
@@ -206,6 +251,12 @@ class EventDialog(QDialog):
             self.group.addItem(group.name, group.id)
         self.group.setCurrentIndex(max(0, self.group.findData(event.group_id if event else None)))
         self.group.setToolTip("Related items share a heading. Their dates and reminders stay independent. Use Groups… on the calendar to create groups or organize existing items.")
+        self.semester = QComboBox()
+        self.semester.addItem("Not assigned", None)
+        for value, title in SEMESTER_LABELS.items():
+            self.semester.addItem(title, value)
+        self.semester.setCurrentIndex(max(0, self.semester.findData(event.semester if event else None)))
+        self.semester.setToolTip("Choose the semester the work belongs to, even when its date falls in another semester. General means no semester; Not assigned leaves older entries unclassified.")
         category_row = QWidget()
         category_layout = QHBoxLayout(category_row)
         category_layout.setContentsMargins(0, 0, 0, 0)
@@ -245,6 +296,7 @@ class EventDialog(QDialog):
         self.notes.setMaximumHeight(85)
         self.audience = AudienceEditor(access, event.audience if event else Audience())
         for title, widget in (("Title", self.title), ("Category", category_row), ("Group (optional)", self.group),
+                              ("Semester (optional)", self.semester),
                               ("First / normal date", self.anchor), ("Length in days", self.duration),
                               ("Repeat", self.recurrence), ("Monthly selection", month_row),
                               ("", self.has_until), ("Last date", self.until),
@@ -342,7 +394,7 @@ class EventDialog(QDialog):
             self.title.text().strip(), self.category.currentText().strip(), anchor,
             self.recurrence.currentData(), months, until, self.weekend.currentData(),
             self.duration.value(), self.reminder.value(), audience, tags_from(self.tags.text()),
-            self.notes.toPlainText().strip(), tuple(self.coverage), self.group.currentData(),
+            self.notes.toPlainText().strip(), tuple(self.coverage), self.group.currentData(), self.semester.currentData(),
         )
         self.accept()
 
@@ -551,12 +603,12 @@ class GanttDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option, index):
         super().paint(painter, option, index)
-        row = index.data(Qt.ItemDataRole.UserRole)
-        if row is None:
+        value = index.data(Qt.ItemDataRole.UserRole)
+        if value is None:
             return
         painter.save()
         painter.setClipRect(option.rect)
-        rect = option.rect.adjusted(4, 0, -4, 0)
+        rect = option.rect.adjusted(8, 0, -8, 0)
         days = (self.end - self.start).days + 1
         scale = rect.width() / days
         for year, month in month_ticks(self.start, self.end):
@@ -570,19 +622,24 @@ class GanttDelegate(QStyledItemDelegate):
             x = rect.left() + (today - self.start).days * scale
             painter.setPen(QPen(QColor(COLORADO_RED), 2))
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-        if row.start <= self.end and row.end >= self.start:
-            left = rect.left() + (max(row.start, self.start) - self.start).days * scale
-            right = rect.left() + ((min(row.end, self.end) - self.start).days + 1) * scale
-            color = QColor(LIGHT_BLUE if row.coverage else BLASTER_BLUE)
+        grouped = isinstance(value, tuple)
+        marks = timeline_marks(value if grouped else (value,), self.start, self.end, rect.width())
+        lane_count = max((mark.lane + 1 for mark in marks), default=1)
+        for mark in marks:
+            row = mark.row
+            left, right = rect.left() + mark.left, rect.left() + mark.right
+            color = QColor(SEMESTER_COLORS.get(row.occurrence.event.semester,
+                                             LIGHT_BLUE if row.coverage else BLASTER_BLUE))
             painter.setPen(QPen(color, 2))
             painter.setBrush(QColor(PALE_BLUE) if row.occurrence.needs_review else color)
-            y = rect.center().y()
+            y = rect.center().y() + (mark.lane - (lane_count - 1) / 2) * 20
             if row.start == row.end:
                 x = (left + right) / 2
                 painter.drawPolygon(QPolygonF([QPointF(x, y - 7), QPointF(x + 7, y),
                                                QPointF(x, y + 7), QPointF(x - 7, y)]))
             else:
-                painter.drawRoundedRect(QRectF(left, y - 7, max(right - left, 3), 14), 3, 3)
+                height = 10 if row.coverage else 14
+                painter.drawRoundedRect(QRectF(left, y - height / 2, right - left, height), 3, 3)
         painter.restore()
 
 
@@ -600,11 +657,11 @@ class TimelineHeader(QHeaderView):
         painter.fillRect(rect, QColor(PALE_BLUE))
         painter.setPen(QColor(BLASTER_BLUE))
         start, end = self.delegate.start, self.delegate.end
-        scale = (rect.width() - 8) / ((end - start).days + 1)
+        scale = (rect.width() - 16) / ((end - start).days + 1)
         for year, month in month_ticks(start, end):
             day = date(year, month, 1)
             if start <= day <= end:
-                x = rect.left() + 4 + (day - start).days * scale
+                x = rect.left() + 8 + (day - start).days * scale
                 painter.drawText(int(x + 4), rect.bottom() - 9, calendar.month_abbr[month])
         painter.restore()
 
@@ -620,12 +677,23 @@ class OperationsCalendarPage(QWidget):
         self.display_rows = []
         self.collapsed_groups = set()
         self.group_buttons = {}
+        self.group_timelines = {}
         self.attention_occurrences = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.addWidget(label("ADMINISTRATION", "eyebrow"))
         layout.addWidget(label("Bursar Office Calendar", "title"))
         layout.addWidget(label("Deadlines and coverage together. Filled marks: scheduled / reviewed · outlined marks: needs date review · red line: today.", "muted"))
+        legend = QHBoxLayout()
+        for semester, color in SEMESTER_COLORS.items():
+            swatch = QWidget()
+            swatch.setFixedSize(12, 12)
+            swatch.setStyleSheet(f"background-color: {color};")
+            swatch.setAccessibleName(SEMESTER_LABELS[semester] + " color")
+            legend.addWidget(swatch)
+            legend.addWidget(label(SEMESTER_LABELS[semester], "muted", wrap=False))
+        legend.addStretch()
+        layout.addLayout(legend)
         filters = QHBoxLayout()
         staff_filters = QHBoxLayout()
         self.year = spin_control(date.today().year, 1901, 2198)
@@ -637,12 +705,17 @@ class OperationsCalendarPage(QWidget):
         self.period.setToolTip("Choose the months to display. The year is the starting year; Nov–Jan and Dec–Feb continue into the next year.")
         self.category = QComboBox()
         self.category.setToolTip("Assign a category in Add item or Edit schedule. Use New category… there to add another label.")
+        self.semester = QComboBox()
+        self.semester.addItem("All semesters", "all")
+        self.semester.addItem("Not assigned", None)
+        for value, title in SEMESTER_LABELS.items():
+            self.semester.addItem(title, value)
         self.role = QComboBox()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find an event, coverage, or billing detail…")
         self.search.setClearButtonEnabled(True)
         for caption, widget in (("Year", self.year), ("Calendar view", self.period),
-                                ("Category filter", self.category), ("Role / person filter", self.role),
+                                ("Category filter", self.category), ("Semester", self.semester), ("Role / person filter", self.role),
                                 ("Search calendar", self.search)):
             widget.setAccessibleName(caption)
             if widget in (self.role, self.search):
@@ -667,6 +740,11 @@ class OperationsCalendarPage(QWidget):
         actions.addStretch()
         actions.addWidget(button("Reload", self._reload))
         layout.addLayout(actions)
+        group_actions = QHBoxLayout()
+        group_actions.addWidget(button("Collapse groups", lambda: self._set_groups_collapsed(True)))
+        group_actions.addWidget(button("Expand groups", lambda: self._set_groups_collapsed(False)))
+        group_actions.addStretch()
+        layout.addLayout(group_actions)
         self.summary = label("", "status")
         layout.addWidget(self.summary)
         self.table = QTableWidget(0, 3)
@@ -683,6 +761,7 @@ class OperationsCalendarPage(QWidget):
         self.table.setItemDelegateForColumn(0, EventLabelDelegate(self.table))
         self.table.itemDoubleClicked.connect(self._activate_row)
         self.table.itemSelectionChanged.connect(self._selection)
+        self.table.horizontalHeader().sectionResized.connect(self._resize_group_timelines)
         layout.addWidget(self.table, 1)
         layout.addWidget(label("Upcoming, date review & staffing reminders", "section"))
         self.attention = QTableWidget(0, 3)
@@ -695,7 +774,7 @@ class OperationsCalendarPage(QWidget):
         self.status = label("", "muted")
         layout.addWidget(self.status)
         self.year.valueChanged.connect(self._render)
-        for combo in (self.period, self.category, self.role):
+        for combo in (self.period, self.category, self.semester, self.role):
             combo.currentIndexChanged.connect(self._render)
         self.search.textChanged.connect(self._render)
         self._reload()
@@ -754,6 +833,9 @@ class OperationsCalendarPage(QWidget):
     def _matches(self, row):
         if self.category.currentData() and row.occurrence.event.category != self.category.currentData():
             return False
+        semester = self.semester.currentData()
+        if semester != "all" and row.occurrence.event.semester != semester:
+            return False
         target = self.role.currentData()
         if target:
             view, login = json.loads(target)
@@ -761,6 +843,7 @@ class OperationsCalendarPage(QWidget):
                 return False
         group = next((g.name for g in self.data.groups if g.id == row.occurrence.event.group_id), "")
         text = " ".join((row.title, row.occurrence.event.title, row.occurrence.event.category, group,
+                         semester_label(row.occurrence.event),
                          *row.occurrence.tags, row.occurrence.notes,
                          *audience_labels(row.audience, self.access))).casefold()
         return self.search.text().strip().casefold() in text
@@ -790,6 +873,7 @@ class OperationsCalendarPage(QWidget):
                 self.display_rows.append(group)
                 self.display_rows.extend(grouped[group.id])
         self.table.clearSpans()
+        self.group_timelines = {}
         self.table.setRowCount(0)
         self.group_buttons = {}
         self.table.setRowCount(len(self.display_rows))
@@ -799,7 +883,21 @@ class OperationsCalendarPage(QWidget):
                 header = QTableWidgetItem("")
                 header.setData(Qt.ItemDataRole.AccessibleTextRole, row.name)
                 self.table.setItem(index, 0, header)
-                self.table.setSpan(index, 0, 1, self.table.columnCount())
+                self.table.setSpan(index, 0, 1, 2)
+                members = tuple(grouped[row.id])
+                self.group_timelines[index] = members
+                timeline = QTableWidgetItem("")
+                timeline.setData(Qt.ItemDataRole.UserRole, members)
+                tip = "\n".join(
+                    f"{member.title} · {semester_label(member.occurrence.event)} · "
+                    f"{member.start:%b %d, %Y} – {member.end:%b %d, %Y} · "
+                    f"{member.occurrence.review_reason} · "
+                    f"{'; '.join(audience_labels(member.audience, self.access))}"
+                    for member in members
+                )
+                timeline.setToolTip(tip)
+                timeline.setData(Qt.ItemDataRole.AccessibleTextRole, tip)
+                self.table.setItem(index, 2, timeline)
                 control = QToolButton(self.table)
                 control.setCheckable(True)
                 control.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -826,9 +924,10 @@ class OperationsCalendarPage(QWidget):
             affected = "; ".join(audience_labels(row.audience, self.access))
             dates = f"{row.start:%b %d}" + (f" – {row.end:%b %d}" if row.end != row.start else "")
             text += "\n" + dates + " · " + ("Reviewed" if occurrence.approved else "Proposed" if occurrence.needs_review else "Scheduled")
+            text += " · " + semester_label(occurrence.event)
             tip = (f"{row.title}\n{row.start:%b %d, %Y} – {row.end:%b %d, %Y}\n"
                    f"{affected}\nNormal event date: {occurrence.nominal:%b %d, %Y}\n"
-                   f"{occurrence.review_reason}\nCategory: {occurrence.event.category}\n"
+                   f"{occurrence.review_reason}\nSemester: {semester_label(occurrence.event)}\nCategory: {occurrence.event.category}\n"
                    f"Details: {', '.join(occurrence.tags)}\n{occurrence.notes}")
             for column, value in enumerate((text, affected, "")):
                 item = QTableWidgetItem(value)
@@ -838,9 +937,10 @@ class OperationsCalendarPage(QWidget):
                     item.setData(Qt.ItemDataRole.AccessibleTextRole, tip)
                 self.table.setItem(index, column, item)
         self._apply_group_visibility()
+        self._resize_group_timelines()
         proposed = len({(r.occurrence.event.id, r.occurrence.nominal) for r in self.rows if r.occurrence.needs_review})
         vacant = {name for row in self.rows for name in unassigned_targets(row.audience, self.access)}
-        self.summary.setText(f"{len(self.rows)} visible deadline / coverage rows · {proposed} dates need review · {len(vacant)} unassigned. Overlapping bars show overlapping demand.")
+        self.summary.setText(f"{len(self.rows)} matching deadlines / coverage periods · {proposed} dates need review · {len(vacant)} unassigned. Overlapping bars show overlapping demand.")
         self._render_attention()
         self._selection()
 
@@ -879,7 +979,24 @@ class OperationsCalendarPage(QWidget):
         control.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         control.setChecked(expanded)
         control.setAccessibleName(f"{action} {name}")
-        control.setToolTip("Click anywhere on this button, or focus it and press Space, to expand or collapse. Each item keeps its own dates. Use Groups… to change membership.")
+        control.setToolTip(f"{name}\nClick this button, or focus it and press Space, to expand or collapse. The timeline keeps every matching date and coverage period visible. Each item keeps its own dates and reminders. Use Groups… to change membership.")
+
+    def _resize_group_timelines(self, *_):
+        width = self.table.columnWidth(2) - 16
+        for index, members in self.group_timelines.items():
+            marks = timeline_marks(members, self.delegate.start, self.delegate.end, width)
+            lanes = max((mark.lane + 1 for mark in marks), default=1)
+            self.table.setRowHeight(index, max(52, lanes * 20 + 12))
+
+    def _set_groups_collapsed(self, collapsed):
+        if collapsed:
+            self.collapsed_groups.update(self.group_buttons)
+        else:
+            self.collapsed_groups.clear()
+        for group_id in self.group_buttons:
+            self._update_group_button(group_id)
+        self._apply_group_visibility()
+        self._selection()
 
     def _apply_group_visibility(self):
         for index, row in enumerate(self.display_rows):

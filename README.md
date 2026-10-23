@@ -89,6 +89,11 @@ existing staff roles, with optional selections of individual people beneath
 each role. Unassigned roles or people remain visible.
 Use **Groups…** to organize existing items under headings such as Annual PCI
 Cycle. Each part retains independent dates, recurrence, and reminders.
+Compact group timelines keep those individual dates and coverage periods visible
+when collapsed. Optional semester colors and filtering distinguish Fall, Spring,
+Summer, and general work without inferring a semester from its date. Older
+calendar files load without re-entry; update all calendar editors to 0.18.0 before
+saving the new format.
 Weekend adjustments are proposed for admin review, and reminders
 appear inside the app without task completion tracking. See the
 [Bursar Office Calendar instructions](app/gui/operations_calendar.md).

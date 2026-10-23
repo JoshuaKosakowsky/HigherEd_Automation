@@ -1,4 +1,4 @@
-# Bursar Office Calendar (0.15.1)
+# Bursar Office Calendar (0.18.0)
 
 Only active application administrators can open or edit this calendar. All
 administrators share the same calendar; assigning a staff member or role to an
@@ -31,13 +31,19 @@ Switching groups in that dialog retains pending membership edits; Save commits
 them together and Cancel discards them. Membership applies to the entire recurring
 schedule; future-only schedule editing retains its normal scope.
 
-The chart shows a full-width **Expand / Collapse** button above each group's
-matching items. Click anywhere on the button once, or focus it with Tab and
+The chart shows an **Expand / Collapse** button beside each group's compact
+timeline. Click anywhere on the button once, or focus it with Tab and
 press Space. The button stays visible as the group opens or closes.
 Collapsing changes only the chart display;
 reminders remain visible. Search includes group names, and reminders include
-their group name. A group heading has no bar because the gaps between its
-independent activities should not imply continuous work or coverage. Groups with
+their group name. The group timeline shows each matching deadline as a diamond
+and each actual work/coverage period as its own bar, including when collapsed.
+It does not fill the gaps between independent activities. Overlapping or closely
+spaced marks use separate lanes so one cannot hide another; narrow views may
+therefore make a group heading taller. Hover over the group timeline for dates,
+semester labels, affected staff, and review information; expand it to edit an
+individual item. **Collapse groups** and **Expand groups** change all group
+headings together. Groups with
 no matching items in the selected view are hidden.
 
 Rename groups in Groups…. Removing a group detaches its members while preserving
@@ -50,10 +56,39 @@ counter coverage as separate grouped items when their dates should be edited
 independently; you can place your existing entries in the same group.
 
 Existing calendar files load without being rewritten or requiring data re-entry.
-The first explicit save uses format 4 and keeps the previous file in the existing
-backup. Update all calendar users to app 0.15.0 or newer before editing the shared
-calendar: older versions cannot read the grouping format. No production calendar
+The first explicit save uses format 5 and keeps the previous file in the existing
+backup. Update all calendar users to app 0.18.0 or newer before editing the shared
+calendar: older versions cannot read the semester format. Files in formats 1–4
+remain readable by the updated app. Opening, filtering, and collapsing groups
+never save or rewrite the calendar. No production calendar
 entries are prefilled, moved, or grouped automatically.
+
+## Semester colors
+
+Choose **Semester (optional)** in **Add item** or **Edit schedule**. This identifies
+the semester the work belongs to, independently of the date on which it occurs.
+For example, a Spring balance's collections deadline in September is still Spring.
+The choice applies to the recurring schedule and its linked coverage. Existing
+entries start as **Not assigned**; titles, dates, and group names are never used
+to guess a semester. **General / no semester** is an explicit choice, separate
+from an entry that has not yet been classified.
+
+| Semester | Mines color | Hex |
+|---|---|---|
+| Fall | Colorado Red | `#CC4628` |
+| Spring | Blaster Blue | `#09396C` |
+| Summer | Muted Blue | `#57A2BD` |
+| General / no semester | Silver | `#81848A` |
+
+These are owner-selected calendar meanings using the
+[Mines digital palette](https://brand.mines.edu/fonts/), not institution-wide
+semester conventions. The legend and item labels identify each semester;
+unassigned entries retain the earlier blue deadline/light-blue coverage colors.
+Filled marks still mean scheduled/reviewed; outlined marks still need date review.
+Coverage bars are thinner than event bars. The red vertical line still marks today.
+Changing only a semester retains existing date approvals, exceptions, reminder
+lead times, recurrence, and staffing assignments. **Semester** filtering applies
+to group summaries, detail rows, and the reminder list without changing data.
 
 ## Choose affected roles or people
 
