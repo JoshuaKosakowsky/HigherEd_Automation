@@ -21,10 +21,11 @@ from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMessageBox
 from app.gui.main import AutomationApplication
 from app.gui.pages.operations_calendar import (
     CoverageDialog, EventDialog, GroupsDialog, OccurrenceDialog, OperationsCalendarPage,
+    SEMESTER_COLORS, timeline_marks,
 )
 from app.gui.services.operations_calendar import (
     Audience, CalendarData, CalendarEvent, CalendarGroup, CalendarStore, Coverage, DateOverride, RolePerson,
-    occurrences, replace_override, assign_group,
+    occurrences, replace_override, assign_group, timeline_rows,
 )
 from app.gui.theme import apply_theme
 from test_operations_calendar import synthetic_access_payload
@@ -442,6 +443,85 @@ class CalendarGuiTests(unittest.TestCase):
         self.write_policy()
         dialog._save()
         self.assertIn("active administrator", dialog.error.text())
+
+    def test_semester_editor_filter_and_group_summary_preserve_data(self):
+        data = self.grouped_data()
+        events = tuple(replace(data.events[0], id=f"event-{i}", title=f"Cycle step {i}",
+                               semester=semester, coverage=() if i else data.events[0].coverage)
+                       for i, semester in enumerate(("fall", "spring", "summer", "general", None)))
+        saved = self.store.save(replace(data, events=events))
+        before = self.store.path.read_bytes()
+        page = self.page()
+        self.assertEqual(SEMESTER_COLORS, {"fall": "#CC4628", "spring": "#09396C",
+                                          "summer": "#57A2BD", "general": "#81848A"})
+        summary = page.table.item(0, 2).data(Qt.ItemDataRole.UserRole)
+        self.assertEqual(len(summary), 7)
+        self.assertIn("Spring", page.table.item(0, 2).toolTip())
+        self.assertIn("Cashier", page.table.item(0, 2).toolTip())
+        reminders = page.attention.rowCount()
+        page._set_groups_collapsed(True)
+        self.assertEqual(sum(not page.table.isRowHidden(i) for i in range(page.table.rowCount())), 1)
+        self.assertEqual(page.attention.rowCount(), reminders)
+        self.assertFalse(page.grab().isNull())
+        page.semester.setCurrentIndex(page.semester.findData("fall"))
+        self.assertEqual(len(page.rows), 3)  # Linked coverage inherits the event's semester.
+        self.assertEqual(len(page.table.item(0, 2).data(Qt.ItemDataRole.UserRole)), 3)
+        page.semester.setCurrentIndex(page.semester.findData(None))
+        self.assertEqual(len(page.rows), 1)
+        self.assertIsNone(page.rows[0].occurrence.event.semester)
+        page.semester.setCurrentIndex(page.semester.findData("all"))
+        page._set_groups_collapsed(False)
+        self.assertEqual(sum(not page.table.isRowHidden(i) for i in range(page.table.rowCount())), 8)
+        self.assertEqual(self.store.path.read_bytes(), before)
+        event = saved.events[1]
+        dialog = self.keep(EventDialog(None, saved, self.store.access(), event))
+        self.assertEqual(dialog.semester.currentData(), "spring")
+        dialog.semester.setCurrentIndex(dialog.semester.findData("summer"))
+        dialog._save()
+        self.assertEqual(dialog.result_event, replace(event, semester="summer"))
+
+    def test_compact_marks_keep_same_day_and_nearby_dates_in_separate_lanes(self):
+        data = self.synthetic_calendar()
+        events = tuple(replace(data.events[0], id=str(i), title=f"Deadline {i}", coverage=(),
+                               anchor=date(2026, 9, 14 + i), semester="spring") for i in range(4))
+        data = replace(data, events=events)
+        rows = tuple(row for item in occurrences(data, date(2026, 1, 1), date(2026, 12, 31))
+                     for row in timeline_rows(item))
+        marks = timeline_marks(rows, date(2026, 1, 1), date(2026, 12, 31), 400)
+        self.assertEqual(len(marks), 4)
+        self.assertEqual(len({mark.lane for mark in marks}), 4)
+        wider = timeline_marks(rows, date(2026, 9, 1), date(2026, 9, 30), 1000)
+        self.assertEqual({mark.lane for mark in wider}, {0})
+        same_day = tuple(replace(row, start=date(2026, 9, 14), end=date(2026, 9, 14)) for row in rows)
+        same_day_marks = timeline_marks(same_day, date(2026, 9, 1), date(2026, 9, 30), 1000)
+        self.assertEqual(len({mark.lane for mark in same_day_marks}), 4)
+        # Group summary has no bar filling the gaps between independent dates.
+        self.assertEqual({mark.row for mark in marks}, set(rows))
+        data = assign_group(replace(data, groups=(CalendarGroup("cycle", "Billing Cycle"),)),
+                            "cycle", frozenset(e.id for e in events))
+        self.store.save(data)
+        page = self.page()
+        self.assertGreater(page.table.rowHeight(0), 52)
+        original_height = page.table.rowHeight(0)
+        page.period.setCurrentIndex(page.period.findData(9))
+        self.assertLessEqual(page.table.rowHeight(0), original_height)
+        page._set_groups_collapsed(True)
+        self.assertFalse(page.grab().isNull())
+
+    def test_group_timeline_paints_all_semester_colors(self):
+        data = self.grouped_data()
+        events = tuple(replace(data.events[0], id=str(i), title=f"Step {i}",
+                               semester=semester, anchor=date(2026, 9, 14 + i * 3), coverage=())
+                       for i, semester in enumerate(SEMESTER_COLORS))
+        self.store.save(replace(data, events=events))
+        page = self.page()
+        page._set_groups_collapsed(True)
+        self.qt.processEvents()
+        cell = page.table.visualRect(page.table.model().index(0, 2))
+        image = page.table.viewport().grab(cell).toImage()
+        colors = {image.pixelColor(x, y).name().upper()
+                  for x in range(image.width()) for y in range(image.height())}
+        self.assertTrue(set(SEMESTER_COLORS.values()) <= colors)
 
 
 if __name__ == "__main__":
