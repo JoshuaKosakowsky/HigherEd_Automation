@@ -7,7 +7,7 @@ first configured in a new Insights environment.
 | Family | Purpose | Main queries |
 | --- | --- | --- |
 | [Aging](aging/README.md) | Dashboard totals for four non-overlapping aging buckets | `0-30Days.sql`, `31-60Days.sql`, `61-90Days.sql`, `91+Days.sql` |
-| [Activity](activity/README.md) | Staff-filtered TGIACCD extracts and current/recent TBRACCD activity | `tgiaccd_transactions.sql`, `Current_month_activity.sql`, `Last_month_activity.sql`, `Current_month_payment_activity.sql`, `Last_month_payment_activity.sql`, `Current_month_loan_activity.sql` |
+| [Activity](activity/README.md) | Staff-filtered TGIACCD extracts, all-date W&F source transactions and current/recent TBRACCD activity | `tgiaccd_transactions.sql`, `wf_mines_balance_transactions.sql`, `Current_month_activity.sql`, `Last_month_activity.sql`, `Current_month_payment_activity.sql`, `Last_month_payment_activity.sql`, `Current_month_loan_activity.sql` |
 | [Refunds](refunds/README.md) | Refund decision support and allocation diagnostics | `Refunds.sql`, `Refund_allocation_diagnostic.sql` |
 | [Contact information](contact_information/README.md) | Student contact lookup and refund-check recipient contacts for AP matching | `student_preferred_contacts.sql`, `refund_check_contacts.sql` |
 | [Sponsors](sponsors/README.md) | Sponsored-student contracts and student/sponsor balances | `sponsored_student_summary.sql` |
@@ -28,7 +28,8 @@ first configured in a new Insights environment.
   changed query becomes operational.
 - Do not export or commit production student data to this repository.
 
-The aging queries and `activity/tgiaccd_transactions.sql` use Insights/Metabase
+The aging queries, `activity/tgiaccd_transactions.sql` and
+`activity/wf_mines_balance_transactions.sql` use Insights/Metabase
 template tags (`{{...}}` and, where applicable, `[[...]]`).
 The other report families are native PostgreSQL-flavored SQL unless their README
 states otherwise.

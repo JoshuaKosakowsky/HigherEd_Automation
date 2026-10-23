@@ -14,7 +14,9 @@ from app.gui.services.access import (
     AccessConfigurationError, get_current_login, load_access_configuration,
 )
 from shared.insights.auth import InsightsAuthenticationError
-from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
+from shared.insights.banner_activity import (
+    BannerActivityParameters, BannerDetailCodeParameters, extract_banner_activity,
+)
 from shared.insights.browser_auth import InsightsBrowserAuthenticationError
 from shared.insights.client import InsightsAPIError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
@@ -160,13 +162,20 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                 raise InsightsConfigurationError("Enter a valid Banner term.")
             try:
                 activity = None
+                detail_codes = None
                 if query.requires_activity_parameters:
                     activity = BannerActivityParameters.from_inputs(
                         context.parameters.get("start_date"),
                         context.parameters.get("end_date"),
                         context.parameters.get("detail_codes"),
                     )
-                rendered_sql = query.render_sql(term_code, activity=activity)
+                if query.default_detail_codes:
+                    if context.parameters.get("start_date") is not None or context.parameters.get("end_date") is not None:
+                        raise ValueError("This all-date report does not take feed dates.")
+                    detail_codes = BannerDetailCodeParameters.from_inputs(
+                        context.parameters.get("detail_codes", ", ".join(query.default_detail_codes)),
+                    )
+                rendered_sql = query.render_sql(term_code, activity=activity, detail_codes=detail_codes)
             except ValueError as error:
                 raise InsightsConfigurationError(str(error)) from None
             selected_path = context.parameters.get("output_path")
@@ -194,7 +203,7 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                 else:
                     result = (
                         client.run_sql(rendered_sql)
-                        if query.term_variable else client.run_sql_file(query.sql_path)
+                        if query.term_variable or detail_codes is not None else client.run_sql_file(query.sql_path)
                     )
                 if query.result_count_column is not None:
                     column = query.result_count_column

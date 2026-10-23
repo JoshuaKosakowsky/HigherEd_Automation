@@ -22,7 +22,7 @@ from app.gui.theme import button, card, label
 from mymines.credentials import MyMinesCredentialStore
 from shared.credentials import CredentialStoreError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
-from shared.insights.banner_activity import BannerActivityParameters
+from shared.insights.banner_activity import BannerActivityParameters, BannerDetailCodeParameters
 from shared.insights.query_catalog import QUERIES, get_query
 
 
@@ -165,6 +165,15 @@ class ConnectionsPage(QScrollArea):
         activity_form.addRow("Detail codes (comma-separated)", self.detail_codes)
         activity_form.addRow(label("Both dates include the entire day. Replace codes as needed.", "muted"))
         export.addWidget(self.activity_inputs)
+        self.all_date_inputs = QWidget()
+        all_date_form = QFormLayout(self.all_date_inputs)
+        all_date_form.setContentsMargins(0, 0, 0, 0)
+        self.all_date_detail_codes = QLineEdit()
+        self.all_date_detail_codes.setAccessibleName("All-date detail codes separated by commas")
+        all_date_form.addRow("Detail codes (comma-separated)", self.all_date_detail_codes)
+        all_date_form.addRow(label("All dates, including transactions without a feed date.", "muted"))
+        export.addWidget(self.all_date_inputs)
+        self._all_date_query_id = None
         export.addWidget(label("Reports may contain student and financial data.", "muted"))
         self.actions["query_export"] = button(
             "Run selected query and save Excel",
@@ -192,6 +201,10 @@ class ConnectionsPage(QScrollArea):
         self.term_label.setVisible(requires_term)
         self.term.setVisible(requires_term)
         self.activity_inputs.setVisible(query.requires_activity_parameters)
+        self.all_date_inputs.setVisible(bool(query.default_detail_codes))
+        if query.default_detail_codes and self._all_date_query_id != query.query_id:
+            self.all_date_detail_codes.setText(", ".join(query.default_detail_codes))
+            self._all_date_query_id = query.query_id
 
     def _refresh(self) -> None:
         environment = self.mode.currentData()
@@ -201,6 +214,7 @@ class ConnectionsPage(QScrollArea):
         self.queries.setEnabled(profile is not None and self.result_queue is None)
         self.term.setEnabled(profile is not None and self.result_queue is None)
         self.activity_inputs.setEnabled(profile is not None and self.result_queue is None)
+        self.all_date_inputs.setEnabled(profile is not None and self.result_queue is None)
         self.save_login_button.setEnabled(self.result_queue is None)
         self.remove_login_button.setEnabled(self.result_queue is None)
         try:
@@ -292,13 +306,16 @@ class ConnectionsPage(QScrollArea):
             term_code = self.term.text().strip() if query.term_variable else None
             try:
                 activity = None
+                detail_codes = None
                 if query.requires_activity_parameters:
                     activity = BannerActivityParameters.from_inputs(
                         self.start_date.date().toString("yyyy-MM-dd"),
                         self.end_date.date().toString("yyyy-MM-dd"),
                         self.detail_codes.text(),
                     )
-                query.render_sql(term_code, activity=activity)
+                if query.default_detail_codes:
+                    detail_codes = BannerDetailCodeParameters.from_inputs(self.all_date_detail_codes.text())
+                query.render_sql(term_code, activity=activity, detail_codes=detail_codes)
             except (OSError, ValueError) as error:
                 QMessageBox.warning(self, "Query input needed", str(error))
                 return
@@ -333,6 +350,8 @@ class ConnectionsPage(QScrollArea):
                     end_date=activity.end_date.isoformat(),
                     detail_codes=", ".join(activity.detail_codes),
                 )
+            if detail_codes is not None:
+                parameters["detail_codes"] = ", ".join(detail_codes.detail_codes)
         else:
             parameters = {"action": action}
         is_query = action == "query_export"

@@ -243,6 +243,15 @@ available as a separate workflow in 0.12.0, described below.
 See [`query/AR/activity/README.md`](../../query/AR/activity/README.md) for API
 limits, permissions, and first-run validation.
 
+In **0.20.0**, **Connections → Activity — W&F - Mines Balance Recon
+transactions** adds an administrator-only Banner source export for the future
+reconciliation (working name). Detail codes default to **WOFF, BDRC** and can
+be replaced. No date inputs or time boundary apply; NULL feed dates, signed
+reversals and zero amounts remain included. It preserves the TGIACCD extract's
+twelve source columns and rejects API-truncated results before saving. It does
+not yet match agency/Workday data or combine the collections-hold report.
+See [W&F extract configuration and examples](../../query/AR/activity/README.md#wf_mines_balance_transactionssql-wf---mines-balance-recon-source).
+
 **1305 Graduate Contract Recon** reads Workday and Banner files and produces
 document, CWID, period and combined activity views, plus the original source tabs.
 The **Grad Contract Sponsor** view receives this workflow with uploads only;

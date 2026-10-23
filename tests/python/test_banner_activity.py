@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
+from shared.insights.banner_activity import (
+    BannerActivityParameters, BannerDetailCodeParameters, extract_banner_activity,
+)
 from shared.insights.client import InsightsAPIError
 
 
@@ -16,6 +18,21 @@ COUNT = "__activity_row_count"
 
 
 class BannerActivityParameterTests(unittest.TestCase):
+    def test_all_date_codes_normalize_and_reject_empty_injected_or_date_templates(self):
+        params = BannerDetailCodeParameters.from_inputs(' woff, BDRC, WOFF ')
+        self.assertEqual(params.detail_codes, ('WOFF', 'BDRC'))
+        self.assertEqual(params.render_sql('WHERE {{detail_codes}}'),
+                         "WHERE t.tbraccd_detail_code IN ('WOFF', 'BDRC')")
+        for value in ('', 'WOFF,', "WOFF'); DELETE FROM x; --", None, ['WOFF']):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                BannerDetailCodeParameters.from_inputs(value)
+        for codes in ((), ['WOFF'], ('woff',), ("WOFF'",)):
+            with self.subTest(codes=codes), self.assertRaises(ValueError):
+                BannerDetailCodeParameters(codes)
+        for template in ('SELECT 1', TEMPLATE, '{{detail_codes}} {{unknown}}'):
+            with self.subTest(template=template[-25:]), self.assertRaises(ValueError):
+                params.render_sql(template)
+
     def test_normalizes_codes_and_renders_actual_template(self):
         params = BannerActivityParameters.from_inputs("2024-02-29", "2026-12-31", " tpdt, TDLE,z0le, TPDT ")
         self.assertEqual(params.detail_codes, ("TPDT", "TDLE", "Z0LE"))

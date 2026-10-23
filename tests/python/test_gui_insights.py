@@ -26,7 +26,7 @@ from shared.insights.config import (
     load_department_profiles,
 )
 from shared.insights.query_catalog import QUERIES, get_query
-from shared.insights.banner_activity import BannerActivityParameters
+from shared.insights.banner_activity import BannerActivityParameters, BannerDetailCodeParameters
 
 
 def profiles():
@@ -85,6 +85,9 @@ class InsightsQueryCatalogTests(unittest.TestCase):
                 if query.requires_activity_parameters:
                     activity = BannerActivityParameters.from_inputs("2026-01-01", "2026-03-31", "TPDT, TDLE, Z0LE")
                     self.assertNotIn("{{", query.render_sql(activity=activity))
+                elif query.default_detail_codes:
+                    codes = BannerDetailCodeParameters(query.default_detail_codes)
+                    self.assertNotIn("{{", query.render_sql(detail_codes=codes))
                 elif query.term_variable is None:
                     self.assertNotIn("{{", sql)
                 else:
@@ -119,6 +122,78 @@ class InsightsConnectionServiceTests(unittest.TestCase):
 
     def run_action(self, action, mode=WorkflowMode.TEST):
         return run_insights_connection(WorkflowContext("insights_connection", {"action": action}, mode))
+
+    def test_wf_all_date_export_uses_defaults_or_replacement_codes_and_removes_count(self):
+        for codes, expected in ((None, "IN ('WOFF', 'BDRC')"), (' hlth, HLTH ', "IN ('HLTH')")):
+            with self.subTest(codes=codes), tempfile.TemporaryDirectory() as directory:
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.run_sql.return_value = pd.DataFrame({
+                    "'Amount'": [-10, 0], "'Feed Date'": ['1900-01-01', None],
+                    'Report Row Count': [2, 2],
+                })
+                output = Path(directory) / 'wf.xlsx'
+                params = {'action': 'query_export', 'query_id': 'wf_mines_balance_transactions',
+                          'output_path': str(output)}
+                if codes is not None:
+                    params['detail_codes'] = codes
+                with patch('app.gui.services.insights.load_access_configuration') as policy, patch(
+                    'app.gui.services.insights.build_authenticated_client', return_value=(client, 'cached'),
+                ):
+                    policy.return_value.is_administrator.return_value = True
+                    result = run_insights_connection(WorkflowContext('insights_query_export', params, WorkflowMode.TEST))
+                self.assertTrue(result.success, result.message)
+                sql = client.run_sql.call_args.args[0]
+                self.assertIn(expected, sql)
+                self.assertNotIn('CAST(', sql)
+                self.assertNotIn('{{', sql)
+                client.run_sql_file.assert_not_called()
+                with closing(load_workbook(output)) as book:
+                    self.assertEqual(book.active.max_column, 2)
+                    self.assertEqual(book.active['A2'].value, -10)
+                    self.assertEqual(book.active['B2'].value, datetime(1900, 1, 1))
+                    self.assertIsNone(book.active['B3'].value)
+
+    def test_wf_missing_invalid_capped_and_empty_results_use_existing_completeness_control(self):
+        for frame, success in (
+            (pd.DataFrame({"'Amount'": [1], 'Report Row Count': [2]}), False),
+            (pd.DataFrame({"'Amount'": [1]}), False),
+            (pd.DataFrame({"'Amount'": [1], 'Report Row Count': [True]}), False),
+            (pd.DataFrame(columns=["'Amount'", 'Report Row Count']), True),
+        ):
+            with self.subTest(success=success, columns=list(frame.columns)), tempfile.TemporaryDirectory() as directory:
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.run_sql.return_value = frame
+                output = Path(directory) / 'wf.xlsx'
+                with patch('app.gui.services.insights.load_access_configuration') as policy, patch(
+                    'app.gui.services.insights.build_authenticated_client', return_value=(client, 'cached'),
+                ):
+                    policy.return_value.is_administrator.return_value = True
+                    result = run_insights_connection(WorkflowContext('insights_query_export', {
+                        'action': 'query_export', 'query_id': 'wf_mines_balance_transactions',
+                        'output_path': str(output),
+                    }, WorkflowMode.TEST))
+                self.assertEqual(result.success, success, result.message)
+                self.assertEqual(output.exists(), success)
+
+    def test_wf_invalid_codes_dates_or_non_admin_stop_before_authentication(self):
+        for overrides, admin in (({'detail_codes': ''}, True),
+                                 ({'detail_codes': "WOFF'); DELETE FROM x; --"}, True),
+                                 ({'start_date': '1900-01-01'}, True), ({}, False)):
+            with self.subTest(overrides=overrides, admin=admin), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'wf.xlsx'
+                with patch('app.gui.services.insights.load_access_configuration') as policy, patch(
+                    'app.gui.services.insights.build_authenticated_client',
+                ) as build:
+                    policy.return_value.is_administrator.return_value = admin
+                    result = run_insights_connection(WorkflowContext('insights_query_export', {
+                        'action': 'query_export', 'query_id': 'wf_mines_balance_transactions',
+                        'output_path': str(output), **overrides,
+                    }, WorkflowMode.TEST))
+                self.assertFalse(result.success)
+                build.assert_not_called()
+                self.assertFalse(output.exists())
 
     def test_activity_export_uses_existing_auth_and_preserves_plain_workbook(self):
         client = MagicMock()
@@ -454,6 +529,38 @@ class ConnectionsPageTests(unittest.TestCase):
         self.assertEqual(params["end_date"], "2026-12-31")
         self.assertEqual(params["detail_codes"], "HLTH, TPDT")
         self.assertNotIn("term_code", params)
+
+    def test_wf_defaults_no_date_inputs_and_parameters_reach_background_task(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData('wf_mines_balance_transactions'))
+        self.assertTrue(self.page.activity_inputs.isHidden())
+        self.assertTrue(self.page.term.isHidden())
+        self.assertFalse(self.page.all_date_inputs.isHidden())
+        self.assertEqual(self.page.all_date_detail_codes.text(), 'WOFF, BDRC')
+        self.page.all_date_detail_codes.setText(' bdrc, woff, BDRC ')
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            QFileDialog, 'getSaveFileName', return_value=(str(Path(directory) / 'wf.xlsx'), ''),
+        ):
+            self.page._run('query_export')
+        params = self.executor.run_async.call_args.args[1].parameters
+        self.assertEqual(params['detail_codes'], 'BDRC, WOFF')
+        self.assertNotIn('start_date', params)
+        self.assertNotIn('end_date', params)
+        self.assertFalse(self.page.all_date_inputs.isEnabled())
+
+    def test_wf_manual_codes_survive_switching_and_blank_codes_cannot_export(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData('wf_mines_balance_transactions'))
+        self.page.all_date_detail_codes.setText('HLTH')
+        self.page.queries.setCurrentIndex(self.page.queries.findData('banner_activity'))
+        self.assertTrue(self.page.all_date_inputs.isHidden())
+        self.assertEqual(self.page.detail_codes.text(), '')
+        self.page.queries.setCurrentIndex(self.page.queries.findData('wf_mines_balance_transactions'))
+        self.assertEqual(self.page.all_date_detail_codes.text(), 'HLTH')
+        self.page.all_date_detail_codes.clear()
+        with patch.object(QMessageBox, 'warning') as warning, patch.object(QFileDialog, 'getSaveFileName') as save:
+            self.page._run('query_export')
+        warning.assert_called_once()
+        save.assert_not_called()
+        self.executor.run_async.assert_not_called()
 
     def test_invalid_activity_selection_stops_before_file_picker(self):
         self.page.queries.setCurrentIndex(self.page.queries.findData("banner_activity"))
