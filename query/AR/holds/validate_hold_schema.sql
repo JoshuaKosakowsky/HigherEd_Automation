@@ -1,4 +1,4 @@
-/* Read-only required-column check for delinquency outreach and RH review. */
+/* Read-only required-column check for delinquency, collections and RH review. */
 
 WITH required_columns (table_schema, table_name, column_name) AS (
     VALUES
@@ -10,6 +10,7 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('TAISMGR', 'TBRACCD', 'DETAIL_CODE'),
         ('TAISMGR', 'TBRACCD', 'BALANCE'),
         ('TAISMGR', 'TBRACCD', 'DUE_DATE'),
+        ('TAISMGR', 'TBRACCD', 'FEED_DATE'),
         ('TAISMGR', 'TBBDETC', 'DETAIL_CODE'),
         ('TAISMGR', 'TBBDETC', 'TYPE_IND'),
         ('SATURN', 'SGBSTDN', 'PIDM'),

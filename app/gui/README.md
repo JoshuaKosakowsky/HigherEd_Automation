@@ -319,6 +319,15 @@ Transact payment-arrangement errors. See
 [`query/AR/holds/README.md`](../../query/AR/holds/README.md) for the balance and
 hold-date definitions and first-run reconciliation requirements.
 
+In 0.19.0, administrators can choose **Holds — Collections tracking** for
+accounts with CO holds ending strictly after today. It exports one row per
+account using the latest qualifying hold from date, including zero/credit
+balances, all-term total balance, latest account feed date and hold dates.
+No term or date inputs are needed. Missing financial data stays blank for
+review; feed date does not establish referral to the agency. The export checks
+the full source row count before saving. See
+[collections rules and acceptance examples](../../query/AR/holds/README.md#collections-tracking).
+
 The previous-month reports preserve the existing activity columns and payment
 detail-code list while selecting feed dates from the first of the previous
 month through the start of this month. The current-month queries keep their

@@ -62,6 +62,14 @@ class InsightsQuery:
 
 QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
+        "collections_tracking", "Holds", "Collections tracking",
+        "AR/holds/collections_tracking.sql",
+        "CO holds ending after today; one row per account using the latest from date. "
+        "Includes zero/credit balances, all-term net balance and latest account feed date. "
+        "Blank balances require review; feed date is not agency referral date.",
+        administrator_only=True, result_count_column="Report Row Count",
+    ),
+    InsightsQuery(
         "rh_delinquency", "Holds", "RH delinquency review",
         "AR/holds/rh_delinquency.sql",
         "All students with RH in the account delinquency field, including former students. "
