@@ -93,7 +93,7 @@ def apply_theme(application: QApplication) -> None:
         QLabel#error {{ color: {RED_FLANNEL}; padding: 4px 0; }}
         QLabel#status {{ background: {PALE_BLUE}; border-radius: 8px; padding: 14px; }}
         QFrame#card {{ background: {WHITE}; border: 1px solid {PALE_BLUE}; border-radius: 12px; }}
-        QFrame#workdayInputs {{ background: {PALE_BLUE}; border-left: 4px solid {BLASTER_BLUE}; border-radius: 8px; }}
+        QFrame#workdayInputs, QFrame#wfInputs {{ background: {PALE_BLUE}; border-left: 4px solid {BLASTER_BLUE}; border-radius: 8px; }}
         QFrame#bannerInputs {{ background: {PAGE}; border-left: 4px solid {LIGHT_BLUE}; border-radius: 8px; }}
         QFrame#workflowOutputs {{ background: {WHITE}; border: 1px solid {PALE_BLUE}; border-radius: 8px; }}
         QFrame#sidebar {{ background: {DARK_BLUE}; }}

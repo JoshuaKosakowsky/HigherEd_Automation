@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -21,6 +20,7 @@ from shared.insights.browser_auth import InsightsBrowserAuthenticationError
 from shared.insights.client import InsightsAPIError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
 from shared.insights.query_catalog import get_query
+from shared.insights.report_results import checked_report_result, prepare_excel_dates as _prepare_excel_dates
 from shared.insights.session_auth import (
     InsightsSessionError, build_authenticated_client, clear_cached_session,
 )
@@ -34,54 +34,6 @@ EXCEL_MAX_DATA_ROWS = 1_048_575
 
 def _login_required() -> str:
     raise InsightsSessionError("Sign-in is required. Click Connect and sign in.")
-
-
-def _excel_calendar_date(value: object) -> date | None:
-    """Keep valid Banner dates beyond pandas' nanosecond timestamp range."""
-    if pd.isna(value):
-        return None
-    if isinstance(value, datetime):
-        parsed = value
-    elif isinstance(value, date):
-        return value
-    elif isinstance(value, str):
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    else:
-        raise TypeError("Expected an ISO calendar date.")
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc)
-    return parsed.date()
-
-
-def _prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Prepare feed timestamps and account calendar dates as Excel date cells."""
-    date_columns = [
-        column for column in dataframe.columns
-        if isinstance(column, str) and (
-            column.strip("'\"").endswith("Feed Date")
-            or column.strip("'\"") in {"Account Activity Date", "From Date", "To Date"}
-        )
-    ]
-    if not date_columns:
-        return dataframe
-
-    export = dataframe.copy()
-    for column in date_columns:
-        try:
-            if column.strip("'\"") in {"Account Activity Date", "From Date", "To Date"}:
-                # Native dates support Banner's far-future hold end dates (9999).
-                export[column] = pd.Series(
-                    [_excel_calendar_date(value) for value in export[column]],
-                    index=export.index, dtype=object,
-                )
-            else:
-                dates = pd.to_datetime(export[column], format="ISO8601", utc=True)
-                export[column] = dates.dt.tz_localize(None)
-        except (TypeError, ValueError):
-            raise InsightsConfigurationError(
-                f"Insights returned an unreadable {column} value; no workbook was saved."
-            ) from None
-    return export
 
 
 def _export_query(dataframe: pd.DataFrame, output_path: Path) -> None:
@@ -206,15 +158,7 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                         if query.term_variable or detail_codes is not None else client.run_sql_file(query.sql_path)
                     )
                 if query.result_count_column is not None:
-                    column = query.result_count_column
-                    if column not in result.columns or any(
-                        str(value) != str(len(result)) for value in result[column]
-                    ):
-                        raise InsightsAPIError(
-                            "Insights returned incomplete or invalid report results. "
-                            "Run and export the report in Insights. No workbook was saved."
-                        )
-                    result = result.drop(columns=[column])
+                    result = checked_report_result(result, query.result_count_column)
                 _export_query(result, output_path)
                 return WorkflowResult(
                     True,

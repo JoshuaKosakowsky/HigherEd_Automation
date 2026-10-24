@@ -107,6 +107,13 @@ Detail codes are entered explicitly with no defaults. See the
 [1305 workflow instructions](data_processing/graduate_contract_recon/README.md)
 for matching rules and the permission grant needed in existing shared policies.
 
+**W&F - Mines Balance Recon** provides an early source review workbook with
+separate Insights hold/transaction inputs and batch Williams and Fudge uploads.
+Administrators can query both Insights sources directly from PROD; staff use
+downloaded reports. Each W&F worksheet receives its own tab, with a source
+index for review. Matching rules are not implemented yet. See the
+[W&F workflow guide](data_processing/wf_mines_balance_recon/README.md).
+
 Administrators can run **Historical Trends** with direct PROD Insights extraction,
 checked monthly pages, and separate annual source CSVs. It uses July–June Feed
 Dates and preserves the existing analysis. **Refresh Banner Detail Codes**

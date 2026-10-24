@@ -252,6 +252,17 @@ twelve source columns and rejects API-truncated results before saving. It does
 not yet match agency/Workday data or combine the collections-hold report.
 See [W&F extract configuration and examples](../../query/AR/activity/README.md#wf_mines_balance_transactionssql-wf---mines-balance-recon-source).
 
+In **0.21.0**, **Accounts Receivable → W&F - Mines Balance Recon** provides
+an early source review workflow. The Insights section has separate active-CO
+hold and WOFF/BDRC report uploads. Administrators can replace both uploads with
+direct PROD queries; W&F Excel files are uploaded in a separate batch section
+in either mode. Every agency worksheet receives its own tab, alongside Active
+CO Holds, Banner Detail Codes and a Sources index. There is no matching or
+balance comparison yet. Grant `wf_mines_balance_recon` to the intended staff
+view through the existing access editor. See the
+[W&F technical guide](../../data_processing/wf_mines_balance_recon/README.md)
+for supported inputs, formula snapshots and validation boundaries.
+
 **1305 Graduate Contract Recon** reads Workday and Banner files and produces
 document, CWID, period and combined activity views, plus the original source tabs.
 The **Grad Contract Sponsor** view receives this workflow with uploads only;
