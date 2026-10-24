@@ -74,24 +74,37 @@ class WorkflowDetailPage(QScrollArea):
             if parameter.default_factory is not None:
                 parameter = replace(parameter, default=parameter.default_factory())
             parameter_layout = form_layout
-            if definition.workflow_id in {"graduate_contract_recon", "trends"}:
+            if definition.workflow_id in {"graduate_contract_recon", "trends", "wf_mines_balance_recon"}:
                 group = ("Outputs" if parameter.key == "output_file" else
+                         "W&F" if parameter.key == "wf_files" else
                          "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner")
                 if group not in input_groups:
                     frame = QFrame()
-                    frame.setObjectName({"Workday": "workdayInputs", "Banner": "bannerInputs", "Outputs": "workflowOutputs"}[group])
+                    frame.setObjectName({"Workday": "workdayInputs", "Banner": "bannerInputs",
+                                         "W&F": "wfInputs", "Outputs": "workflowOutputs"}[group])
                     group_layout = QVBoxLayout(frame)
                     group_layout.setContentsMargins(18, 16, 18, 16)
                     group_layout.setSpacing(10)
-                    group_layout.addWidget(label({"Workday": "Workday uploads", "Banner": "Banner data", "Outputs": "Outputs"}[group], "section"))
+                    group_layout.addWidget(label({
+                        "Workday": "Workday uploads", "W&F": "Williams and Fudge uploads",
+                        "Banner": "Insights data" if definition.workflow_id == "wf_mines_balance_recon" else "Banner data",
+                        "Outputs": "Outputs",
+                    }[group], "section"))
                     form_layout.addWidget(frame)
                     input_groups[group] = group_layout
                     if group == "Banner":
-                        group_layout.addWidget(label("Banner data source", "field"))
+                        group_layout.addWidget(label(
+                            "Insights data source" if definition.workflow_id == "wf_mines_balance_recon" else "Banner data source",
+                            "field",
+                        ))
                         self.recon_source = QComboBox()
-                        self.recon_source.setAccessibleName("Banner data source")
+                        self.recon_source.setAccessibleName(
+                            "Insights data source" if definition.workflow_id == "wf_mines_balance_recon" else "Banner data source"
+                        )
                         self.recon_source.addItem(
-                            "Upload annual TGIACCD files" if definition.workflow_id == "trends" else "Upload Banner Insights file",
+                            "Upload annual TGIACCD files" if definition.workflow_id == "trends" else
+                            "Upload both Insights reports" if definition.workflow_id == "wf_mines_balance_recon" else
+                            "Upload Banner Insights file",
                             MANUAL_SOURCE,
                         )
                         if is_administrator:
@@ -228,6 +241,8 @@ class WorkflowDetailPage(QScrollArea):
             self.definition.workflow_id == "refund_review" and key in ("transaction_file", "context_file")
         ) or (
             self.definition.workflow_id in {"graduate_contract_recon", "trends"} and key == "banner_file"
+        ) or (
+            self.definition.workflow_id == "wf_mines_balance_recon" and key in {"holds_file", "activity_file"}
         )
 
     def _update_production_warning(self) -> None:
@@ -240,6 +255,8 @@ class WorkflowDetailPage(QScrollArea):
         return (self.definition.workflow_id == "graduate_contract_recon" and key in {
             "start_date", "end_date", "detail_codes"}) or (
             self.definition.workflow_id == "trends" and key in {"first_fiscal_year", "last_fiscal_year"}
+        ) or (
+            self.definition.workflow_id == "wf_mines_balance_recon" and key == "detail_codes"
         )
 
     def _update_source(self) -> None:
@@ -292,7 +309,10 @@ class WorkflowDetailPage(QScrollArea):
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         if self._source_control is not None:
             source_label = "Run SQL from PROD Insights" if self._source_control.currentData() == SQL_SOURCE else self._source_control.currentText()
-            form.addRow(label("Refund data source" if self.refund_source is not None else "Banner data source", "field"), label(source_label))
+            source_heading = ("Refund data source" if self.refund_source is not None else
+                              "Insights data source" if self.definition.workflow_id == "wf_mines_balance_recon" else
+                              "Banner data source")
+            form.addRow(label(source_heading, "field"), label(source_label))
         if self.textbook_step is not None:
             form.addRow(label("Workflow step", "field"), label(self.textbook_step.currentText()))
         for parameter in self.definition.parameters:

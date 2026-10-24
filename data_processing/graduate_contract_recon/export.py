@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
 import re
-import tempfile
 from math import ceil
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,6 +13,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from data_processing.shared.xlsx_output_format import apply_default_font, format_table_columns
 from shared.cancellation import CancellationToken
+from data_processing.shared.workbook_output import save_new_workbook, validate_output
 from .reconciliation import COMBINED_HEADERS, CWID_HEADERS, DOC_HEADERS, PERIOD_HEADERS, Reconciliation
 from .worktags import StudentWorktags, WORKTAG_HEADERS
 
@@ -40,15 +39,6 @@ def combined_output_row(row: list[object]) -> list[object]:
     reference = "" if str(row[18]).startswith("Other Workday activity") else str(row[3])
     values[3] = reference if re.fullmatch(r"[0-9]{6,7}", reference) else ""
     return values
-
-
-def validate_output(path: Path, inputs: tuple[Path, ...] = ()) -> None:
-    if path.suffix.lower() != ".xlsx" or not path.is_absolute():
-        raise ValueError("Choose an absolute .xlsx output path.")
-    if not path.parent.is_dir():
-        raise ValueError("The output folder does not exist.")
-    if path.exists() or path.resolve() in {source.resolve() for source in inputs}:
-        raise ValueError("Output already exists or is a source file. Choose a new filename.")
 
 
 def export_reconciliation(
@@ -149,25 +139,6 @@ def export_reconciliation(
                 if lines > 1:
                     ws.row_dimensions[row[0].row].height = min(409, lines * 18)
 
-        with tempfile.TemporaryDirectory(prefix=".1305-recon-", dir=output.parent) as directory:
-            staging = Path(directory) / "reconciliation.xlsx"
-            book.save(staging)
-
-            def publish():
-                created = False
-                try:
-                    with output.open("xb") as destination:
-                        created = True
-                        with staging.open("rb") as source:
-                            shutil.copyfileobj(source, destination)
-                except Exception:
-                    if created:
-                        output.unlink(missing_ok=True)
-                    raise
-
-            if cancellation:
-                cancellation.publish(publish)
-            else:
-                publish()
+        save_new_workbook(book, output, cancellation=cancellation)
     finally:
         book.close()

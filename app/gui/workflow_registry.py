@@ -15,6 +15,7 @@ from data_processing.population_testing.config import (
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode
 from app.gui.services.canadian_tax import run_canadian_tax
 from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
+from app.gui.services.wf_mines_balance_recon import run_wf_mines_balance_recon
 from app.gui.services.population_testing import run_population_testing
 from app.gui.services.refunds import run_refund_review
 from app.gui.services.trends import run_trends, run_refresh_detail_codes
@@ -292,6 +293,30 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
                 help_text="A new workbook is created. Existing files are never overwritten.",
             ),
+        ),
+    ),
+    WorkflowDefinition(
+        workflow_id="wf_mines_balance_recon", name="W&F - Mines Balance Recon",
+        description="Early source review: collect active CO holds, all-date Banner detail-code activity, and every worksheet from your W&F uploads into one workbook. Matching rules will follow.",
+        category="Accounts Receivable", runner=run_wf_mines_balance_recon,
+        cancellable=True,
+        production_warning="Reads both source reports from PROD Insights. W&F files must still be uploaded. Saves a source review workbook without changing either system.",
+        parameters=(
+            ParameterDefinition(key="holds_file", label="Active CO holds report", kind=ParameterKind.INPUT_FILE,
+                file_types=(("Insights export", "*.xlsx *.xlsm *.csv"),),
+                help_text="Upload the complete Collections tracking report from Insights."),
+            ParameterDefinition(key="activity_file", label="WOFF / BDRC transaction report", kind=ParameterKind.INPUT_FILE,
+                file_types=(("Insights export", "*.xlsx *.xlsm *.csv"),),
+                help_text="Upload the complete all-date W&F transaction extract. Uploads retain all supplied rows."),
+            ParameterDefinition(key="detail_codes", label="Banner detail codes (comma-separated)", kind=ParameterKind.TEXT,
+                default="WOFF, BDRC", help_text="Direct query defaults. Editable; all dates, including blank feed dates."),
+            ParameterDefinition(key="wf_files", label="Williams and Fudge files", kind=ParameterKind.MULTI_INPUT_FILE,
+                file_types=(("Excel workbooks", "*.xlsx *.xlsm"),),
+                help_text="Browse or drop several files at once; add more batches as needed. Every worksheet becomes a separate output tab. Convert older XLS files to XLSX first."),
+            ParameterDefinition(key="output_file", label="Save source review as", kind=ParameterKind.OUTPUT_FILE,
+                default_factory=lambda: PROJECT_ROOT / "data" / f"WF_Mines_Balance_Recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
+                help_text="Choose a new filename in an approved folder. Source files and existing results are never overwritten."),
         ),
     ),
     WorkflowDefinition(
