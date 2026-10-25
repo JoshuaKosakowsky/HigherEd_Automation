@@ -10,16 +10,16 @@ accounts, determine agency status, or change Banner or W&F records.
 The GUI has three separate sections:
 
 - **Insights data**: upload the complete **Collections tracking** report and
-  **W&F - Mines Balance Recon transactions** report. Both XLSX/XLSM and UTF-8
-  CSV exports are supported. The two matching source tables are required;
+  **W&F - Mines Balance Recon transactions** report. CSV, XLS, XLSX and XLSM
+  exports are supported. The two matching source tables are required;
   the reader allows up to 30 title/header rows and rejects ambiguous tables.
-- **Williams and Fudge uploads**: select/drop several XLSX/XLSM workbooks at
+- **Williams and Fudge uploads**: select/drop several CSV, XLS, XLSX or XLSM files at
   once. Additional browse/drop batches append to the list. Repeated paths are
   not added twice. Files with the same name in different folders remain
   separate. In 0.22.0, recognized report tables are concatenated into the two
   agency tabs described below; other worksheets remain separate. Hidden and
   empty worksheets are retained as well.
-  Older XLS files must first be converted to XLSX in Excel.
+  Files can be mixed in one batch. No manual conversion is needed.
 - **Outputs**: choose an approved existing folder and a new XLSX filename.
 
 Administrators can instead choose **Run SQL from PROD Insights** in the
@@ -59,7 +59,7 @@ including leading zeros and IDs outside the current 12003–12561 range:
 - `Report - AccountStatusReport_NoBreakout - 12003-2026-09-30.xlsx`
 - `Report - ReturnedAccounts- 12561-2026-09-30.xlsx`
 
-XLSM equivalents are accepted. Filenames that contain a known report type but
+CSV, XLS and XLSM equivalents are accepted. Filenames that contain a known report type but
 have malformed creditor/date components fail explicitly. Otherwise unknown
 reports remain on separate source tabs and are marked unclassified in Sources.
 There is no demographic parsing or matching in this version.
@@ -125,12 +125,38 @@ such as text `0000123`; the app does not infer a financial schema or header
 location for arbitrary W&F worksheets. Charts, drawings, macros, workbook links,
 conditional formatting and Excel calculation models are not copied.
 
-Formula cells use their saved cached values, preserving the source snapshot
+Modern Excel formula cells use their saved cached values, preserving the source snapshot
 without moving formulas that could reference renamed worksheets or external
 workbooks. A formula without a cached value stops the run and asks for an
 Excel-recalculated/saved source or a values-only copy. Cached values are not
 independently recalculated or certified current. Text starting with `=` stays
 literal text. Source files remain untouched.
+
+### Input format handling (0.23.0)
+
+CSV is read directly using the standard library. UTF-8 (with/without BOM),
+UTF-16 with BOM, and Windows-1252 exports are supported. Blank lines keep their
+physical row positions so fee metadata remains on row 4 and headers on row 6.
+CSV identifiers/text remain text (including leading zeros and literal `=`);
+recognized agency monetary columns become numeric when their values can be
+parsed without guessing. Unrecognized amount text remains supplied text for
+review, not zero.
+
+Legacy binary XLS files are read directly with `xlrd==2.0.2`, without rewriting
+or converting the employee's file. Worksheet names, saved values, Excel dates
+(including 1904-epoch workbooks), number formats, merged ranges and row/column
+sizes are carried into the source review. Legacy fonts/decorative styling are
+not guaranteed. XLS formulas expose their saved values rather than formula
+definitions; unlike modern Excel sources, this reader cannot independently
+detect a missing formula cache. Use the originally saved report and check
+source freshness. XLSX/XLSM keep the existing modern Excel path and formula
+cache checks. No macros are executed or copied into output.
+
+Existing workstations must rerun the normal `setup.ps1` once after updating to
+install the XLS reader. The app does not install packages during a staff run.
+The GUI picker accepts all four formats for both Insights and W&F inputs;
+output is still a new XLSX workbook. Synthetic regression fixtures include real
+BIFF8 XLS data, not modern workbooks renamed to XLS.
 
 The workflow supports cancellation before publication, stages the complete
 workbook and publishes using exclusive creation. Errors/cancellation do not

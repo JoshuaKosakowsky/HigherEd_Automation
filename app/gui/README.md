@@ -255,7 +255,7 @@ See [W&F extract configuration and examples](../../query/AR/activity/README.md#w
 In **0.21.0**, **Accounts Receivable → W&F - Mines Balance Recon** provides
 an early source review workflow. The Insights section has separate active-CO
 hold and WOFF/BDRC report uploads. Administrators can replace both uploads with
-direct PROD queries; W&F Excel files are uploaded in a separate batch section
+direct PROD queries; W&F source files are uploaded in a separate batch section
 in either mode. From **0.22.0**, AccountStatusReport_NoBreakout files are
 concatenated into **W&F Collections**, with creditor IDs, Fees/No Fees type and
 source filenames. ReturnedAccounts files are concatenated into **W&F Returned**
@@ -267,6 +267,11 @@ balance comparison yet. Grant `wf_mines_balance_recon` to the intended staff
 view through the existing access editor. See the
 [W&F technical guide](../../data_processing/wf_mines_balance_recon/README.md)
 for supported inputs, formula snapshots and validation boundaries.
+
+Release **0.23.0** accepts **CSV, XLS, XLSX and XLSM** directly for both Insights
+uploads and the W&F batch. No manual XLS conversion is required. Existing
+workstations rerun `setup.ps1` once after updating to install the XLS reader;
+the output stays XLSX.
 
 **1305 Graduate Contract Recon** reads Workday and Banner files and produces
 document, CWID, period and combined activity views, plus the original source tabs.
