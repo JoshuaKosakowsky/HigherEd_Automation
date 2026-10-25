@@ -76,7 +76,7 @@ class WFMinesBalanceTests(unittest.TestCase):
     def context(self, mode=None, cancellation=None):
         return WorkflowContext('wf_mines_balance_recon', self.params, mode, cancellation=cancellation)
 
-    def test_manual_combines_every_worksheet_preserves_values_formats_and_sources(self):
+    def test_manual_combines_every_worksheet_preserves_values_formats_without_sources_tab(self):
         originals = {path: path.read_bytes() for path in (self.holds, self.activity, self.agency)}
         with patch('app.gui.services.wf_mines_balance_recon.build_authenticated_client') as auth:
             result = run_wf_mines_balance_recon(self.context())
@@ -84,7 +84,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         self.assertTrue(result.success)
         book = load_workbook(self.output)
         try:
-            self.assertEqual(len(book.sheetnames), 6)
+            self.assertEqual(len(book.sheetnames), 5)
             self.assertEqual(book.sheetnames[:2], ['Active CO Holds', 'Banner Detail Codes'])
             self.assertEqual(book['Active CO Holds']['H2'].value, datetime(9999, 12, 31))
             self.assertEqual(book['Banner Detail Codes']['E2'].value, -25)
@@ -99,9 +99,8 @@ class WFMinesBalanceTests(unittest.TestCase):
             self.assertIn('A5:B5', str(agency.merged_cells))
             self.assertEqual(agency.freeze_panes, 'A2')
             self.assertTrue(all(sheet.sheet_state == 'visible' for sheet in book))
-            sources = list(book['Sources'].values)
-            self.assertEqual(sources[-1][3], 'Empty')
-            self.assertIn('coverage unconfirmed', sources[1][2])
+            self.assertNotIn('Sources', book.sheetnames)
+            self.assertTrue(book.sheetnames[-1].endswith('Empty'))
             self.assertFalse(any(sheet.tables for sheet in book))
         finally:
             book.close()
@@ -119,8 +118,8 @@ class WFMinesBalanceTests(unittest.TestCase):
         run_wf_mines_balance_recon(self.context())
         book = load_workbook(self.output)
         try:
-            self.assertEqual(len(book.sheetnames), 5)
-            self.assertEqual(len({name.casefold() for name in book.sheetnames}), 5)
+            self.assertEqual(len(book.sheetnames), 4)
+            self.assertEqual(len({name.casefold() for name in book.sheetnames}), 4)
             self.assertTrue(all(len(name) <= 31 and '[' not in name for name in book.sheetnames))
             self.assertEqual([book[name]['A2'].value for name in book.sheetnames[2:4]], ['one', 'two'])
         finally:
@@ -148,12 +147,13 @@ class WFMinesBalanceTests(unittest.TestCase):
             self.assertEqual({row[-3] for row in collections[1:]}, {str(12003 + index) for index in range(8)})
             self.assertTrue(all(row[0] == '0000123' for row in collections[1:]))
             self.assertTrue(all(row[-1] in {path.name for path in files} for row in collections[1:]))
-            self.assertEqual(len(book.sheetnames), 8)
-            self.assertTrue(any('Unclassified report' in str(row[-1]) for row in list(book['Sources'].values)[1:]))
+            self.assertEqual(len(book.sheetnames), 7)
+            self.assertNotIn('Sources', book.sheetnames)
+            self.assertEqual(book[book.sheetnames[4]]['A2'].value, '0000123')
         finally:
             book.close()
 
-    def test_matching_sheets_from_one_report_are_both_imported_and_mapped(self):
+    def test_matching_sheets_from_one_report_are_both_imported(self):
         from test_wf_agency_reports import agency_file
         path = agency_file(self.root)
         source = load_workbook(path)
@@ -165,8 +165,8 @@ class WFMinesBalanceTests(unittest.TestCase):
         book = load_workbook(self.output)
         try:
             self.assertEqual(book['W&F Collections'].max_row, 3)
-            manifest = [row for row in list(book['Sources'].values)[1:] if row[0] == 'W&F Collections']
-            self.assertEqual({row[3] for row in manifest}, {'Report', 'Second report'})
+            self.assertEqual([row[-1] for row in list(book['W&F Collections'].values)[1:]], [path.name, path.name])
+            self.assertEqual(len(book.sheetnames), 3)
         finally:
             book.close()
 
@@ -180,8 +180,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         try:
             self.assertEqual(book['W&F Collections']['I2'].value, 'unspecified')
             self.assertEqual(book['W&F Collections'].max_row, 2)
-            self.assertTrue(any('Fee classification unspecified' in str(row[-1])
-                                for row in list(book['Sources'].values)[1:]))
+            self.assertNotIn('Sources', book.sheetnames)
         finally:
             book.close()
 
@@ -194,6 +193,69 @@ class WFMinesBalanceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     run_wf_mines_balance_recon(self.context())
                 self.assertFalse(self.output.exists())
+
+    def test_four_report_tabs_sort_real_dates_descending_without_times_or_sources(self):
+        from test_wf_agency_reports import agency_file
+        holds = pd.concat([holds_frame()] * 3, ignore_index=True)
+        holds['CWID'] = ['H-old', 'H-new', 'H-blank']
+        holds['From Date'] = ['2098-12-31 10:00:00', '2099-01-02 14:30:00', None]
+        activity = pd.concat([activity_frame()] * 4, ignore_index=True)
+        activity["'ID'"] = ['T-old', 'T-new', 'T-blank', 'T-tie']
+        activity["'Feed Date'"] = ['2098-12-31 10:00:00', '2099-01-02 14:30:00', None, '2099-01-02 14:30:00']
+        write_frame(self.holds, holds)
+        write_frame(self.activity, activity)
+        collections = agency_file(self.root, rows=[
+            ['C-old', 'Synthetic', '12/31/2098 10:00:00', 100, 75, 25, None],
+            ['C-new', 'Synthetic', '1/2/2099 14:30:00', 100, 75, 25, None],
+            ['C-unknown', 'Synthetic', 'unknown date', 100, 75, 25, None],
+            ['C-earlier', 'Synthetic', '1/2/2099 09:00:00', 100, 75, 25, None],
+            ['C-blank', 'Synthetic', None, 100, 75, 25, None],
+        ], footer=False)
+        # Exercise the CSV parser too; string dates must not sort lexically.
+        book = load_workbook(collections)
+        csv_path = collections.with_suffix('.csv')
+        with csv_path.open('w', encoding='utf-8', newline='') as handle:
+            csv.writer(handle).writerows(book.active.values)
+        book.close()
+        returned = []
+        for creditor, account, return_date, count in (
+            ('12003', 'R-old', datetime(2098, 12, 31, 10), 1),
+            ('12004', 'R-new', datetime(2099, 1, 2, 14, 30), 5),
+            ('12005', 'R-mid', datetime(2099, 1, 1, 9), 2),
+        ):
+            path = agency_file(self.root, creditor, returned=True, rows=[
+                [account, 'Synthetic', 'CONSUMER-1', 100, 75, None, datetime(2098, 1, 1, 12), return_date, 'Synthetic reason'],
+            ])
+            book = load_workbook(path)
+            book.active['A8'] = f'Total Accounts:{count}'
+            book.save(path)
+            book.close()
+            returned.append(path)
+        self.params['wf_files'] = (csv_path, *returned)
+        result = run_wf_mines_balance_recon(self.context())
+        self.assertTrue(result.success)
+        self.assertNotIn('Sources', result.message)
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book.sheetnames, ['Active CO Holds', 'Banner Detail Codes', 'W&F Collections', 'W&F Returned'])
+            for name, expected, date_column in (
+                ('Active CO Holds', ['H-new', 'H-old', 'H-blank'], 'G'),
+                ('Banner Detail Codes', ['T-new', 'T-tie', 'T-old', 'T-blank'], 'J'),
+                ('W&F Collections', ['C-new', 'C-earlier', 'C-old', 'C-unknown', 'C-blank'], 'C'),
+                ('W&F Returned', ['R-new', 'R-mid', 'R-old'], 'H'),
+            ):
+                with self.subTest(tab=name):
+                    sheet = book[name]
+                    self.assertEqual([row[0] for row in list(sheet.values)[1:]], expected)
+                    for cell in sheet[date_column][1:]:
+                        if isinstance(cell.value, datetime):
+                            self.assertEqual(cell.value.time(), datetime.min.time())
+                            self.assertEqual(cell.number_format, 'yyyy-mm-dd')
+            self.assertEqual(book['W&F Collections']['C5'].value, 'unknown date')
+            self.assertEqual(book['Active CO Holds']['H2'].value, datetime(9999, 12, 31))
+            self.assertEqual(book['W&F Returned']['G2'].number_format, 'yyyy-mm-dd')
+        finally:
+            book.close()
 
     def test_source_or_existing_output_cannot_be_overwritten(self):
         self.output.write_bytes(b'existing output')

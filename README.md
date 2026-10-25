@@ -111,8 +111,9 @@ for matching rules and the permission grant needed in existing shared policies.
 separate Insights hold/transaction inputs and batch Williams and Fudge uploads.
 Administrators can query both Insights sources directly from PROD; staff use
 downloaded reports. Named agency reports are combined into W&F Collections
-and W&F Returned tabs; other worksheets remain separate, with a source index
-for review. Matching rules are not implemented yet. See the
+and W&F Returned tabs; other worksheets remain separate. The four report tabs
+sort newest to oldest with date-only values; no Sources tab is added.
+Matching rules are not implemented yet. See the
 [W&F workflow guide](data_processing/wf_mines_balance_recon/README.md).
 
 Administrators can run **Historical Trends** with direct PROD Insights extraction,

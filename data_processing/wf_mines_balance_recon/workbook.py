@@ -101,6 +101,50 @@ def _sheet_name(name: str, used: set[str]) -> str:
     return candidate
 
 
+def _report_date(value: object) -> datetime | date | None:
+    """Read Excel and CSV dates without imposing pandas' year-2262 limit."""
+    if pd.isna(value):
+        return None
+    if isinstance(value, (datetime, date)):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.strip())
+        except ValueError:
+            parsed = pd.to_datetime(value, errors='coerce')
+            return None if pd.isna(parsed) else parsed
+    return None
+
+
+def _ordered_report(frame: pd.DataFrame, date_header: str) -> pd.DataFrame:
+    """Sort actual dates descending, retaining missing/unreadable dates last.
+
+    Sort before removing times so same-day records retain chronological order.
+    Unreadable source text stays intact for review rather than becoming blank.
+    """
+    column = next(header for header in frame.columns if _header_key(header) == _header_key(date_header))
+    dates = [_report_date(value) for value in frame[column]]
+
+    def key(index):
+        value = dates[index]
+        if value is None:
+            return (0, 0, 0, 0, 0)
+        time = ((value.hour, value.minute, value.second, value.microsecond)
+                if isinstance(value, datetime) else (0, 0, 0, 0))
+        return (value.toordinal(), *time)
+
+    result = frame.iloc[sorted(range(len(frame)), key=key, reverse=True)].copy()
+    for header in result.columns:
+        if _header_key(header).endswith('date') or _header_key(header) == 'placement':
+            def date_only(value):
+                parsed = _report_date(value)
+                if isinstance(parsed, datetime):
+                    return parsed.date()
+                return parsed if parsed is not None else value
+            result[header] = result[header].map(date_only)
+    return result
+
+
 def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *, index: int | None = None) -> None:
     if len(frame) + 1 > 1_048_576 or len(frame.columns) > 16_384:
         raise ValueError('A source exceeds Excel worksheet limits. No workbook was saved.')
@@ -128,7 +172,7 @@ def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *
             dimension = sheet.column_dimensions[column[0].column_letter]
             dimension.width = max(dimension.width, 24)
     for column in sheet.iter_cols():
-        if column[0].value in {'Source File', 'File / Query', 'Import Notes'}:
+        if column[0].value == 'Source File':
             width = 65
             sheet.column_dimensions[column[0].column_letter].width = width
             for cell in column:
@@ -141,7 +185,7 @@ def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *
 
 def create_review_workbook(
     holds: pd.DataFrame, activity: pd.DataFrame, wf_files: tuple[Path, ...], output: Path,
-    *, source_labels: tuple[str, str], app_version: str,
+    *, app_version: str,
     cancellation: CancellationToken | None = None,
 ) -> int:
     """Create Insights and consolidated agency tabs, plus raw unknown sources.
@@ -153,18 +197,16 @@ def create_review_workbook(
     validate_output(output, wf_files)
     book = Workbook()
     book.remove(book.active)
-    manifest = []
-    used = {'active co holds', 'banner detail codes', 'w&f collections', 'w&f returned', 'sources'}
+    used = {'active co holds', 'banner detail codes', 'w&f collections', 'w&f returned'}
     grouped = {}
     agency_sheets = 0
     try:
-        for name, frame, report, source in (
-            ('Active CO Holds', holds, 'holds', source_labels[0]),
-            ('Banner Detail Codes', activity, 'activity', source_labels[1]),
+        for name, frame, report, date_header in (
+            ('Active CO Holds', holds, 'holds', 'From Date'),
+            ('Banner Detail Codes', activity, 'activity', 'Feed Date'),
         ):
-            frame = prepare_report(frame, report)
+            frame = _ordered_report(prepare_report(frame, report), date_header)
             _write_frame(book, name, frame, cancellation)
-            manifest.append([name, 'Insights', source, 'Report table', len(frame) + 1, ''])
         for path in wf_files:
             if cancellation:
                 cancellation.check()
@@ -175,8 +217,6 @@ def create_review_workbook(
                 grouped.setdefault(report.output_tab, []).append(imported.frame)
                 for detail in imported.sheets:
                     parsed_sheets.add(detail.sheet_name)
-                    manifest.append([report.output_tab, 'Williams and Fudge', path.name,
-                                     detail.sheet_name, detail.row_count + 1, detail.notes])
                     agency_sheets += 1
             source = open_source_workbook(path)
             cached = None
@@ -222,9 +262,6 @@ def create_review_workbook(
                         sheet.merge_cells(str(merged))
                     sheet.freeze_panes = original.freeze_panes
                     sheet.auto_filter.ref = original.auto_filter.ref
-                    manifest.append([name, 'Williams and Fudge', path.name, original.title, original.max_row,
-                                     'Additional worksheet preserved as supplied.' if report else
-                                     'Unclassified report preserved as supplied; no demographic parsing.'])
                     agency_sheets += 1
             finally:
                 source.close()
@@ -233,11 +270,8 @@ def create_review_workbook(
         for position, name in enumerate(('W&F Collections', 'W&F Returned'), 2):
             if name in grouped:
                 frame = pd.concat(grouped[name], ignore_index=True)
+                frame = _ordered_report(frame, 'Placement' if name == 'W&F Collections' else 'Return Date')
                 _write_frame(book, name, frame, cancellation, index=position)
-        index = pd.DataFrame(manifest, columns=[
-            'Output Tab', 'Source', 'File / Query', 'Original Worksheet', 'Rows Including Headers', 'Import Notes',
-        ])
-        _write_frame(book, 'Sources', index, cancellation)
         book.properties.title = 'W&F - Mines Balance Recon: source review'
         book.properties.description = f'App {app_version}. Source snapshots only; no matching or recon conclusions.'
         save_new_workbook(book, output, cancellation=cancellation)

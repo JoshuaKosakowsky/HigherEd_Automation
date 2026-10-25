@@ -76,7 +76,7 @@ class WFSourceFormatTests(unittest.TestCase):
         self.assertTrue(all(row[3:6] == (100, 75, 25) for row in rows[1:]))
         self.assertTrue(all(row[-2] == 'Fees' for row in rows[1:]))
         self.assertTrue(all(path.read_bytes() == data for path, data in originals.items()))
-        notes_tab = next(row[0] for row in list(book['Sources'].values)[1:] if row[3] == 'Notes')
+        notes_tab = next(name for name in book.sheetnames if name.startswith('WF '))
         self.assertEqual(book[notes_tab]['A2'].value, '=literal source text')
         self.assertEqual(book[notes_tab]['A2'].data_type, 's')
 

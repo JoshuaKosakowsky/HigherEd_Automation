@@ -49,7 +49,14 @@ authenticates to Insights and has no TEST/PROD execution setting.
 | W&F Collections | All supplied AccountStatusReport_NoBreakout tables, concatenated with creditor, fee type and source file |
 | W&F Returned | All supplied ReturnedAccounts tables, concatenated with creditor and source file |
 | WF file - worksheet (other worksheets) | Unclassified/additional source value snapshots, retaining their original formatting/layout |
-| Sources | Output-tab mapping, imported counts including headers, footer checks and review notes |
+
+From patch **0.23.3**, the four report tabs sort newest to oldest by From Date,
+Feed Date, Placement and Return Date, respectively. Date columns contain real
+Excel dates without times. Blank or unreadable sorting dates remain at the end;
+unreadable agency date text is retained for review. Sorting preserves source
+order for equal dates/times; agency/transaction timestamps determine order
+before times are removed. There is no Sources tab. Named agency rows retain
+their Source File column.
 
 ### Named agency reports (0.22.0)
 
@@ -62,13 +69,13 @@ including leading zeros and IDs outside the current 12003–12561 range:
 
 CSV, XLS and XLSM equivalents are accepted. Filenames that contain a known report type but
 have malformed creditor/date components fail explicitly. Otherwise unknown
-reports remain on separate source tabs and are marked unclassified in Sources.
+reports remain on separate source tabs.
 There is no demographic parsing or matching in this version.
 
 Known tables must have the supplied column headings on row 6. The parser maps
 by heading, tolerating whitespace/case and column order, but rejects missing,
 duplicate or unexpected report headings. All matching worksheets in a file
-are appended in source order; additional unrelated worksheets remain separate.
+are combined before sorting; additional unrelated worksheets remain separate.
 No fixed number of files or creditor whitelist is imposed, and duplicate account
 records across reports remain separate rows.
 
@@ -77,7 +84,7 @@ records across reports remain separate rows.
 `Source File`. Creditor comes from the filename, not row 4. Row 4 supplies the
 fee classification: WITH FEES → Fees, NO FEES → No Fees (singular FEE is also
 accepted). From patch 0.23.2, blank, unrecognized or conflicting fee labels
-produce the literal `unspecified` in Type and a source note, without failing
+produce the literal `unspecified` in Type, without failing
 the import. The other row-6 schema and financial completeness checks remain.
 
 `W&F Returned` retains `Your Accnt #`, `Name`, `Consumer #`, `Orig. Balance`,
@@ -86,19 +93,21 @@ then adds `Creditor` and `Source File`. The original report filename is the last
 column in both tables. Text identifiers retain leading zeros; numeric identifiers
 with a simple all-zero Excel display format retain those displayed zeros.
 
-The owner describes unlabeled rolling totals immediately after the records,
-with no blank separator. Footer removal therefore does not rely on a label,
-empty name or blank row. It checks a candidate's account count against preceding
+The owner describes rolling totals immediately after the records, with no blank
+separator. From patch **0.23.3**, a Returned row whose Your Accnt # is
+`Total Accounts:` followed by a count is removed in full, including its other
+values. This explicit footer marker does not require matching financial totals.
+For unlabeled totals, removal does not rely on an empty name or blank row.
+It checks a candidate's account count against preceding
 rows and at least two monetary aggregates against their sums (rounded to cents),
 with other descriptive fields empty. Exact SUM formulas over the complete detail
 range can also establish a summary. No account data is accepted after an
 identified summary; an unexpected layout stops the run.
 
-Rows that do not meet these checks remain in the data. Sources reports how many
-total rows were excluded, flags missing-name rows retained for review, and asks
-for final-row confirmation when no footer was identified. The source footer
-layout has not yet been validated against an actual agency workbook, so review
-these notes before using aggregate values. Unknown or incomplete financial data
+Rows that do not meet these checks remain in the data, including missing-name
+rows. Review final rows before using aggregate values: unlabeled footer layouts
+have not yet been validated against an actual agency workbook.
+Unknown or incomplete financial data
 is not treated as zero to make totals reconcile. These are import checks, not
 approved reconciliation/matching rules.
 
@@ -106,7 +115,9 @@ Synthetic acceptance examples: two creditors' account reports become two rows
 in one Collections tab with different Creditor/Type/Source File values; a
 contiguous count/Orig./Curr./Collected summary matching those source records is
 excluded. An incomplete account row is retained. A total that does not reconcile
-is retained for review. Returned reports use their own nine-column schema and
+is retained for review. Returned rows labeled `Total Accounts:1`,
+`Total Accounts:5` or `Total Accounts: 2` are excluded in full.
+Returned reports use their own nine-column schema and
 do not require fee metadata. The eight-Collections/three-Returned/one-other-file
 batch is covered by an end-to-end test.
 
@@ -121,8 +132,7 @@ removed. Dates, including 9999-12-31 hold end dates, remain real Excel dates.
 No current balance is derived from W&F data in this version.
 
 Unclassified W&F worksheet names are made Excel-safe, shortened to 31 characters, and given
-unique suffixes when needed. Sources records the original file and worksheet
-for every renamed tab. Hidden worksheets become visible for review; blank
+unique suffixes when needed. Hidden worksheets become visible for review; blank
 worksheets remain present. Cell values and number formats retain identifiers
 such as text `0000123`; the app does not infer a financial schema or header
 location for arbitrary W&F worksheets. Charts, drawings, macros, workbook links,

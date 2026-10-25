@@ -83,6 +83,32 @@ class WFAgencyReportTests(unittest.TestCase):
         self.assertNotIn('Type', result.frame)
         self.assertEqual(result.frame.iloc[0]['Source File'], path.name)
 
+    def test_returned_total_accounts_labels_remove_entire_row(self):
+        for label in ('Total Accounts:1', 'Total Accounts:5', 'Total Accounts: 2', ' total accounts: 15 '):
+            with self.subTest(label=label):
+                path = agency_file(self.root, returned=True)
+                book = load_workbook(path)
+                book.active['A8'] = label
+                book.active['B8'] = 'Summary text'
+                book.active['D8'] = 999  # Explicit labels do not require matching totals.
+                book.save(path)
+                book.close()
+                result = read_agency_report(path, identify_report(path))
+                self.assertEqual(len(result.frame), 1)
+                self.assertEqual(result.frame.iloc[0]['Your Accnt #'], '0000123')
+                self.assertIn('1 verified total row(s) excluded', result.sheets[0].notes)
+
+    def test_account_after_labeled_returned_footer_still_stops(self):
+        path = agency_file(self.root, returned=True)
+        book = load_workbook(path)
+        book.active['A8'] = 'Total Accounts:1'
+        for column in range(1, 10):
+            book.active.cell(9, column, book.active.cell(7, column).value)
+        book.save(path)
+        book.close()
+        with self.assertRaisesRegex(ValueError, 'account data follows a summary row'):
+            read_agency_report(path, identify_report(path))
+
     def test_missing_account_fields_and_unverified_totals_are_retained(self):
         rows = [['0000123', 'Synthetic Student', None, 100, 75, 25, None],
                 [None, None, None, 100, 75, 25, None]]

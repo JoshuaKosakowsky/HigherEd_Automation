@@ -95,7 +95,6 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
         context.progress.report('Reading the two Insights uploads')
         holds = read_insights_file(manual_paths[0], 'holds')
         activity = read_insights_file(manual_paths[1], 'activity')
-        labels = tuple(path.name + ' (uploaded; coverage unconfirmed)' for path in manual_paths)
     else:
         context.progress.report('Connecting to PROD Insights — complete sign-in if prompted')
         stage = 'loading the PROD configuration'
@@ -138,8 +137,6 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
                         frames.append(checked_report_result(frame, query.result_count_column))
                 holds, activity = frames
                 stage = 'closing the Insights session'
-            labels = ('PROD Insights / Collections tracking (count checked)',
-                      'PROD Insights / W&F transactions (count checked)')
         except WorkflowCancelled:
             raise
         except Exception as error:
@@ -149,12 +146,12 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
         context.cancellation.check()
     context.progress.report('Collecting W&F worksheets and saving the source review workbook')
     count = create_review_workbook(
-        holds, activity, files, output, source_labels=labels,
+        holds, activity, files, output,
         app_version=APP_VERSION, cancellation=context.cancellation,
     )
     return WorkflowResult(
         True, f'Created source review: {len(holds):,} hold rows, {len(activity):,} detail-code rows, '
         f'{len(files):,} W&F files / {count:,} source worksheets. '
-        'Review Sources for footer checks and unclassified files. No matching or reconciliation conclusions yet.',
+        'No matching or reconciliation conclusions yet.',
         output,
     )
