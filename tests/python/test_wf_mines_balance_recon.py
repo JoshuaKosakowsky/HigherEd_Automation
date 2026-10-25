@@ -126,6 +126,50 @@ class WFMinesBalanceTests(unittest.TestCase):
         finally:
             book.close()
 
+    def test_mixed_twelve_file_batch_consolidates_known_reports_and_retains_other_sheets(self):
+        from test_wf_agency_reports import agency_file
+        files = [agency_file(self.root, str(12003 + index),
+                             fees='WITH FEES' if index % 2 else 'NO FEES') for index in range(8)]
+        files.extend(agency_file(self.root, str(12559 + index), returned=True) for index in range(3))
+        files.append(self.agency)
+        self.params['wf_files'] = tuple(files)
+        result = run_wf_mines_balance_recon(self.context())
+        self.assertTrue(result.success)
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book.sheetnames[:4], [
+                'Active CO Holds', 'Banner Detail Codes', 'W&F Collections', 'W&F Returned',
+            ])
+            self.assertEqual(book['W&F Collections'].max_row, 9)
+            self.assertEqual(book['W&F Returned'].max_row, 4)
+            collections = list(book['W&F Collections'].values)
+            self.assertEqual(collections[0][-3:], ('Creditor', 'Type', 'Source File'))
+            self.assertEqual({row[-2] for row in collections[1:]}, {'Fees', 'No Fees'})
+            self.assertEqual({row[-3] for row in collections[1:]}, {str(12003 + index) for index in range(8)})
+            self.assertTrue(all(row[0] == '0000123' for row in collections[1:]))
+            self.assertTrue(all(row[-1] in {path.name for path in files} for row in collections[1:]))
+            self.assertEqual(len(book.sheetnames), 8)
+            self.assertTrue(any('Unclassified report' in str(row[-1]) for row in list(book['Sources'].values)[1:]))
+        finally:
+            book.close()
+
+    def test_matching_sheets_from_one_report_are_both_imported_and_mapped(self):
+        from test_wf_agency_reports import agency_file
+        path = agency_file(self.root)
+        source = load_workbook(path)
+        source.copy_worksheet(source.active).title = 'Second report'
+        source.save(path)
+        source.close()
+        self.params['wf_files'] = (path,)
+        run_wf_mines_balance_recon(self.context())
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book['W&F Collections'].max_row, 3)
+            manifest = [row for row in list(book['Sources'].values)[1:] if row[0] == 'W&F Collections']
+            self.assertEqual({row[3] for row in manifest}, {'Report', 'Second report'})
+        finally:
+            book.close()
+
     def test_invalid_missing_duplicate_and_legacy_agency_inputs_cannot_publish(self):
         for files in ((), (self.agency, self.agency), (self.root / 'missing.xlsx',), (self.root / 'old.xls',)):
             with self.subTest(files=files):

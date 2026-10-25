@@ -16,7 +16,9 @@ The GUI has three separate sections:
 - **Williams and Fudge uploads**: select/drop several XLSX/XLSM workbooks at
   once. Additional browse/drop batches append to the list. Repeated paths are
   not added twice. Files with the same name in different folders remain
-  separate. Every worksheet, including hidden and empty ones, is included.
+  separate. In 0.22.0, recognized report tables are concatenated into the two
+  agency tabs described below; other worksheets remain separate. Hidden and
+  empty worksheets are retained as well.
   Older XLS files must first be converted to XLSX in Excel.
 - **Outputs**: choose an approved existing folder and a new XLSX filename.
 
@@ -43,8 +45,67 @@ authenticates to Insights and has no TEST/PROD execution setting.
 | --- | --- |
 | Active CO Holds | Uploaded/query hold report, preserving zero/credit balances, missing data and selected hold dates |
 | Banner Detail Codes | Uploaded/query transaction detail, preserving signed amounts, duplicates and blank feed dates |
-| WF file - worksheet (one per original worksheet) | W&F value snapshot with cell formats, row/column sizes, merged cells and freeze panes retained |
-| Sources | Output-tab mapping to original file/worksheet or query; copied row counts including headers |
+| W&F Collections | All supplied AccountStatusReport_NoBreakout tables, concatenated with creditor, fee type and source file |
+| W&F Returned | All supplied ReturnedAccounts tables, concatenated with creditor and source file |
+| WF file - worksheet (other worksheets) | Unclassified/additional source value snapshots, retaining their original formatting/layout |
+| Sources | Output-tab mapping, imported counts including headers, footer checks and review notes |
+
+### Named agency reports (0.22.0)
+
+Keep one batch upload. Routing uses these filename patterns (case-insensitive,
+with flexible spaces around hyphens); any five-digit creditor is allowed,
+including leading zeros and IDs outside the current 12003–12561 range:
+
+- `Report - AccountStatusReport_NoBreakout - 12003-2026-09-30.xlsx`
+- `Report - ReturnedAccounts- 12561-2026-09-30.xlsx`
+
+XLSM equivalents are accepted. Filenames that contain a known report type but
+have malformed creditor/date components fail explicitly. Otherwise unknown
+reports remain on separate source tabs and are marked unclassified in Sources.
+There is no demographic parsing or matching in this version.
+
+Known tables must have the supplied column headings on row 6. The parser maps
+by heading, tolerating whitespace/case and column order, but rejects missing,
+duplicate or unexpected report headings. All matching worksheets in a file
+are appended in source order; additional unrelated worksheets remain separate.
+No fixed number of files or creditor whitelist is imposed, and duplicate account
+records across reports remain separate rows.
+
+`W&F Collections` retains `Your Accnt #`, `Name`, `Placement`, `Orig. Balance`,
+`Curr. Balance`, `Collected`, and `Remarks`, then adds `Creditor`, `Type`, and
+`Source File`. Creditor comes from the filename, not row 4. Row 4 must contain
+exactly one fee classification: WITH FEES → Fees, NO FEES → No Fees. Missing or
+conflicting classifications stop the import rather than guessing.
+
+`W&F Returned` retains `Your Accnt #`, `Name`, `Consumer #`, `Orig. Balance`,
+`Curr. Balance`, `Last Pay Date`, `Placement Date`, `Return Date`, and `Reason`,
+then adds `Creditor` and `Source File`. The original report filename is the last
+column in both tables. Text identifiers retain leading zeros; numeric identifiers
+with a simple all-zero Excel display format retain those displayed zeros.
+
+The owner describes unlabeled rolling totals immediately after the records,
+with no blank separator. Footer removal therefore does not rely on a label,
+empty name or blank row. It checks a candidate's account count against preceding
+rows and at least two monetary aggregates against their sums (rounded to cents),
+with other descriptive fields empty. Exact SUM formulas over the complete detail
+range can also establish a summary. No account data is accepted after an
+identified summary; an unexpected layout stops the run.
+
+Rows that do not meet these checks remain in the data. Sources reports how many
+total rows were excluded, flags missing-name rows retained for review, and asks
+for final-row confirmation when no footer was identified. The source footer
+layout has not yet been validated against an actual agency workbook, so review
+these notes before using aggregate values. Unknown or incomplete financial data
+is not treated as zero to make totals reconcile. These are import checks, not
+approved reconciliation/matching rules.
+
+Synthetic acceptance examples: two creditors' account reports become two rows
+in one Collections tab with different Creditor/Type/Source File values; a
+contiguous count/Orig./Curr./Collected summary matching those source records is
+excluded. An incomplete account row is retained. A total that does not reconcile
+is retained for review. Returned reports use their own nine-column schema and
+do not require fee metadata. The eight-Collections/three-Returned/one-other-file
+batch is covered by an end-to-end test.
 
 The SQL retains its existing definitions: CO end date strictly after today,
 latest qualifying from date per current identity, and all-date selected-code
@@ -56,7 +117,7 @@ when no report count is supplied. A supplied `Report Row Count` is checked and
 removed. Dates, including 9999-12-31 hold end dates, remain real Excel dates.
 No current balance is derived from W&F data in this version.
 
-W&F worksheet names are made Excel-safe, shortened to 31 characters, and given
+Unclassified W&F worksheet names are made Excel-safe, shortened to 31 characters, and given
 unique suffixes when needed. Sources records the original file and worksheet
 for every renamed tab. Hidden worksheets become visible for review; blank
 worksheets remain present. Cell values and number formats retain identifiers

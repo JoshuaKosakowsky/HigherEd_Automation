@@ -256,8 +256,13 @@ In **0.21.0**, **Accounts Receivable → W&F - Mines Balance Recon** provides
 an early source review workflow. The Insights section has separate active-CO
 hold and WOFF/BDRC report uploads. Administrators can replace both uploads with
 direct PROD queries; W&F Excel files are uploaded in a separate batch section
-in either mode. Every agency worksheet receives its own tab, alongside Active
-CO Holds, Banner Detail Codes and a Sources index. There is no matching or
+in either mode. From **0.22.0**, AccountStatusReport_NoBreakout files are
+concatenated into **W&F Collections**, with creditor IDs, Fees/No Fees type and
+source filenames. ReturnedAccounts files are concatenated into **W&F Returned**
+with creditor IDs and source filenames. Row-6 headers and row-4 fee labels are
+validated; unlabeled totals are removed only when verified against the source
+records. Sources includes footer review notes. Other worksheets remain separate,
+alongside Active CO Holds and Banner Detail Codes. There is no matching or
 balance comparison yet. Grant `wf_mines_balance_recon` to the intended staff
 view through the existing access editor. See the
 [W&F technical guide](../../data_processing/wf_mines_balance_recon/README.md)
