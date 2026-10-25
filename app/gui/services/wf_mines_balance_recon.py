@@ -8,6 +8,7 @@ from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.shared.workbook_output import validate_output
 from data_processing.wf_mines_balance_recon.workbook import create_review_workbook, read_insights_file
+from data_processing.wf_mines_balance_recon.source_workbooks import SOURCE_SUFFIXES
 from shared.cancellation import WorkflowCancelled
 from shared.insights.banner_activity import BannerDetailCodeParameters
 from shared.insights.config import load_department_profiles
@@ -40,8 +41,8 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
     files = tuple(Path(path) for path in selected)
     if len({path.resolve() for path in files}) != len(files):
         raise ValueError('The W&F upload list contains a duplicate file path.')
-    if any(not path.is_file() or path.suffix.lower() not in {'.xlsx', '.xlsm'} for path in files):
-        raise ValueError('W&F uploads must be existing XLSX or XLSM workbooks. Convert older XLS files in Excel first.')
+    if any(not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES for path in files):
+        raise ValueError('W&F uploads must be existing CSV, XLS, XLSX, or XLSM files.')
     manual_paths = tuple(Path(context.parameters[key]) for key in ('holds_file', 'activity_file')) if source == 'manual' else ()
     if any(not path.is_file() for path in manual_paths):
         raise ValueError('Upload both original Insights reports before running.')

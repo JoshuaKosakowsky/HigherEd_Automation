@@ -1,7 +1,6 @@
 """Read original reports and collect source snapshots without matching accounts."""
 from __future__ import annotations
 
-import csv
 import re
 from copy import copy
 from datetime import date, datetime
@@ -9,7 +8,7 @@ from math import ceil
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Alignment
 
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
@@ -19,6 +18,7 @@ from data_processing.shared.xlsx_output_format import (
 from shared.cancellation import CancellationToken
 from shared.insights.report_results import checked_report_result, prepare_excel_dates
 from .agency_reports import identify_report, read_agency_report
+from .source_workbooks import open_source_workbook
 
 
 HOLD_HEADERS = (
@@ -71,24 +71,19 @@ def read_insights_file(path: Path, report: str) -> pd.DataFrame:
             candidates.append(prepare_report(pd.DataFrame(records, columns=headers), report))
             break
 
-    if path.suffix.lower() == '.csv':
-        with path.open(encoding='utf-8-sig', newline='') as source:
-            inspect(csv.reader(source))
-    elif path.suffix.lower() in {'.xlsx', '.xlsm'}:
-        book = load_workbook(path, read_only=True, data_only=False, keep_links=False)
-        try:
-            for sheet in book:
+    book = open_source_workbook(path, read_only=True)
+    try:
+        for sheet in book:
+            if hasattr(sheet, 'reset_dimensions'):
                 sheet.reset_dimensions()
-                def rows():
-                    for row in sheet:
-                        if any(cell.data_type == 'f' for cell in row):
-                            raise ValueError('Upload original Insights values, not a workbook with formulas.')
-                        yield [cell.value for cell in row]
-                inspect(rows())
-        finally:
-            book.close()
-    else:
-        raise ValueError('Insights uploads must be XLSX, XLSM, or CSV files.')
+            def rows():
+                for row in sheet:
+                    if any(cell.data_type == 'f' for cell in row):
+                        raise ValueError('Upload original Insights values, not a workbook with formulas.')
+                    yield [cell.value for cell in row]
+            inspect(rows())
+    finally:
+        book.close()
     if len(candidates) != 1:
         raise ValueError(f'Upload exactly one matching {report} source table; found {len(candidates)}.')
     return candidates[0]
@@ -183,7 +178,7 @@ def create_review_workbook(
                     manifest.append([report.output_tab, 'Williams and Fudge', path.name,
                                      detail.sheet_name, detail.row_count + 1, detail.notes])
                     agency_sheets += 1
-            source = load_workbook(path, data_only=False, keep_links=False)
+            source = open_source_workbook(path)
             cached = None
             try:
                 for original in source:
@@ -202,7 +197,7 @@ def create_review_workbook(
                             value = cell.value
                             if cell.data_type == 'f':
                                 if cached is None:
-                                    cached = load_workbook(path, data_only=True, keep_links=False)
+                                    cached = open_source_workbook(path, data_only=True)
                                 value = cached[original.title][cell.coordinate].value
                                 if value is None:
                                     raise ValueError(

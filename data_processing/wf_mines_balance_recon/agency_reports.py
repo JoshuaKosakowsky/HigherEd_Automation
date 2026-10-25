@@ -8,10 +8,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from shared.cancellation import CancellationToken
+from .source_workbooks import open_source_workbook
 
 
 COLLECTION_HEADERS = (
@@ -154,7 +154,7 @@ def _verified_footer(cells, headers, records, source_rows) -> bool:
 def read_agency_report(
     path: Path, report: AgencyReport, *, cancellation: CancellationToken | None = None,
 ) -> AgencyImport:
-    book = load_workbook(path, data_only=False, keep_links=False)
+    book = open_source_workbook(path)
     cached = None
     rows = []
     sources = []
@@ -197,7 +197,7 @@ def read_agency_report(
                     value = cell.value
                     if cell.data_type == 'f':
                         if cached is None:
-                            cached = load_workbook(path, data_only=True, keep_links=False)
+                            cached = open_source_workbook(path, data_only=True)
                         value = cached[sheet.title][cell.coordinate].value
                         if value is None:
                             raise ValueError(
@@ -208,6 +208,10 @@ def read_agency_report(
                         if value == int(value):
                             value = (f'{int(value):0{len(cell.number_format)}d}'
                                      if re.fullmatch(r'0+', cell.number_format) else str(int(value)))
+                    if header in {'Orig. Balance', 'Curr. Balance', 'Collected'} and isinstance(value, str):
+                        amount = _amount(value)
+                        if amount is not None:
+                            value = amount
                     values.append(value)
                 if _blank(values[report.headers.index('Name')]):
                     uncertain.append(number)

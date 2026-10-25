@@ -170,8 +170,10 @@ class WFMinesBalanceTests(unittest.TestCase):
         finally:
             book.close()
 
-    def test_invalid_missing_duplicate_and_legacy_agency_inputs_cannot_publish(self):
-        for files in ((), (self.agency, self.agency), (self.root / 'missing.xlsx',), (self.root / 'old.xls',)):
+    def test_invalid_missing_duplicate_and_unsupported_agency_inputs_cannot_publish(self):
+        invalid = self.root / 'unsupported.pdf'
+        invalid.write_bytes(b'synthetic unsupported input')
+        for files in ((), (self.agency, self.agency), (self.root / 'missing.xlsx',), (invalid,)):
             with self.subTest(files=files):
                 self.params['wf_files'] = files
                 with self.assertRaises(ValueError):
