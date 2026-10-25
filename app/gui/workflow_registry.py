@@ -297,7 +297,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     ),
     WorkflowDefinition(
         workflow_id="wf_mines_balance_recon", name="W&F - Mines Balance Recon",
-        description="Early source review: collect active CO holds, all-date Banner detail-code activity, and every worksheet from your W&F uploads into one workbook. Matching rules will follow.",
+        description="Collect active CO holds, all-date Banner activity and W&F files. Account Status and Returned Accounts reports are combined on their own tabs; other worksheets stay separate. Matching rules will follow.",
         category="Accounts Receivable", runner=run_wf_mines_balance_recon,
         cancellable=True,
         production_warning="Reads both source reports from PROD Insights. W&F files must still be uploaded. Saves a source review workbook without changing either system.",
@@ -312,7 +312,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 default="WOFF, BDRC", help_text="Direct query defaults. Editable; all dates, including blank feed dates."),
             ParameterDefinition(key="wf_files", label="Williams and Fudge files", kind=ParameterKind.MULTI_INPUT_FILE,
                 file_types=(("Excel workbooks", "*.xlsx *.xlsm"),),
-                help_text="Browse or drop several files at once; add more batches as needed. Every worksheet becomes a separate output tab. Convert older XLS files to XLSX first."),
+                help_text="Drop AccountStatusReport_NoBreakout and ReturnedAccounts files together. Names route them to Collections or Returned tabs; other files stay separate. Convert XLS to XLSX first."),
             ParameterDefinition(key="output_file", label="Save source review as", kind=ParameterKind.OUTPUT_FILE,
                 default_factory=lambda: PROJECT_ROOT / "data" / f"WF_Mines_Balance_Recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",

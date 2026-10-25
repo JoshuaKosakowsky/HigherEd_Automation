@@ -5,10 +5,12 @@ import csv
 import re
 from copy import copy
 from datetime import date, datetime
+from math import ceil
 from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment
 
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
 from data_processing.shared.xlsx_output_format import (
@@ -16,6 +18,7 @@ from data_processing.shared.xlsx_output_format import (
 )
 from shared.cancellation import CancellationToken
 from shared.insights.report_results import checked_report_result, prepare_excel_dates
+from .agency_reports import identify_report, read_agency_report
 
 
 HOLD_HEADERS = (
@@ -103,10 +106,10 @@ def _sheet_name(name: str, used: set[str]) -> str:
     return candidate
 
 
-def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation) -> None:
+def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *, index: int | None = None) -> None:
     if len(frame) + 1 > 1_048_576 or len(frame.columns) > 16_384:
         raise ValueError('A source exceeds Excel worksheet limits. No workbook was saved.')
-    sheet = book.create_sheet(name)
+    sheet = book.create_sheet(name, index=index)
     sheet.append(list(frame.columns))
     for number, values in enumerate(frame.itertuples(index=False, name=None), 2):
         if cancellation and number % 500 == 0:
@@ -123,12 +126,20 @@ def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation) -
     apply_default_font(sheet)
     style_header_row(sheet)
     format_table_columns(sheet, headers=list(frame.columns), currency_headers={
-        'Current Account Balance', "'Amount'", "'Balance'",
+        'Current Account Balance', "'Amount'", "'Balance'", 'Orig. Balance', 'Curr. Balance', 'Collected',
     })
     for column in sheet.iter_cols(min_row=2):
         if any(isinstance(cell.value, datetime) for cell in column):
             dimension = sheet.column_dimensions[column[0].column_letter]
             dimension.width = max(dimension.width, 24)
+    for column in sheet.iter_cols():
+        if column[0].value in {'Source File', 'File / Query', 'Import Notes'}:
+            width = 65
+            sheet.column_dimensions[column[0].column_letter].width = width
+            for cell in column:
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+                dimension = sheet.row_dimensions[cell.row]
+                dimension.height = max(dimension.height or 15, 18 * ceil(len(str(cell.value or '')) / width))
     sheet.freeze_panes = 'A2'
     sheet.auto_filter.ref = sheet.dimensions
 
@@ -138,7 +149,7 @@ def create_review_workbook(
     *, source_labels: tuple[str, str], app_version: str,
     cancellation: CancellationToken | None = None,
 ) -> int:
-    """Create two Insights tabs, every agency worksheet and a source index.
+    """Create Insights and consolidated agency tabs, plus raw unknown sources.
 
     Agency cells are value snapshots with cell formatting and layout retained.
     Cached formula values prevent broken cross-workbook references; missing
@@ -148,7 +159,8 @@ def create_review_workbook(
     book = Workbook()
     book.remove(book.active)
     manifest = []
-    used = {'active co holds', 'banner detail codes', 'sources'}
+    used = {'active co holds', 'banner detail codes', 'w&f collections', 'w&f returned', 'sources'}
+    grouped = {}
     agency_sheets = 0
     try:
         for name, frame, report, source in (
@@ -157,14 +169,26 @@ def create_review_workbook(
         ):
             frame = prepare_report(frame, report)
             _write_frame(book, name, frame, cancellation)
-            manifest.append([name, 'Insights', source, 'Report table', len(frame) + 1])
+            manifest.append([name, 'Insights', source, 'Report table', len(frame) + 1, ''])
         for path in wf_files:
             if cancellation:
                 cancellation.check()
+            report = identify_report(path)
+            imported = read_agency_report(path, report, cancellation=cancellation) if report else None
+            parsed_sheets = set()
+            if imported:
+                grouped.setdefault(report.output_tab, []).append(imported.frame)
+                for detail in imported.sheets:
+                    parsed_sheets.add(detail.sheet_name)
+                    manifest.append([report.output_tab, 'Williams and Fudge', path.name,
+                                     detail.sheet_name, detail.row_count + 1, detail.notes])
+                    agency_sheets += 1
             source = load_workbook(path, data_only=False, keep_links=False)
             cached = None
             try:
                 for original in source:
+                    if original.title in parsed_sheets:
+                        continue
                     name = _sheet_name(f'WF {path.stem} - {original.title}', used)
                     sheet = book.create_sheet(name)
                     if original.max_row > 1_048_576 or original.max_column > 16_384:
@@ -203,14 +227,20 @@ def create_review_workbook(
                         sheet.merge_cells(str(merged))
                     sheet.freeze_panes = original.freeze_panes
                     sheet.auto_filter.ref = original.auto_filter.ref
-                    manifest.append([name, 'Williams and Fudge', path.name, original.title, original.max_row])
+                    manifest.append([name, 'Williams and Fudge', path.name, original.title, original.max_row,
+                                     'Additional worksheet preserved as supplied.' if report else
+                                     'Unclassified report preserved as supplied; no demographic parsing.'])
                     agency_sheets += 1
             finally:
                 source.close()
                 if cached is not None:
                     cached.close()
+        for position, name in enumerate(('W&F Collections', 'W&F Returned'), 2):
+            if name in grouped:
+                frame = pd.concat(grouped[name], ignore_index=True)
+                _write_frame(book, name, frame, cancellation, index=position)
         index = pd.DataFrame(manifest, columns=[
-            'Output Tab', 'Source', 'File / Query', 'Original Worksheet', 'Rows Including Headers',
+            'Output Tab', 'Source', 'File / Query', 'Original Worksheet', 'Rows Including Headers', 'Import Notes',
         ])
         _write_frame(book, 'Sources', index, cancellation)
         book.properties.title = 'W&F - Mines Balance Recon: source review'

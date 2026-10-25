@@ -92,6 +92,7 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
     )
     return WorkflowResult(
         True, f'Created source review: {len(holds):,} hold rows, {len(activity):,} detail-code rows, '
-        f'{len(files):,} W&F files / {count:,} worksheets. No matching or reconciliation conclusions yet.',
+        f'{len(files):,} W&F files / {count:,} source worksheets. '
+        'Review Sources for footer checks and unclassified files. No matching or reconciliation conclusions yet.',
         output,
     )
