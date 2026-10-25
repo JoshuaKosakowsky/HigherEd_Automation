@@ -17,9 +17,11 @@ class InsightsAPIError(RuntimeError):
         message: str,
         *,
         status_code: int | None = None,
+        code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -129,11 +131,11 @@ class InsightsClient:
             )
         except Timeout as error:
             raise InsightsAPIError(
-                f"The Insights request timed out: {method} {path}"
+                f"The Insights request timed out: {method} {path}", code="timeout",
             ) from None
         except RequestException as error:
             raise InsightsAPIError(
-                f"Could not connect to the Insights API: {method} {path}"
+                f"Could not connect to the Insights API: {method} {path}", code="connection",
             ) from None
 
         if not 200 <= response.status_code < 300:
@@ -143,6 +145,7 @@ class InsightsClient:
                 f"Insights rejected {method} {path} "
                 f"(HTTP {response.status_code}).",
                 status_code=response.status_code,
+                code="http",
             )
 
         return response
@@ -160,7 +163,7 @@ class InsightsClient:
             return response.json()
         except JSONDecodeError as error:
             raise InsightsAPIError(
-                f"Insights returned non-JSON data for {method} {path}."
+                f"Insights returned non-JSON data for {method} {path}.", code="invalid_response",
             ) from None
 
     def logout(self) -> None:
@@ -212,7 +215,7 @@ class InsightsClient:
         if result.get("status") != "completed":
             raise InsightsAPIError(
                 "Insights did not complete the query. Check the SQL in the "
-                "Insights editor; server error details are withheld."
+                "Insights editor; server error details are withheld.", code="query_failed",
             )
 
         data = result.get("data")

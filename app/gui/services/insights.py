@@ -13,6 +13,7 @@ from app.gui.services.access import (
     AccessConfigurationError, get_current_login, load_access_configuration,
 )
 from shared.insights.auth import InsightsAuthenticationError
+from shared.insights.all_date_activity import extract_all_date_activity
 from shared.insights.banner_activity import (
     BannerActivityParameters, BannerDetailCodeParameters, extract_banner_activity,
 )
@@ -152,12 +153,16 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                     result = extract_banner_activity(
                         client, activity, sql_template=query.sql_path.read_text(encoding="utf-8"),
                     )
+                elif detail_codes is not None:
+                    result = extract_all_date_activity(
+                        client, detail_codes, sql_template=query.sql_path.read_text(encoding='utf-8'),
+                    )
                 else:
                     result = (
                         client.run_sql(rendered_sql)
-                        if query.term_variable or detail_codes is not None else client.run_sql_file(query.sql_path)
+                        if query.term_variable else client.run_sql_file(query.sql_path)
                     )
-                if query.result_count_column is not None:
+                if query.result_count_column is not None and detail_codes is None:
                     result = checked_report_result(result, query.result_count_column)
                 _export_query(result, output_path)
                 return WorkflowResult(

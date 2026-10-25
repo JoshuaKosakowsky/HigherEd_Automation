@@ -273,6 +273,12 @@ uploads and the W&F batch. No manual XLS conversion is required. Existing
 workstations rerun `setup.ps1` once after updating to install the XLS reader;
 the output stays XLSX.
 
+Patch **0.23.1** retries proven all-date transaction API caps in checked,
+non-overlapping source-key batches, retaining all dates and NULL feed dates.
+This works in Connections and W&F - Mines Balance Recon. Extraction errors now
+identify the report/stage and safe API or completeness category. Missing or
+invalid counts still stop the export; source/error payloads remain withheld.
+
 **1305 Graduate Contract Recon** reads Workday and Banner files and produces
 document, CWID, period and combined activity views, plus the original source tabs.
 The **Grad Contract Sponsor** view receives this workflow with uploads only;

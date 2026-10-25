@@ -43,10 +43,17 @@ requires at least one validated four-letter/digit code. No date controls appear;
 the original 1305/date-range export keeps its existing dates and behavior.
 
 `Report Row Count` counts the full SQL result and is removed from app workbooks,
-leaving the original twelve-column source contract. The app rejects missing,
-invalid or capped counts without saving a partial workbook. This all-date path
-does not partition by dates or impose a fallback time boundary. If the API caps
-the result, use the full Insights export and check its row count. Excel feed
+leaving the original twelve-column source contract. The app rejects missing or
+invalid counts without saving a partial workbook. This all-date path does not
+partition by dates or impose a fallback time boundary. From app
+0.23.1, a proven count-based transaction cap triggers automatic extraction in
+disjoint PIDM/transaction-number ranges, with NULL keys included separately.
+Each batch and combined parent count are checked; no date restriction or
+transaction deduplication is introduced. Missing/invalid counts still fail, as
+does a single unsplittable key group exceeding the limit or changed source counts.
+If batching cannot complete, use the full Insights export and check its row count.
+This is shared by Connections and the W&F workflow; no saved-question SQL update
+is required for batching. Excel feed
 dates retain real date/time cells and NULL dates stay blank. Existing output
 files are preserved.
 

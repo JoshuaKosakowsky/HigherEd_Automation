@@ -11,11 +11,54 @@ from data_processing.wf_mines_balance_recon.workbook import create_review_workbo
 from data_processing.wf_mines_balance_recon.source_workbooks import SOURCE_SUFFIXES
 from shared.cancellation import WorkflowCancelled
 from shared.insights.banner_activity import BannerDetailCodeParameters
-from shared.insights.config import load_department_profiles
+from shared.insights.all_date_activity import extract_all_date_activity
+from shared.insights.auth import InsightsAuthenticationError
+from shared.insights.browser_auth import InsightsBrowserAuthenticationError
+from shared.insights.client import InsightsAPIError
+from shared.insights.config import InsightsConfigurationError, load_department_profiles
 from shared.insights.query_catalog import get_query
-from shared.insights.report_results import checked_report_result
-from shared.insights.session_auth import build_authenticated_client
+from shared.insights.report_results import InsightsReportResultError, checked_report_result
+from shared.insights.session_auth import InsightsSessionError, build_authenticated_client
+from shared.insights.session_cache import InsightsCredentialError
 from shared.mines_paths import get_shared_gui_access_path
+
+
+def _safe_extraction_failure(error: Exception, stage: str) -> str:
+    """Only static categories, local report titles and aggregate counts escape."""
+    detail = 'Unexpected application error; technical details withheld.'
+    if isinstance(error, InsightsReportResultError):
+        if error.reason == 'incomplete':
+            detail = f'Incomplete result: received {error.received_rows:,} of {error.expected_rows:,} rows.'
+        elif error.reason == 'missing_count':
+            detail = 'The result is missing the Report Row Count completeness column.'
+        else:
+            detail = 'The result contains invalid or inconsistent completeness counts.'
+    elif isinstance(error, InsightsAPIError):
+        status = error.status_code
+        if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+            detail = {
+                401: 'HTTP 401: session expired or unauthenticated. Use Connections to sign in again.',
+                403: 'HTTP 403: permission to run the report was refused.',
+                429: 'HTTP 429: Insights request limit reached. Retry later.',
+            }.get(status, f'Insights API rejected the request (HTTP {status}).')
+        else:
+            detail = {
+                'timeout': 'The Insights request timed out.',
+                'connection': 'The Insights API could not be reached.',
+                'query_failed': 'The server did not complete the SQL query. Run this report in the Insights editor to inspect its database error.',
+                'invalid_response': 'The Insights API returned an unreadable response.',
+                'source_changed': 'Source counts changed during extraction. Retry when the source data is stable.',
+                'key_group_cap': 'One transaction group still exceeds the API limit. Use the full Insights export.',
+            }.get(error.code, 'The Insights API request failed; server details withheld.')
+    elif isinstance(error, (InsightsAuthenticationError, InsightsBrowserAuthenticationError,
+                            InsightsSessionError, InsightsCredentialError)):
+        detail = 'Sign-in or session validation failed. Use Connections to sign in again.'
+    elif isinstance(error, InsightsConfigurationError):
+        detail = 'PROD Insights configuration is missing or invalid.'
+    elif isinstance(error, FileNotFoundError):
+        detail = 'A required local SQL file is unavailable. Update this application installation.'
+    return (f'Insights extraction failed during {stage}. {detail} '
+            'You can upload both complete Insights exports instead. No workbook was saved.')
 
 
 def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
@@ -55,35 +98,53 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
         labels = tuple(path.name + ' (uploaded; coverage unconfirmed)' for path in manual_paths)
     else:
         context.progress.report('Connecting to PROD Insights — complete sign-in if prompted')
+        stage = 'loading the PROD configuration'
         try:
             profile = load_department_profiles()[WorkflowMode.PRODUCTION.value]
             if profile is None:
-                raise ValueError('PROD Insights is not configured.')
+                raise InsightsConfigurationError('PROD Insights is not configured.')
+            stage = 'sign-in/session validation'
             client, _ = build_authenticated_client(
                 profile.settings, browser='chrome', experience_url=profile.experience_url,
                 use_saved_mines_login=True,
             )
             with client:
+                class CheckedExecutor:
+                    def run_sql(self, sql):
+                        nonlocal stage
+                        if context.cancellation:
+                            context.cancellation.check()
+                        stage = f'querying {query.title}'
+                        frame = client.run_sql(sql)
+                        if context.cancellation:
+                            context.cancellation.check()
+                        stage = f'checking completeness of {query.title}'
+                        return frame
+
                 frames = []
                 for query_id in ('collections_tracking', 'wf_mines_balance_transactions'):
                     if context.cancellation:
                         context.cancellation.check()
                     query = get_query(query_id)
+                    stage = f'querying {query.title}'
                     context.progress.report(f'Extracting and checking {query.title}')
-                    frame = (client.run_sql(query.render_sql(detail_codes=codes))
-                             if query.default_detail_codes else client.run_sql_file(query.sql_path))
-                    frames.append(checked_report_result(frame, query.result_count_column))
+                    if query.default_detail_codes:
+                        frames.append(extract_all_date_activity(
+                            CheckedExecutor(), codes, sql_template=query.sql_path.read_text(encoding='utf-8'),
+                        ))
+                    else:
+                        frame = client.run_sql_file(query.sql_path)
+                        stage = f'checking completeness of {query.title}'
+                        frames.append(checked_report_result(frame, query.result_count_column))
                 holds, activity = frames
+                stage = 'closing the Insights session'
             labels = ('PROD Insights / Collections tracking (count checked)',
                       'PROD Insights / W&F transactions (count checked)')
         except WorkflowCancelled:
             raise
-        except Exception:
+        except Exception as error:
             # Auth exceptions can carry credential-bearing URLs; keep this boundary.
-            raise ValueError(
-                'Insights extraction failed or returned incomplete results. Check PROD access and API limits. '
-                'You can upload both complete Insights exports instead. No workbook was saved.'
-            ) from None
+            raise ValueError(_safe_extraction_failure(error, stage)) from None
     if context.cancellation:
         context.cancellation.check()
     context.progress.report('Collecting W&F worksheets and saving the source review workbook')

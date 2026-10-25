@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import re
 
 import pandas as pd
 
@@ -9,15 +10,34 @@ from shared.insights.client import InsightsAPIError
 from shared.insights.config import InsightsConfigurationError
 
 
+class InsightsReportResultError(InsightsAPIError):
+    """Safe count diagnostics; never attach report rows or server payloads."""
+
+    def __init__(self, reason: str, received_rows: int, expected_rows: int | None = None) -> None:
+        super().__init__(
+            "Insights returned incomplete or invalid report results. "
+            "Run and export the report in Insights. No workbook was saved.",
+            code="report_result",
+        )
+        self.reason = reason
+        self.received_rows = received_rows
+        self.expected_rows = expected_rows
+
+
 def checked_report_result(frame: pd.DataFrame, count_column: str) -> pd.DataFrame:
     """Reject missing/capped counts before exposing a report to any exporter."""
-    if count_column not in frame.columns or any(
-        str(value) != str(len(frame)) for value in frame[count_column]
-    ):
-        raise InsightsAPIError(
-            "Insights returned incomplete or invalid report results. "
-            "Run and export the report in Insights. No workbook was saved."
-        )
+    received = len(frame)
+    if count_column not in frame.columns:
+        raise InsightsReportResultError("missing_count", received)
+    if list(frame.columns).count(count_column) != 1:
+        raise InsightsReportResultError("invalid_count", received)
+    counts = {str(value) for value in frame[count_column]}
+    if counts and counts != {str(received)}:
+        if len(counts) == 1:
+            value = next(iter(counts))
+            if re.fullmatch(r'[0-9]{1,18}', value) and int(value) > received:
+                raise InsightsReportResultError("incomplete", received, int(value))
+        raise InsightsReportResultError("invalid_count", received)
     return frame.drop(columns=[count_column])
 
 

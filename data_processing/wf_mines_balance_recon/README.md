@@ -29,8 +29,9 @@ catalog reports. W&F uploads are still required. Codes default to WOFF/BDRC
 and are editable for the direct query. The workflow rechecks administrator
 access before authentication, uses existing browser/cached-session controls,
 shows the normal PROD review, and requires both completeness checks to pass.
-API-capped/malformed results stop the entire run without saving a workbook;
-complete Insights downloads are the manual fallback. Separate queries in one
+Malformed/incomplete results stop the run without saving a workbook; from
+0.23.1, proven transaction row caps trigger the checked batching described below.
+Complete Insights downloads remain the manual fallback. Separate queries in one
 session are not a transactional source snapshot.
 
 Staff see upload mode only. Grant `wf_mines_balance_recon` to the intended
@@ -165,6 +166,39 @@ overwritten. Inputs must fit Excel worksheet limits; no source rows are
 silently truncated.
 
 ## Verification and next steps
+
+### PROD extraction diagnostics (0.23.1 patch)
+
+The all-date WOFF/BDRC path, shared by this workflow and Connections, first runs
+the normal query. Only a valid count greater than received rows triggers
+automatic retries in disjoint integer PIDM ranges; a single capped PIDM is
+further split by transaction number. NULL keys are handled separately, not
+discarded. No feed-date boundary or new selection filter is introduced. Every
+batch must pass the count check and combined rows must match parent counts.
+Duplicate transactions remain separate. Missing/invalid counts, changed source
+counts or an indivisible key group that still exceeds the cap stop the run.
+This batching is not a transactional snapshot; source changes can require a retry.
+
+Failures identify the stage: configuration, sign-in/session validation, querying
+one of the two named reports, checking that report's completeness, or closing
+the session. Safe API categories distinguish timeouts, connectivity, a query
+not completing, and HTTP status failures. Completeness failures distinguish a
+missing count, invalid counts, and a capped result with received/expected counts.
+These messages appear in the existing GUI error and gui.log traceback; they
+do not expose credentials, authentication URLs, query text, server error bodies
+or student rows. Unexpected technical exception text remains withheld.
+
+If investigating a PROD extraction failure, run **Collections tracking** and
+**W&F - Mines Balance Recon transactions** (WOFF, BDRC) separately in Connections
+with PROD selected. Record the report name and exact error, without student
+data. Successful sign-in/SELECT 1 does not prove report permissions, SQL
+completion or complete results. Uploading both complete saved Insights exports
+continues to bypass API extraction while preserving the W&F import workflow.
+
+An extraction error occurs before W&F source parsing. A generic 0.23.0 error
+alone cannot establish whether authentication, query execution or truncation
+caused it. This diagnostic patch improves failure visibility; it does not
+claim to resolve an unobserved server or access problem.
 
 Synthetic tests cover manual/direct-query modes, backend authorization,
 batch selection, every source worksheet, duplicate/long names, source data and
