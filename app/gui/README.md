@@ -260,7 +260,8 @@ in either mode. From **0.22.0**, AccountStatusReport_NoBreakout files are
 concatenated into **W&F Collections**, with creditor IDs, Fees/No Fees type and
 source filenames. ReturnedAccounts files are concatenated into **W&F Returned**
 with creditor IDs and source filenames. Row-6 headers and row-4 fee labels are
-validated; unlabeled totals are removed only when verified against the source
+validated; from **0.23.2**, absent or ambiguous fee metadata becomes
+`unspecified` without failing the import. Unlabeled totals are removed only when verified against the source
 records. Sources includes footer review notes. Other worksheets remain separate,
 alongside Active CO Holds and Banner Detail Codes. There is no matching or
 balance comparison yet. Grant `wf_mines_balance_recon` to the intended staff

@@ -95,11 +95,26 @@ class WFAgencyReportTests(unittest.TestCase):
         self.assertEqual(len(result.frame), 3)
         self.assertIn('8, 9', result.sheets[0].notes)
 
-    def test_schema_and_fee_ambiguity_fail_without_guessing(self):
-        for fee_text in ('WITH FEES and NO FEES', 'not specified'):
+    def test_missing_or_ambiguous_fee_text_imports_as_unspecified(self):
+        for fee_text in ('WITH FEES and NO FEES', 'not specified', ''):
             path = agency_file(self.root, fees=fee_text)
-            with self.assertRaisesRegex(ValueError, 'row 4'):
-                read_agency_report(path, identify_report(path))
+            if not fee_text:
+                book = load_workbook(path)
+                book.active['A4'] = None
+                book.save(path)
+                book.close()
+            result = read_agency_report(path, identify_report(path))
+            self.assertEqual(len(result.frame), 1)
+            self.assertEqual(result.frame.iloc[0]['Type'], 'unspecified')
+            self.assertIn('Fee classification unspecified', result.sheets[0].notes)
+
+    def test_singular_fee_labels_preserve_classification(self):
+        for text, expected in (('WITH FEE', 'Fees'), ('NO FEE', 'No Fees')):
+            path = agency_file(self.root, fees=text)
+            result = read_agency_report(path, identify_report(path))
+            self.assertEqual(result.frame.iloc[0]['Type'], expected)
+
+    def test_schema_changes_still_fail_without_guessing(self):
         path = agency_file(self.root)
         book = load_workbook(path)
         book.active['B6'] = 'Changed name heading'

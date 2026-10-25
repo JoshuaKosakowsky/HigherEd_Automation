@@ -170,6 +170,21 @@ class WFMinesBalanceTests(unittest.TestCase):
         finally:
             book.close()
 
+    def test_missing_fee_label_completes_workflow_with_unspecified_type(self):
+        from test_wf_agency_reports import agency_file
+        path = agency_file(self.root, fees='not provided')
+        self.params['wf_files'] = (path,)
+        result = run_wf_mines_balance_recon(self.context())
+        self.assertTrue(result.success)
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book['W&F Collections']['I2'].value, 'unspecified')
+            self.assertEqual(book['W&F Collections'].max_row, 2)
+            self.assertTrue(any('Fee classification unspecified' in str(row[-1])
+                                for row in list(book['Sources'].values)[1:]))
+        finally:
+            book.close()
+
     def test_invalid_missing_duplicate_and_unsupported_agency_inputs_cannot_publish(self):
         invalid = self.root / 'unsupported.pdf'
         invalid.write_bytes(b'synthetic unsupported input')

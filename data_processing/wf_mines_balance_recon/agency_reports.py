@@ -98,11 +98,9 @@ def _amount(value: object) -> Decimal | None:
 
 def _fee_type(sheet) -> str:
     text = ' '.join(str(cell.value or '') for cell in sheet[4])
-    labels = set(re.findall(r'\b(?:WITH\s+FEES|NO\s+FEES)\b', text, re.IGNORECASE))
+    labels = set(re.findall(r'\b(?:WITH\s+FEES?|NO\s+FEES?)\b', text, re.IGNORECASE))
     kinds = {'Fees' if label.upper().startswith('WITH') else 'No Fees' for label in labels}
-    if len(kinds) != 1:
-        raise ValueError(f'{sheet.title}: row 4 must identify exactly one of WITH FEES or NO FEES.')
-    return kinds.pop()
+    return kinds.pop() if len(kinds) == 1 else 'unspecified'
 
 
 def _verified_footer(cells, headers, records, source_rows) -> bool:
@@ -220,6 +218,8 @@ def read_agency_report(
                 records.append(values)
                 source_rows.append(number)
             note = f'{excluded} verified total row(s) excluded.'
+            if fee_type == 'unspecified':
+                note += ' Fee classification unspecified (row 4).'
             if not excluded:
                 note += ' Confirm final rows: an unlabeled footer was not identified.'
             if uncertain:

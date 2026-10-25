@@ -74,9 +74,11 @@ records across reports remain separate rows.
 
 `W&F Collections` retains `Your Accnt #`, `Name`, `Placement`, `Orig. Balance`,
 `Curr. Balance`, `Collected`, and `Remarks`, then adds `Creditor`, `Type`, and
-`Source File`. Creditor comes from the filename, not row 4. Row 4 must contain
-exactly one fee classification: WITH FEES → Fees, NO FEES → No Fees. Missing or
-conflicting classifications stop the import rather than guessing.
+`Source File`. Creditor comes from the filename, not row 4. Row 4 supplies the
+fee classification: WITH FEES → Fees, NO FEES → No Fees (singular FEE is also
+accepted). From patch 0.23.2, blank, unrecognized or conflicting fee labels
+produce the literal `unspecified` in Type and a source note, without failing
+the import. The other row-6 schema and financial completeness checks remain.
 
 `W&F Returned` retains `Your Accnt #`, `Name`, `Consumer #`, `Orig. Balance`,
 `Curr. Balance`, `Last Pay Date`, `Placement Date`, `Return Date`, and `Reason`,
