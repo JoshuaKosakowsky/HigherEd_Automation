@@ -7,7 +7,13 @@ identity information from `SPRIDEN`.
 
 ### `wf_mines_balance_transactions.sql`: W&F - Mines Balance Recon source
 
-This is the all-date Banner source for the future **W&F - Mines Balance Recon**
+This legacy standalone transaction export remains available in Connections.
+From 0.23.4 the **W&F - Banner Recon** workflow instead uses the single combined
+[`collections_tracking.sql`](../holds/collections_tracking.sql) report: active CO
+accounts with all-history signed WOFF/BDRC Amount totals. This transaction
+export cannot be uploaded as the combined report.
+
+Historically this was the all-date Banner source for the early source-review
 (working name). It returns the same twelve transaction columns and raw signs as
 `tgiaccd_transactions.sql`, including stored Balance, Description, Feed Document
 and Transaction User. It does not perform reconciliation or combine the

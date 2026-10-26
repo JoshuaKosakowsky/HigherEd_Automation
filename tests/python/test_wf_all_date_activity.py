@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from app.gui.models import WorkflowMode
-from app.gui.services.wf_mines_balance_recon import run_wf_mines_balance_recon
 from openpyxl import load_workbook
 from shared.insights.all_date_activity import extract_all_date_activity
 from shared.insights.banner_activity import BannerDetailCodeParameters
@@ -14,7 +13,6 @@ from shared.insights.query_catalog import get_query
 from shared.insights.report_results import InsightsReportResultError
 import test_tgiaccd_query as sql_fixtures
 import test_wf_mines_balance_recon as workflow_fixtures
-from test_wf_mines_balance_recon import holds_frame
 
 
 class AllDateActivityTests(unittest.TestCase):
@@ -111,27 +109,31 @@ class AllDateActivityTests(unittest.TestCase):
             extract_all_date_activity(executor, self.parameters, sql_template=self.template)
         self.assertEqual(caught.exception.code, 'source_changed')
 
-    def test_capped_all_date_query_recovers_in_the_complete_workflow(self):
+    def test_legacy_capped_all_date_query_still_recovers_in_connections(self):
+        from app.gui.models import WorkflowContext
+        from app.gui.services.insights import run_insights_connection
         self.populate()
         fixture = workflow_fixtures.WFMinesBalanceTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        fixture.params.update(banner_source='sql', detail_codes='WOFF, BDRC')
         client = MagicMock()
         client.__enter__.return_value = client
-        frame = holds_frame()
-        frame['Report Row Count'] = 1
-        client.run_sql_file.return_value = frame
         client.run_sql.side_effect = self.run_sql
-        with patch('app.gui.services.wf_mines_balance_recon.load_access_configuration') as policy, patch(
-            'app.gui.services.wf_mines_balance_recon.load_department_profiles',
-        ), patch('app.gui.services.wf_mines_balance_recon.build_authenticated_client', return_value=(client, 'cached')):
+        with patch('app.gui.services.insights.load_access_configuration') as policy, patch(
+            'app.gui.services.insights.get_shared_gui_access_path', return_value=fixture.root / 'access.json',
+        ), patch('app.gui.services.insights.load_department_profiles'), patch(
+            'app.gui.services.insights.build_authenticated_client', return_value=(client, 'cached'),
+        ):
             policy.return_value.is_administrator.return_value = True
-            result = run_wf_mines_balance_recon(fixture.context(WorkflowMode.PRODUCTION))
-        self.assertTrue(result.success)
+            result = run_insights_connection(WorkflowContext('insights_query_export', {
+                'action': 'query_export', 'query_id': 'wf_mines_balance_transactions',
+                'output_path': fixture.output,
+            }, WorkflowMode.PRODUCTION))
+        self.assertTrue(result.success, result.message)
+        client.run_sql_file.assert_not_called()
         book = load_workbook(fixture.output)
         try:
-            self.assertEqual(book['Banner Detail Codes'].max_row, 7)
-            self.assertEqual(book['Banner Detail Codes'].max_column, 12)
+            self.assertEqual(book.active.max_row, 7)
+            self.assertEqual(book.active.max_column, 12)
         finally:
             book.close()

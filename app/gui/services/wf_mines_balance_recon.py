@@ -9,9 +9,8 @@ from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.shared.workbook_output import validate_output
 from data_processing.wf_mines_balance_recon.workbook import create_review_workbook, read_insights_file
 from data_processing.wf_mines_balance_recon.source_workbooks import SOURCE_SUFFIXES
+from data_processing.wf_mines_balance_recon.reconciliation import submission_fraction
 from shared.cancellation import WorkflowCancelled
-from shared.insights.banner_activity import BannerDetailCodeParameters
-from shared.insights.all_date_activity import extract_all_date_activity
 from shared.insights.auth import InsightsAuthenticationError
 from shared.insights.browser_auth import InsightsBrowserAuthenticationError
 from shared.insights.client import InsightsAPIError
@@ -58,10 +57,11 @@ def _safe_extraction_failure(error: Exception, stage: str) -> str:
     elif isinstance(error, FileNotFoundError):
         detail = 'A required local SQL file is unavailable. Update this application installation.'
     return (f'Insights extraction failed during {stage}. {detail} '
-            'You can upload both complete Insights exports instead. No workbook was saved.')
+            'You can upload the complete combined Insights export instead. No workbook was saved.')
 
 
 def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
+    percentage = submission_fraction(context.parameters.get('submission_percentage', 0.25))
     source = context.parameters.get('banner_source')
     if source not in {'manual', 'sql'}:
         raise ValueError('Choose the Insights data source.')
@@ -75,9 +75,6 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
             raise ValueError('Direct W&F source extraction requires PROD Insights.')
     elif context.mode is not None:
         raise ValueError('File upload review does not use TEST or PROD.')
-    codes = BannerDetailCodeParameters.from_inputs(
-        context.parameters.get('detail_codes', 'WOFF, BDRC'),
-    ) if source == 'sql' else None
     selected = context.parameters.get('wf_files')
     if not isinstance(selected, (tuple, list)) or not selected:
         raise ValueError('Upload at least one Williams and Fudge workbook.')
@@ -86,15 +83,14 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
         raise ValueError('The W&F upload list contains a duplicate file path.')
     if any(not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES for path in files):
         raise ValueError('W&F uploads must be existing CSV, XLS, XLSX, or XLSM files.')
-    manual_paths = tuple(Path(context.parameters[key]) for key in ('holds_file', 'activity_file')) if source == 'manual' else ()
+    manual_paths = tuple(Path(context.parameters[key]) for key in ('banner_file',)) if source == 'manual' else ()
     if any(not path.is_file() for path in manual_paths):
-        raise ValueError('Upload both original Insights reports before running.')
+        raise ValueError('Upload the combined Insights report before running.')
     output = Path(context.parameters['output_file'])
     validate_output(output, (*files, *manual_paths))
     if source == 'manual':
-        context.progress.report('Reading the two Insights uploads')
-        holds = read_insights_file(manual_paths[0], 'holds')
-        activity = read_insights_file(manual_paths[1], 'activity')
+        context.progress.report('Reading the combined Insights upload')
+        students = read_insights_file(manual_paths[0], 'students')
     else:
         context.progress.report('Connecting to PROD Insights — complete sign-in if prompted')
         stage = 'loading the PROD configuration'
@@ -108,34 +104,16 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
                 use_saved_mines_login=True,
             )
             with client:
-                class CheckedExecutor:
-                    def run_sql(self, sql):
-                        nonlocal stage
-                        if context.cancellation:
-                            context.cancellation.check()
-                        stage = f'querying {query.title}'
-                        frame = client.run_sql(sql)
-                        if context.cancellation:
-                            context.cancellation.check()
-                        stage = f'checking completeness of {query.title}'
-                        return frame
-
-                frames = []
-                for query_id in ('collections_tracking', 'wf_mines_balance_transactions'):
-                    if context.cancellation:
-                        context.cancellation.check()
-                    query = get_query(query_id)
-                    stage = f'querying {query.title}'
-                    context.progress.report(f'Extracting and checking {query.title}')
-                    if query.default_detail_codes:
-                        frames.append(extract_all_date_activity(
-                            CheckedExecutor(), codes, sql_template=query.sql_path.read_text(encoding='utf-8'),
-                        ))
-                    else:
-                        frame = client.run_sql_file(query.sql_path)
-                        stage = f'checking completeness of {query.title}'
-                        frames.append(checked_report_result(frame, query.result_count_column))
-                holds, activity = frames
+                query = get_query('collections_tracking')
+                stage = f'querying {query.title}'
+                context.progress.report(f'Extracting and checking {query.title}')
+                if context.cancellation:
+                    context.cancellation.check()
+                frame = client.run_sql_file(query.sql_path)
+                if context.cancellation:
+                    context.cancellation.check()
+                stage = f'checking completeness of {query.title}'
+                students = checked_report_result(frame, query.result_count_column)
                 stage = 'closing the Insights session'
         except WorkflowCancelled:
             raise
@@ -144,14 +122,15 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
             raise ValueError(_safe_extraction_failure(error, stage)) from None
     if context.cancellation:
         context.cancellation.check()
-    context.progress.report('Collecting W&F worksheets and saving the source review workbook')
+    context.progress.report('Comparing Banner and W&F accounts and saving reconciliation')
     count = create_review_workbook(
-        holds, activity, files, output,
+        students, files, output,
         app_version=APP_VERSION, cancellation=context.cancellation,
+        submission_percentage=percentage,
     )
     return WorkflowResult(
-        True, f'Created source review: {len(holds):,} hold rows, {len(activity):,} detail-code rows, '
+        True, f'Created reconciliation: {len(students):,} Banner accounts, '
         f'{len(files):,} W&F files / {count:,} source worksheets. '
-        'No matching or reconciliation conclusions yet.',
+        'Review Reconciliation for account differences and returned status.',
         output,
     )

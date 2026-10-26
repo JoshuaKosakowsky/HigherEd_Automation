@@ -252,36 +252,26 @@ twelve source columns and rejects API-truncated results before saving. It does
 not yet match agency/Workday data or combine the collections-hold report.
 See [W&F extract configuration and examples](../../query/AR/activity/README.md#wf_mines_balance_transactionssql-wf---mines-balance-recon-source).
 
-In **0.21.0**, **Accounts Receivable → W&F - Mines Balance Recon** provides
-an early source review workflow. The Insights section has separate active-CO
-hold and WOFF/BDRC report uploads. Administrators can replace both uploads with
-direct PROD queries; W&F source files are uploaded in a separate batch section
-in either mode. From **0.22.0**, AccountStatusReport_NoBreakout files are
-concatenated into **W&F Collections**, with creditor IDs, Fees/No Fees type and
-source filenames. ReturnedAccounts files are concatenated into **W&F Returned**
-with creditor IDs and source filenames. Row-6 headers and row-4 fee labels are
-validated; from **0.23.2**, absent or ambiguous fee metadata becomes
-`unspecified` without failing the import. Unlabeled totals are removed only when verified against the source
-records. From **0.23.3**, Returned rows labeled `Total Accounts:` with a count
-are removed in full. The four report tabs sort newest to oldest by From Date,
-Feed Date, Placement and Return Date; dates display without times. The Sources
-tab is omitted. Other worksheets remain separate,
-alongside Active CO Holds and Banner Detail Codes. There is no matching or
-balance comparison yet. Grant `wf_mines_balance_recon` to the intended staff
-view through the existing access editor. See the
-[W&F technical guide](../../data_processing/wf_mines_balance_recon/README.md)
-for supported inputs, formula snapshots and validation boundaries.
+In **0.23.4**, **Accounts Receivable → W&F - Banner Recon** accepts one combined
+**W&F - Banner Recon** Insights export (`collections_tracking.sql`), or one direct
+PROD query for administrators. Staff use upload mode; the existing
+`wf_mines_balance_recon` permission remains unchanged. Legacy separate holds and
+transaction exports must be replaced with the combined report.
 
-Release **0.23.0** accepts **CSV, XLS, XLSX and XLSM** directly for both Insights
-uploads and the W&F batch. No manual XLS conversion is required. Existing
-workstations rerun `setup.ps1` once after updating to install the XLS reader;
-the output stays XLSX.
+The W&F section accepts batch CSV/XLS/XLSX/XLSM files and a Submission Percentage
+fraction (default 0.25 = 25%). Fees principal divides Orig. Balance by 1 + fraction;
+other types retain Orig. Balance. Unisa filenames containing 12007, 12009, 12559
+or 12561 are omitted. Reconciliation includes CWIDs from Banner or W&F Collections,
+sums multiple W&F accounts and shows Difference and a 1/0 Returned flag. Unknown
+or absent amounts remain blank. Source rows, dates, footer checks, formula-cache
+handling, cancellation and exclusive output creation retain their safeguards.
+See the [W&F technical guide](../../data_processing/wf_mines_balance_recon/README.md)
+for current business rules, synthetic examples and operational validation.
 
-Patch **0.23.1** retries proven all-date transaction API caps in checked,
-non-overlapping source-key batches, retaining all dates and NULL feed dates.
-This works in Connections and W&F - Mines Balance Recon. Extraction errors now
-identify the report/stage and safe API or completeness category. Missing or
-invalid counts still stop the export; source/error payloads remain withheld.
+Connections' legacy all-date transaction export remains available independently
+and retains its checked cap batching. The new grouped Banner report requires a
+complete count-checked result; use a full combined manual export if capped.
+Existing workstations retain the normal requirements and setup process.
 
 **1305 Graduate Contract Recon** reads Workday and Banner files and produces
 document, CWID, period and combined activity views, plus the original source tabs.
@@ -359,7 +349,7 @@ Transact payment-arrangement errors. See
 [`query/AR/holds/README.md`](../../query/AR/holds/README.md) for the balance and
 hold-date definitions and first-run reconciliation requirements.
 
-In 0.19.0, administrators can choose **Holds — Collections tracking** for
+In 0.19.0, administrators can choose **Holds — W&F - Banner Recon** for
 accounts with CO holds ending strictly after today. It exports one row per
 account using the latest qualifying hold from date, including zero/credit
 balances, all-term total balance, latest account feed date and hold dates.

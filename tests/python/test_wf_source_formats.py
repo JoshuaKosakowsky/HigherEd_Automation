@@ -31,8 +31,7 @@ class WFSourceFormatTests(unittest.TestCase):
         self.activity = self.root / 'activity.xlsx'
         write_frame(self.holds, holds_frame())
         write_frame(self.activity, activity_frame())
-        self.params = dict(banner_source='manual', holds_file=self.holds,
-                           activity_file=self.activity, output_file=self.root / 'review.xlsx')
+        self.params = dict(banner_source='manual', banner_file=self.holds, output_file=self.root / 'review.xlsx')
 
     def xls(self, key, filename):
         data = json.loads(FIXTURES.read_text())['workbooks'][key]
@@ -73,7 +72,7 @@ class WFSourceFormatTests(unittest.TestCase):
         self.assertEqual(len(rows), 5)
         self.assertEqual({row[-1] for row in rows[1:]}, {path.name for path in originals})
         self.assertTrue(all(row[0] == '0000123' for row in rows[1:]))
-        self.assertTrue(all(row[3:6] == (100, 75, 25) for row in rows[1:]))
+        self.assertTrue(all(row[3:7] == (100, 80, 75, 25) for row in rows[1:]))
         self.assertTrue(all(row[-2] == 'Fees' for row in rows[1:]))
         self.assertTrue(all(path.read_bytes() == data for path, data in originals.items()))
         notes_tab = next(name for name in book.sheetnames if name.startswith('WF '))
@@ -81,12 +80,14 @@ class WFSourceFormatTests(unittest.TestCase):
         self.assertEqual(book[notes_tab]['A2'].data_type, 's')
 
     def test_real_xls_insights_reports_and_returned_source_export_complete_workbook(self):
-        self.params['holds_file'] = self.xls('holds', 'holds.xls')
-        self.params['activity_file'] = self.xls('activity', 'activity.xls')
-        returned = self.xls('returned', 'Report - ReturnedAccounts- 12561-2099-10-01.xls')
+        legacy = self.xls('holds', 'holds.xls')
+        from data_processing.wf_mines_balance_recon.workbook import read_insights_file
+        with self.assertRaisesRegex(ValueError, 'exactly one matching students'):
+            read_insights_file(legacy, 'students')
+        self.params['banner_file'] = self.xls('students', 'combined.xls')
+        returned = self.xls('returned', 'Report - ReturnedAccounts- 12003-2099-10-01.xls')
         book = self.run_review((returned,))
-        self.assertEqual(book['Active CO Holds']['H2'].value, datetime(9999, 12, 31))
-        self.assertEqual(book['Banner Detail Codes']['E2'].value, -25)
+        self.assertEqual(book['Students in Collections']['I2'].value, datetime(9999, 12, 31))
         self.assertEqual(book['W&F Returned'].max_row, 2)
         self.assertEqual(book['W&F Returned']['A2'].value, '0000123')
         self.assertEqual(book['W&F Returned']['G2'].value, datetime(2099, 1, 1))
@@ -98,12 +99,11 @@ class WFSourceFormatTests(unittest.TestCase):
         book.save(source)
         book.close()
         agency = self.csv(source, source.stem + '.csv', encoding='cp1252')
-        self.params['holds_file'] = self.csv(self.holds, 'holds.csv')
-        self.params['activity_file'] = self.csv(self.activity, 'activity.csv')
+        self.params['banner_file'] = self.csv(self.holds, 'holds.csv')
         output = self.run_review((agency,))
         self.assertEqual(output['W&F Collections']['B2'].value, 'Synthetic Caf\u00e9')
-        self.assertEqual(output['W&F Collections']['I2'].value, 'No Fees')
-        self.assertIsNone(output['Banner Detail Codes']['J2'].value)
+        self.assertEqual(output['W&F Collections']['J2'].value, 'No Fees')
+        self.assertIsNone(output['Students in Collections']['G2'].value)
 
     def test_unknown_csv_keeps_leading_zero_ids_and_formula_like_text_literal(self):
         path = self.root / 'demographics.csv'
@@ -130,7 +130,7 @@ class WFSourceFormatTests(unittest.TestCase):
         self.assertEqual(sheet.max_row, 2)
         self.assertEqual(sheet['A2'].value, '0000123')
         self.assertEqual(sheet['B2'].value, 'Synthetic, Student')
-        self.assertEqual([sheet.cell(2, column).value for column in (4, 5, 6)], [1000, -25, 1025])
+        self.assertEqual([sheet.cell(2, column).value for column in (4, 5, 6, 7)], [1000, 800, -25, 1025])
         self.assertTrue(all(sheet.cell(2, column).data_type == 'n' for column in (4, 5, 6)))
 
     def test_legacy_date_epoch_number_formats_and_source_handles(self):
@@ -153,7 +153,7 @@ class WFSourceFormatTests(unittest.TestCase):
                 open_source_workbook(path)
         workflow = get_workflow('wf_mines_balance_recon')
         for parameter in workflow.parameters:
-            if parameter.key in {'holds_file', 'activity_file', 'wf_files'}:
+            if parameter.key in {'banner_file', 'wf_files'}:
                 patterns = ' '.join(pattern for _, pattern in parameter.file_types)
                 self.assertEqual(set(patterns.split()), {'*.csv', '*.xls', '*.xlsx', '*.xlsm'})
         help_text = next(item.help_text for item in workflow.parameters if item.key == 'wf_files')

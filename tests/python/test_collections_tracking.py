@@ -74,7 +74,7 @@ class CollectionsTrackingTests(unittest.TestCase):
         """)
         self.assertEqual(self.db.execute(self.query).fetchall(), [
             ('TEST-1', 'Synthetic', 'Student', 100, '2099-10-01',
-             'CO', '2099-03-01', '2099-12-01', 1),
+             'CO', None, '2099-03-01', '2099-12-01', 0, 0, 100, 1),
         ])
 
     def test_all_term_net_balance_reversals_zero_credit_and_latest_feed(self):
@@ -107,7 +107,8 @@ class CollectionsTrackingTests(unittest.TestCase):
         self.assertEqual(cursor.fetchall(), [])
         self.assertEqual([col[0] for col in cursor.description], [
             "CWID", "First Name", "Last Name", "Current Account Balance",
-            "Latest Feed Date", "Hold Code", "From Date", "To Date", "Report Row Count",
+            "Latest Feed Date", "CO Hold", "TO Hold", "From Date", "To Date",
+            "WOFF", "BDRC", "Total Balance", "Report Row Count",
         ])
 
     def test_app_export_dates_completeness_and_administrator_access(self):
@@ -152,14 +153,14 @@ class CollectionsTrackingTests(unittest.TestCase):
                         workbook = load_workbook(output)
                         try:
                             sheet = workbook.active
-                            self.assertEqual(sheet.max_column, 8)
+                            self.assertEqual(sheet.max_column, 12)
                             self.assertEqual(sheet.max_row, 1 if empty else 2)
                             if not empty:
                                 self.assertEqual(sheet['D2'].value, -50)
                                 self.assertEqual(sheet['E2'].value, datetime(2099, 10, 2, 14, 30))
-                                self.assertEqual(sheet['G2'].value, datetime(2099, 1, 1))
-                                self.assertTrue(sheet['H2'].is_date)
-                                self.assertEqual(sheet['H2'].value, datetime(9999, 12, 31))
+                                self.assertEqual(sheet['H2'].value, datetime(2099, 1, 1))
+                                self.assertTrue(sheet['I2'].is_date)
+                                self.assertEqual(sheet['I2'].value, datetime(9999, 12, 31))
                         finally:
                             workbook.close()
 

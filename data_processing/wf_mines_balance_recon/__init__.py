@@ -1,1 +1,1 @@
-"""Early W&F source review workspace; no reconciliation rules yet."""
+"""W&F - Banner Recon source imports and account comparison."""

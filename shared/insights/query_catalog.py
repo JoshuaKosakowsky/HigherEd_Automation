@@ -79,10 +79,11 @@ QUERIES: tuple[InsightsQuery, ...] = (
         default_detail_codes=("WOFF", "BDRC"),
     ),
     InsightsQuery(
-        "collections_tracking", "Holds", "Collections tracking",
+        "collections_tracking", "Holds", "W&F - Banner Recon",
         "AR/holds/collections_tracking.sql",
         "CO holds ending after today; one row per account using the latest from date. "
-        "Includes zero/credit balances, all-term net balance and latest account feed date. "
+        "Includes separate CO/TO holds, all-term account balance, signed WOFF/BDRC Amount totals "
+        "and Total Balance (account + WOFF + BDRC). "
         "Blank balances require review; feed date is not agency referral date.",
         administrator_only=True, result_count_column="Report Row Count",
     ),

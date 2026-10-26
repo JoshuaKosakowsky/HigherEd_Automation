@@ -20,7 +20,7 @@ from shared.cancellation import CancellationToken, WorkflowCancelled
 
 def holds_frame():
     return pd.DataFrame([['TEST-1', 'Synthetic', 'Student', -5, '2099-10-01',
-                          'CO', '2099-01-01', '9999-12-31']], columns=HOLD_HEADERS)
+                          'CO', None, '2099-01-01', '9999-12-31', 25, 10, 30]], columns=HOLD_HEADERS)
 
 
 def activity_frame():
@@ -45,6 +45,10 @@ class WFMinesBalanceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.output = self.root / 'review.xlsx'
+        path_patch = patch('app.gui.services.wf_mines_balance_recon.get_shared_gui_access_path',
+                           return_value=self.root / 'access.json')
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
         self.holds = self.root / 'holds.xlsx'
         self.activity = self.root / 'activity.xlsx'
         write_frame(self.holds, holds_frame())
@@ -70,8 +74,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         book.create_sheet('Empty')
         book.save(self.agency)
         book.close()
-        self.params = dict(banner_source='manual', holds_file=self.holds,
-                           activity_file=self.activity, wf_files=(self.agency,), output_file=self.output)
+        self.params = dict(banner_source='manual', banner_file=self.holds, wf_files=(self.agency,), output_file=self.output)
 
     def context(self, mode=None, cancellation=None):
         return WorkflowContext('wf_mines_balance_recon', self.params, mode, cancellation=cancellation)
@@ -85,10 +88,8 @@ class WFMinesBalanceTests(unittest.TestCase):
         book = load_workbook(self.output)
         try:
             self.assertEqual(len(book.sheetnames), 5)
-            self.assertEqual(book.sheetnames[:2], ['Active CO Holds', 'Banner Detail Codes'])
-            self.assertEqual(book['Active CO Holds']['H2'].value, datetime(9999, 12, 31))
-            self.assertEqual(book['Banner Detail Codes']['E2'].value, -25)
-            self.assertIsNone(book['Banner Detail Codes']['J2'].value)
+            self.assertEqual(book.sheetnames[:2], ['Students in Collections', 'Reconciliation'])
+            self.assertEqual(book['Students in Collections']['I2'].value, datetime(9999, 12, 31))
             agency = book[book.sheetnames[2]]
             self.assertEqual(agency['A2'].value, '0000123')
             self.assertEqual(agency['B2'].number_format, '$#,##0.00')
@@ -137,14 +138,14 @@ class WFMinesBalanceTests(unittest.TestCase):
         book = load_workbook(self.output)
         try:
             self.assertEqual(book.sheetnames[:4], [
-                'Active CO Holds', 'Banner Detail Codes', 'W&F Collections', 'W&F Returned',
+                'Students in Collections', 'Reconciliation', 'W&F Collections', 'W&F Returned',
             ])
-            self.assertEqual(book['W&F Collections'].max_row, 9)
-            self.assertEqual(book['W&F Returned'].max_row, 4)
+            self.assertEqual(book['W&F Collections'].max_row, 7)
+            self.assertEqual(book['W&F Returned'].max_row, 2)
             collections = list(book['W&F Collections'].values)
             self.assertEqual(collections[0][-3:], ('Creditor', 'Type', 'Source File'))
             self.assertEqual({row[-2] for row in collections[1:]}, {'Fees', 'No Fees'})
-            self.assertEqual({row[-3] for row in collections[1:]}, {str(12003 + index) for index in range(8)})
+            self.assertEqual({row[-3] for row in collections[1:]}, {str(12003 + index) for index in range(8)} - {'12007', '12009'})
             self.assertTrue(all(row[0] == '0000123' for row in collections[1:]))
             self.assertTrue(all(row[-1] in {path.name for path in files} for row in collections[1:]))
             self.assertEqual(len(book.sheetnames), 7)
@@ -178,7 +179,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         self.assertTrue(result.success)
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book['W&F Collections']['I2'].value, 'unspecified')
+            self.assertEqual(book['W&F Collections']['J2'].value, 'unspecified')
             self.assertEqual(book['W&F Collections'].max_row, 2)
             self.assertNotIn('Sources', book.sheetnames)
         finally:
@@ -237,10 +238,9 @@ class WFMinesBalanceTests(unittest.TestCase):
         self.assertNotIn('Sources', result.message)
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book.sheetnames, ['Active CO Holds', 'Banner Detail Codes', 'W&F Collections', 'W&F Returned'])
+            self.assertEqual(book.sheetnames, ['Students in Collections', 'Reconciliation', 'W&F Collections', 'W&F Returned'])
             for name, expected, date_column in (
-                ('Active CO Holds', ['H-new', 'H-old', 'H-blank'], 'G'),
-                ('Banner Detail Codes', ['T-new', 'T-tie', 'T-old', 'T-blank'], 'J'),
+                ('Students in Collections', ['H-new', 'H-old', 'H-blank'], 'H'),
                 ('W&F Collections', ['C-new', 'C-earlier', 'C-old', 'C-unknown', 'C-blank'], 'C'),
                 ('W&F Returned', ['R-new', 'R-mid', 'R-old'], 'H'),
             ):
@@ -252,7 +252,7 @@ class WFMinesBalanceTests(unittest.TestCase):
                             self.assertEqual(cell.value.time(), datetime.min.time())
                             self.assertEqual(cell.number_format, 'yyyy-mm-dd')
             self.assertEqual(book['W&F Collections']['C5'].value, 'unknown date')
-            self.assertEqual(book['Active CO Holds']['H2'].value, datetime(9999, 12, 31))
+            self.assertEqual(book['Students in Collections']['I2'].value, datetime(9999, 12, 31))
             self.assertEqual(book['W&F Returned']['G2'].number_format, 'yyyy-mm-dd')
         finally:
             book.close()
@@ -284,23 +284,23 @@ class WFMinesBalanceTests(unittest.TestCase):
             writer.writerow(['Report title'])
             writer.writerow(HOLD_HEADERS)
             writer.writerows(holds_frame().itertuples(index=False, name=None))
-        frame = read_insights_file(path, 'holds')
+        frame = read_insights_file(path, 'students')
         self.assertEqual(frame.iloc[0]['To Date'].year, 9999)
         write_frame(self.holds, pd.DataFrame(columns=HOLD_HEADERS))
         write_frame(self.activity, pd.DataFrame(columns=ACTIVITY_HEADERS))
         run_wf_mines_balance_recon(self.context())
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book['Active CO Holds'].max_row, 1)
-            self.assertEqual(book['Banner Detail Codes'].max_row, 1)
+            self.assertEqual(book['Students in Collections'].max_row, 1)
+            self.assertEqual(book['Reconciliation'].max_row, 1)
         finally:
             book.close()
 
     def test_wrong_or_ambiguous_insights_uploads_fail_without_authentication(self):
-        self.params['holds_file'] = self.activity
-        with self.assertRaisesRegex(ValueError, 'exactly one matching holds'):
+        self.params['banner_file'] = self.activity
+        with self.assertRaisesRegex(ValueError, 'exactly one matching students'):
             run_wf_mines_balance_recon(self.context())
-        self.params['holds_file'] = self.holds
+        self.params['banner_file'] = self.holds
         book = load_workbook(self.holds)
         book.copy_worksheet(book.active)
         book.save(self.holds)
@@ -379,15 +379,13 @@ class WFMinesBalanceTests(unittest.TestCase):
         self.assertTrue(error.exception.__suppress_context__)
         self.assertFalse(self.output.exists())
 
-    def test_admin_prod_queries_both_complete_reports_without_date_filter(self):
-        self.params.update(banner_source='sql', detail_codes='WOFF, BDRC')
+    def test_admin_prod_queries_one_complete_combined_report(self):
+        self.params.update(banner_source='sql')
         client = MagicMock()
         client.__enter__.return_value = client
-        holds, activity = holds_frame(), activity_frame()
-        holds['Report Row Count'] = 1
-        activity['Report Row Count'] = 1
-        client.run_sql_file.return_value = holds
-        client.run_sql.return_value = activity
+        students = holds_frame()
+        students['Report Row Count'] = 1
+        client.run_sql_file.return_value = students
         with patch('app.gui.services.wf_mines_balance_recon.load_access_configuration') as policy, patch(
             'app.gui.services.wf_mines_balance_recon.load_department_profiles',
         ), patch('app.gui.services.wf_mines_balance_recon.build_authenticated_client', return_value=(client, 'cached')) as auth:
@@ -395,27 +393,24 @@ class WFMinesBalanceTests(unittest.TestCase):
             result = run_wf_mines_balance_recon(self.context(WorkflowMode.PRODUCTION))
         self.assertTrue(result.success)
         self.assertTrue(auth.call_args.kwargs['use_saved_mines_login'])
+        client.run_sql_file.assert_called_once()
         self.assertEqual(client.run_sql_file.call_args.args[0].name, 'collections_tracking.sql')
-        sql = client.run_sql.call_args.args[0]
-        self.assertIn("IN ('WOFF', 'BDRC')", sql)
-        self.assertNotIn('CAST(', sql)
+        client.run_sql.assert_not_called()
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book['Active CO Holds'].max_column, 8)
-            self.assertEqual(book['Banner Detail Codes'].max_column, 12)
+            self.assertEqual(book['Students in Collections'].max_column, 12)
+            self.assertNotIn('Banner Detail Codes', book.sheetnames)
         finally:
             book.close()
 
-    def test_forged_admin_wrong_mode_invalid_codes_and_capped_results_fail_closed(self):
+    def test_forged_admin_wrong_mode_and_capped_results_fail_closed(self):
         self.params['banner_source'] = 'sql'
-        for admin, mode, codes, count in (
-            (False, WorkflowMode.PRODUCTION, 'WOFF', 1),
-            (True, WorkflowMode.TEST, 'WOFF', 1),
-            (True, WorkflowMode.PRODUCTION, '', 1),
-            (True, WorkflowMode.PRODUCTION, 'WOFF', 2),
+        for admin, mode, count in (
+            (False, WorkflowMode.PRODUCTION, 1),
+            (True, WorkflowMode.TEST, 1),
+            (True, WorkflowMode.PRODUCTION, 2),
         ):
-            with self.subTest(admin=admin, mode=mode, codes=codes, count=count):
-                self.params['detail_codes'] = codes
+            with self.subTest(admin=admin, mode=mode, count=count):
                 frame = holds_frame()
                 frame['Report Row Count'] = count
                 client = MagicMock()

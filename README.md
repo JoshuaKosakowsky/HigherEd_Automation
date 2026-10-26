@@ -107,14 +107,12 @@ Detail codes are entered explicitly with no defaults. See the
 [1305 workflow instructions](data_processing/graduate_contract_recon/README.md)
 for matching rules and the permission grant needed in existing shared policies.
 
-**W&F - Mines Balance Recon** provides an early source review workbook with
-separate Insights hold/transaction inputs and batch Williams and Fudge uploads.
-Administrators can query both Insights sources directly from PROD; staff use
-downloaded reports. Named agency reports are combined into W&F Collections
-and W&F Returned tabs; other worksheets remain separate. The four report tabs
-sort newest to oldest with date-only values; no Sources tab is added.
-Matching rules are not implemented yet. See the
-[W&F workflow guide](data_processing/wf_mines_balance_recon/README.md).
+**W&F - Banner Recon** (0.23.4) compares one combined Banner collections
+report with batch Williams and Fudge uploads. Administrators may query PROD;
+staff upload the combined report. Output includes Students in Collections,
+W&F Collections/Returned and Reconciliation, with fee-adjusted principal totals,
+account differences and returned flags. Unisa verification filenames are omitted.
+See the [W&F workflow guide](data_processing/wf_mines_balance_recon/README.md).
 
 Administrators can run **Historical Trends** with direct PROD Insights extraction,
 checked monthly pages, and separate annual source CSVs. It uses July–June Feed

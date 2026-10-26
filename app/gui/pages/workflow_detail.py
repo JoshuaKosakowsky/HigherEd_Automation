@@ -76,7 +76,7 @@ class WorkflowDetailPage(QScrollArea):
             parameter_layout = form_layout
             if definition.workflow_id in {"graduate_contract_recon", "trends", "wf_mines_balance_recon"}:
                 group = ("Outputs" if parameter.key == "output_file" else
-                         "W&F" if parameter.key == "wf_files" else
+                         "W&F" if parameter.key in {"wf_files", "submission_percentage"} else
                          "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner")
                 if group not in input_groups:
                     frame = QFrame()
@@ -103,7 +103,7 @@ class WorkflowDetailPage(QScrollArea):
                         )
                         self.recon_source.addItem(
                             "Upload annual TGIACCD files" if definition.workflow_id == "trends" else
-                            "Upload both Insights reports" if definition.workflow_id == "wf_mines_balance_recon" else
+                            "Upload combined Insights report" if definition.workflow_id == "wf_mines_balance_recon" else
                             "Upload Banner Insights file",
                             MANUAL_SOURCE,
                         )
@@ -242,7 +242,7 @@ class WorkflowDetailPage(QScrollArea):
         ) or (
             self.definition.workflow_id in {"graduate_contract_recon", "trends"} and key == "banner_file"
         ) or (
-            self.definition.workflow_id == "wf_mines_balance_recon" and key in {"holds_file", "activity_file"}
+            self.definition.workflow_id == "wf_mines_balance_recon" and key == "banner_file"
         )
 
     def _update_production_warning(self) -> None:
@@ -255,8 +255,6 @@ class WorkflowDetailPage(QScrollArea):
         return (self.definition.workflow_id == "graduate_contract_recon" and key in {
             "start_date", "end_date", "detail_codes"}) or (
             self.definition.workflow_id == "trends" and key in {"first_fiscal_year", "last_fiscal_year"}
-        ) or (
-            self.definition.workflow_id == "wf_mines_balance_recon" and key == "detail_codes"
         )
 
     def _update_source(self) -> None:

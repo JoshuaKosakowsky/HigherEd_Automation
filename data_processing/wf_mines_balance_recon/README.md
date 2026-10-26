@@ -1,149 +1,144 @@
-# W&F - Mines Balance Recon (early source review)
+# W&F - Banner Recon
 
-App 0.21.0 adds an initial workspace for the analyst and owner to review the
-source data together before agreeing on matching/reconciliation rules. It
-collects sources into a new workbook; it does not identify differences, match
-accounts, determine agency status, or change Banner or W&F records.
+App **0.23.4** implements [issue #15](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/15):
+one combined Banner report, agency principal calculations, and account reconciliation.
+The owner clarified the population and aggregation rules in the implementation
+conversation: Banner includes **active CO accounts only**; WOFF/BDRC use signed
+**Amount**, and reconciliation includes CWIDs from either source, summing multiple
+W&F accounts. This workflow reads sources and saves a new workbook; it does not
+change Banner or W&F records.
 
 ## Inputs and access
 
-The GUI has three separate sections:
-
-- **Insights data**: upload the complete **Collections tracking** report and
-  **W&F - Mines Balance Recon transactions** report. CSV, XLS, XLSX and XLSM
-  exports are supported. The two matching source tables are required;
-  the reader allows up to 30 title/header rows and rejects ambiguous tables.
-- **Williams and Fudge uploads**: select/drop several CSV, XLS, XLSX or XLSM files at
-  once. Additional browse/drop batches append to the list. Repeated paths are
-  not added twice. Files with the same name in different folders remain
-  separate. In 0.22.0, recognized report tables are concatenated into the two
-  agency tabs described below; other worksheets remain separate. Hidden and
-  empty worksheets are retained as well.
-  Files can be mixed in one batch. No manual conversion is needed.
+- **Insights data**: upload one complete **W&F - Banner Recon** export from
+  `query/AR/holds/collections_tracking.sql`. CSV, XLS, XLSX and XLSM are supported.
+  The old separate holds and transaction exports cannot substitute for this
+  combined report. Up to 30 title/header rows are allowed; exactly one matching
+  table is required. Headers are matched without case/quote/whitespace differences.
+- **Williams and Fudge uploads**: select/drop multiple CSV, XLS, XLSX or XLSM files.
+  Additional batches append to the list; repeated paths are not added twice.
+  Every file whose name contains `12007`, `12009`, `12559` or `12561` is omitted
+  completely, including extra worksheets, because these are Unisa verifications.
+  All files may remain selected in the upload batch; source files are untouched.
+- **Submission Percentage (fraction)**: default `0.25` means 25%; accepts 0–1.
+  This setting applies in upload and SQL modes and is recorded in workbook metadata.
 - **Outputs**: choose an approved existing folder and a new XLSX filename.
 
-Administrators can instead choose **Run SQL from PROD Insights** in the
-Insights section. This replaces both report uploads with direct queries of
-the existing `collections_tracking` and `wf_mines_balance_transactions`
-catalog reports. W&F uploads are still required. Codes default to WOFF/BDRC
-and are editable for the direct query. The workflow rechecks administrator
-access before authentication, uses existing browser/cached-session controls,
-shows the normal PROD review, and requires both completeness checks to pass.
-Malformed/incomplete results stop the run without saving a workbook; from
-0.23.1, proven transaction row caps trigger the checked batching described below.
-Complete Insights downloads remain the manual fallback. Separate queries in one
-session are not a transactional source snapshot.
+Administrators can choose **Run SQL from PROD Insights** instead of uploading
+Banner data. It runs the combined `collections_tracking` query once, with fixed
+WOFF/BDRC codes and no term/date parameters. It rechecks administrator access
+before sign-in, requires PROD, and retains existing session/authentication controls.
+Staff have upload mode only, without TEST/PROD settings. Keep the existing
+`wf_mines_balance_recon` permission ID; no shared policy is changed automatically.
 
-Staff see upload mode only. Grant `wf_mines_balance_recon` to the intended
-existing GUI view through the administrator's access editor; this change
-does not modify the shared access policy or automatically grant staff access.
-Administrator views retain their existing workflow access. Manual mode never
-authenticates to Insights and has no TEST/PROD execution setting.
+The API result must include a valid `Report Row Count`; missing, invalid or
+capped results stop before saving. This grouped query does not use the legacy
+transaction batching path. The fallback is one complete combined Insights export.
+Uploads check a supplied count but cannot prove coverage if no count is supplied.
+Errors identify configuration, sign-in, named query, completeness or session-close
+stage without exposing raw URLs, server responses, credentials or student rows.
+Connections offers **Holds — W&F - Banner Recon** for standalone query verification.
+Publishing/updating a saved question in Insights is a separate operational step.
 
-## Workbook
+## Banner business rules
+
+One row per current identity/PIDM with a CO hold ending strictly after today,
+using the latest qualifying CO From Date (NULL last), then latest To Date.
+There is no enrollment, positive-balance or From Date restriction. Separate
+`CO Hold` and `TO Hold` columns prevent hold joins from duplicating accounts.
+TO is present when a TO hold also ends strictly after today; it does not expand
+the CO population. From Date and To Date describe the selected CO hold.
+
+`Current Account Balance` retains all-term charges minus payments using detail
+code types C/P and signed reversals. `WOFF` and `BDRC` each sum all-history signed
+posted Amount values for that code, including NULL/future feed dates and reversals;
+they do not use remaining transaction Balance or a feed-date window.
+`Total Balance = Current Account Balance + WOFF + BDRC`, as requested in issue #15.
+A code with no activity is zero when account transactions exist. Unknown code
+amounts remain blank; unknown detail types/missing amounts leave account balance
+blank. Accounts without transactions retain blank balances. Missing amounts
+never become a known zero. Latest Feed Date remains account-wide activity context.
+See [SQL rules and validation](../../query/AR/holds/README.md).
+
+## Workbook and reconciliation rules
 
 | Tab | Content |
 | --- | --- |
-| Active CO Holds | Uploaded/query hold report, preserving zero/credit balances, missing data and selected hold dates |
-| Banner Detail Codes | Uploaded/query transaction detail, preserving signed amounts, duplicates and blank feed dates |
-| W&F Collections | All supplied AccountStatusReport_NoBreakout tables, concatenated with creditor, fee type and source file |
-| W&F Returned | All supplied ReturnedAccounts tables, concatenated with creditor and source file |
-| WF file - worksheet (other worksheets) | Unclassified/additional source value snapshots, retaining their original formatting/layout |
+| Students in Collections | Combined Banner report: CWID, names, account balance/feed date, CO/TO holds, CO dates, WOFF, BDRC and Total Balance |
+| Reconciliation | CWID, First Name, Last Name, Banner Total Balance, W&F Principal Amount, Difference, W&F Returned |
+| W&F Collections | Consolidated Account Status reports with creditor, fee type, source file and Principal Amount |
+| W&F Returned | Consolidated Returned Accounts reports with creditor and source file |
+| WF file - worksheet | Other source worksheets, retaining value snapshots and layout |
 
-From patch **0.23.3**, the four report tabs sort newest to oldest by From Date,
-Feed Date, Placement and Return Date, respectively. Date columns contain real
-Excel dates without times. Blank or unreadable sorting dates remain at the end;
-unreadable agency date text is retained for review. Sorting preserves source
-order for equal dates/times; agency/transaction timestamps determine order
-before times are removed. There is no Sources tab. Named agency rows retain
-their Source File column.
+Students in Collections sorts newest first by CO From Date; agency tabs sort
+newest first by Placement / Return Date. Dates display without times, including
+9999-12-31; blank/unreadable agency dates sort last and unreadable text stays
+visible. Equal dates keep source order. No Sources tab is added.
 
-### Named agency reports (0.22.0)
+For rows whose Type is exactly `Fees`, `Principal Amount = Orig. Balance /
+(1 + Submission Percentage)`, rounded per account to cents using half-up rounding.
+Other types, including `No Fees` and `unspecified`, keep Orig. Balance. Blank or
+unreadable amounts yield blank principal. Original source amounts stay intact.
 
-Keep one batch upload. Routing uses these filename patterns (case-insensitive,
-with flexible spaces around hyphens); any five-digit creditor is allowed,
-including leading zeros and IDs outside the current 12003–12561 range:
+Reconciliation matches Banner CWID to agency `Your Accnt #`, trimming outside
+whitespace while preserving leading zeros. It does not infer prefixes, strip
+zeros, or match names. Banner must have unique, nonblank CWIDs; agency identity
+fields must be nonblank. Invalid identities stop the run rather than create a
+false match. W&F names are retained on agency tabs; unmatched agency records
+have blank Banner First Name/Last Name.
 
-- `Report - AccountStatusReport_NoBreakout - 12003-2026-09-30.xlsx`
-- `Report - ReturnedAccounts- 12561-2026-09-30.xlsx`
+Every CWID from Banner or W&F Collections appears once. Multiple W&F account
+principals for a CWID are summed without deduplicating source records. An unknown
+principal makes that CWID's aggregate unknown. Banner Total Balance is copied
+from Banner; `Difference = Banner Total Balance - W&F Principal Amount` only
+when both amounts are known. An absent source stays blank, including Difference.
+`W&F Returned` is numeric 1 when the CWID appears in any included Returned report,
+otherwise 0; returned-only accounts do not expand the reconciliation population.
+Reconciliation follows Banner's displayed order, then W&F-only CWIDs in upload order.
 
-CSV, XLS and XLSM equivalents are accepted. Filenames that contain a known report type but
-have malformed creditor/date components fail explicitly. Otherwise unknown
-reports remain on separate source tabs.
-There is no demographic parsing or matching in this version.
+### Synthetic acceptance examples
 
-Known tables must have the supplied column headings on row 6. The parser maps
-by heading, tolerating whitespace/case and column order, but rejects missing,
-duplicate or unexpected report headings. All matching worksheets in a file
-are combined before sorting; additional unrelated worksheets remain separate.
-No fixed number of files or creditor whitelist is imposed, and duplicate account
-records across reports remain separate rows.
+- Charges 500, WOFF payment amounts 125 and -25, BDRC payment amount 50:
+  account balance 350, WOFF 100, BDRC 50, Total Balance 500.
+- Repeated TO holds add one TO indicator without multiplying the balance.
+  A TO-only or WOFF/BDRC-only account without qualifying CO is not selected.
+- Fees balance 125 at 0.25 gives principal 100; No Fees/unspecified balance 125
+  remains 125. A signed Fees reversal -125 gives -100.
+- Two Fees accounts 125 and 62.50 for one CWID give aggregate principal 150;
+  Banner Total Balance 150 gives Difference 0. A Returned match sets 1.
+- Banner-only and W&F-only accounts remain visible with the absent amount and
+  Difference blank. `0000123` and `123` remain distinct identities.
 
-`W&F Collections` retains `Your Accnt #`, `Name`, `Placement`, `Orig. Balance`,
-`Curr. Balance`, `Collected`, and `Remarks`, then adds `Creditor`, `Type`, and
-`Source File`. Creditor comes from the filename, not row 4. Row 4 supplies the
-fee classification: WITH FEES → Fees, NO FEES → No Fees (singular FEE is also
-accepted). From patch 0.23.2, blank, unrecognized or conflicting fee labels
-produce the literal `unspecified` in Type, without failing
-the import. The other row-6 schema and financial completeness checks remain.
+### Agency source parsing and safeguards
 
-`W&F Returned` retains `Your Accnt #`, `Name`, `Consumer #`, `Orig. Balance`,
-`Curr. Balance`, `Last Pay Date`, `Placement Date`, `Return Date`, and `Reason`,
-then adds `Creditor` and `Source File`. The original report filename is the last
-column in both tables. Text identifiers retain leading zeros; numeric identifiers
-with a simple all-zero Excel display format retain those displayed zeros.
+Recognized names (case-insensitive, flexible spaces around hyphens):
+`Report - AccountStatusReport_NoBreakout - 12003-2026-09-30.xlsx` and
+`Report - ReturnedAccounts- 12003-2026-09-30.xlsx`, including CSV/XLS/XLSM
+variants. Any five-digit creditor is supported except the filename exclusions
+above. Malformed known report filenames fail; unknown reports stay on separate
+tabs. Additional/hidden/empty worksheets remain visible as source snapshots.
 
-The owner describes rolling totals immediately after the records, with no blank
-separator. From patch **0.23.3**, a Returned row whose Your Accnt # is
-`Total Accounts:` followed by a count is removed in full, including its other
-values. This explicit footer marker does not require matching financial totals.
-For unlabeled totals, removal does not rely on an empty name or blank row.
-It checks a candidate's account count against preceding
-rows and at least two monetary aggregates against their sums (rounded to cents),
-with other descriptive fields empty. Exact SUM formulas over the complete detail
-range can also establish a summary. No account data is accepted after an
-identified summary; an unexpected layout stops the run.
+Known tables require their original row-6 headers, mapped by name with flexible
+case/spacing/order; missing, duplicate or unexpected headers fail. Creditor
+comes from the filename. Row-4 WITH FEES / NO FEES (singular FEE accepted) maps
+to Fees / No Fees; missing or ambiguous labels become literal `unspecified`.
+Collections retains Your Accnt #, Name, Placement, Orig. Balance, Curr. Balance,
+Collected and Remarks, adding Principal Amount after Orig. Balance, followed
+by Creditor, Type and Source File. Returned retains its original nine columns,
+then Creditor and Source File. Text IDs and simple zero-padded numeric IDs retain
+leading zeros. Duplicate agency records remain separate source rows.
 
-Rows that do not meet these checks remain in the data, including missing-name
-rows. Review final rows before using aggregate values: unlabeled footer layouts
-have not yet been validated against an actual agency workbook.
-Unknown or incomplete financial data
-is not treated as zero to make totals reconcile. These are import checks, not
-approved reconciliation/matching rules.
+Returned rows explicitly labeled `Total Accounts:` followed by a numeric count
+are removed in full. Unlabeled summaries require matching account count and at
+least two monetary totals, or exact full-range SUM formulas. An uncertain row
+is retained; data after an identified footer fails. Financial/missing-name rows
+are not silently dropped. Review unexpected source layouts before use.
 
-Synthetic acceptance examples: two creditors' account reports become two rows
-in one Collections tab with different Creditor/Type/Source File values; a
-contiguous count/Orig./Curr./Collected summary matching those source records is
-excluded. An incomplete account row is retained. A total that does not reconcile
-is retained for review. Returned rows labeled `Total Accounts:1`,
-`Total Accounts:5` or `Total Accounts: 2` are excluded in full.
-Returned reports use their own nine-column schema and
-do not require fee metadata. The eight-Collections/three-Returned/one-other-file
-batch is covered by an end-to-end test.
-
-The SQL retains its existing definitions: CO end date strictly after today,
-latest qualifying from date per current identity, and all-date selected-code
-transactions. See the [holds rules](../../query/AR/holds/README.md) and
-[W&F extract rules](../../query/AR/activity/README.md). Upload mode retains
-the supplied report rows without applying hidden hold/code/date filters.
-Headers identify the expected reports; uploads cannot prove source coverage
-when no report count is supplied. A supplied `Report Row Count` is checked and
-removed. Dates, including 9999-12-31 hold end dates, remain real Excel dates.
-No current balance is derived from W&F data in this version.
-
-Unclassified W&F worksheet names are made Excel-safe, shortened to 31 characters, and given
-unique suffixes when needed. Hidden worksheets become visible for review; blank
-worksheets remain present. Cell values and number formats retain identifiers
-such as text `0000123`; the app does not infer a financial schema or header
-location for arbitrary W&F worksheets. Charts, drawings, macros, workbook links,
-conditional formatting and Excel calculation models are not copied.
-
-Modern Excel formula cells use their saved cached values, preserving the source snapshot
-without moving formulas that could reference renamed worksheets or external
-workbooks. A formula without a cached value stops the run and asks for an
-Excel-recalculated/saved source or a values-only copy. Cached values are not
-independently recalculated or certified current. Text starting with `=` stays
-literal text. Source files remain untouched.
+Other worksheets retain cell values, number formats, dimensions and merged cells.
+Names become Excel-safe and unique. Charts, macros, drawings, calculation models
+and workbook links are not copied. Formula snapshots use cached values; modern
+Excel formulas without a saved value stop the run. Literal formula-like text
+remains text. Source files are never modified.
 
 ### Input format handling (0.23.0)
 
@@ -177,49 +172,17 @@ leave a partial final workbook, and existing files/source paths cannot be
 overwritten. Inputs must fit Excel worksheet limits; no source rows are
 silently truncated.
 
-## Verification and next steps
+## Verification and operational boundary
 
-### PROD extraction diagnostics (0.23.1 patch)
+Synthetic tests execute the combined SQL (SQLite date/clock adaptation), actual
+workbook publication, fee calculations, duplicate-account aggregation, outer
+matching, returned flags, excluded files, format readers, GUI source switching,
+backend access, completeness failures, cancellation and output conflicts.
+These tests do not establish live PostgreSQL compatibility, Insights permissions,
+replication freshness or production report completeness. Validate the combined
+query and a representative approved export before operational use.
 
-The all-date WOFF/BDRC path, shared by this workflow and Connections, first runs
-the normal query. Only a valid count greater than received rows triggers
-automatic retries in disjoint integer PIDM ranges; a single capped PIDM is
-further split by transaction number. NULL keys are handled separately, not
-discarded. No feed-date boundary or new selection filter is introduced. Every
-batch must pass the count check and combined rows must match parent counts.
-Duplicate transactions remain separate. Missing/invalid counts, changed source
-counts or an indivisible key group that still exceeds the cap stop the run.
-This batching is not a transactional snapshot; source changes can require a retry.
-
-Failures identify the stage: configuration, sign-in/session validation, querying
-one of the two named reports, checking that report's completeness, or closing
-the session. Safe API categories distinguish timeouts, connectivity, a query
-not completing, and HTTP status failures. Completeness failures distinguish a
-missing count, invalid counts, and a capped result with received/expected counts.
-These messages appear in the existing GUI error and gui.log traceback; they
-do not expose credentials, authentication URLs, query text, server error bodies
-or student rows. Unexpected technical exception text remains withheld.
-
-If investigating a PROD extraction failure, run **Collections tracking** and
-**W&F - Mines Balance Recon transactions** (WOFF, BDRC) separately in Connections
-with PROD selected. Record the report name and exact error, without student
-data. Successful sign-in/SELECT 1 does not prove report permissions, SQL
-completion or complete results. Uploading both complete saved Insights exports
-continues to bypass API extraction while preserving the W&F import workflow.
-
-An extraction error occurs before W&F source parsing. A generic 0.23.0 error
-alone cannot establish whether authentication, query execution or truncation
-caused it. This diagnostic patch improves failure visibility; it does not
-claim to resolve an unobserved server or access problem.
-
-Synthetic tests cover manual/direct-query modes, backend authorization,
-batch selection, every source worksheet, duplicate/long names, source data and
-formats, year-9999 dates, cached/missing formulas, incomplete API results,
-cancellation and output conflicts. They do not validate live Insights access,
-replication timing, actual W&F file layouts or the future reconciliation rules.
-
-Review the workbook together using approved source exports, confirm which
-W&F fields establish account identity and balances, and agree on the desired
-comparisons before implementing matching. Staff operating instructions and
-manual fallback belong in the approved office Word SOP; this technical guide
-does not deliver or replace that SOP.
+The owner classifies 0.23.4 as a patch correcting the W&F reconciliation
+workflow. Follow the repository patch-release policy and run appropriate local
+checks before publication. Staff procedures and manual fallback belong in the approved office Word
+SOPs. This technical guide does not replace those procedures.

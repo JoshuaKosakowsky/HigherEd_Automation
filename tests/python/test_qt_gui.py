@@ -290,7 +290,7 @@ class QtGuiTests(unittest.TestCase):
         for key in ("start_date", "end_date", "detail_codes"):
             self.assertNotIn(key, manual_values)
 
-    def test_wf_staff_has_two_insights_uploads_and_separate_batch_agency_section(self):
+    def test_wf_staff_has_one_insights_upload_and_separate_batch_agency_section(self):
         self.payload['views']['analyst']['workflows'] = ['wf_mines_balance_recon']
         self.write_policy()
         window = self.open_app('STAFF')
@@ -298,11 +298,9 @@ class QtGuiTests(unittest.TestCase):
         page = window.current_page
         self.assertEqual(page.recon_source.count(), 1)
         self.assertEqual(page.mode.count(), 0)
-        self.assertFalse(page.inputs['holds_file'].isHidden())
-        self.assertFalse(page.inputs['activity_file'].isHidden())
-        self.assertTrue(page.inputs['detail_codes'].isHidden())
-        self.assertEqual(page.inputs['holds_file'].parentWidget().objectName(), 'bannerInputs')
-        self.assertEqual(page.inputs['activity_file'].parentWidget(), page.inputs['holds_file'].parentWidget())
+        self.assertFalse(page.inputs['banner_file'].isHidden())
+        self.assertNotIn('detail_codes', page.inputs)
+        self.assertEqual(page.inputs['banner_file'].parentWidget().objectName(), 'bannerInputs')
         self.assertEqual(page.inputs['wf_files'].parentWidget().objectName(), 'wfInputs')
         paths = [self.root / f'synthetic_wf_{index}.xlsx' for index in range(3)]
         for path in paths:
@@ -310,7 +308,7 @@ class QtGuiTests(unittest.TestCase):
         batch = page.inputs['wf_files']
         self.assertTrue(batch.accept_paths(tuple(paths[:2])))
         self.assertTrue(batch.accept_paths(tuple(paths[1:])))
-        for key in ('holds_file', 'activity_file'):
+        for key in ('banner_file',):
             path = self.root / f'{key}.xlsx'
             path.touch()
             page.inputs[key].setText(str(path))
@@ -319,32 +317,29 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(parameters['banner_source'], 'manual')
         self.assertNotIn('detail_codes', parameters)
 
-    def test_wf_admin_queries_both_reports_but_keeps_agency_upload_and_prod_review(self):
+    def test_wf_admin_queries_combined_report_but_keeps_agency_upload_and_prod_review(self):
         window = self.open_app()
         window.show_workflow(get_workflow('wf_mines_balance_recon'))
         page = window.current_page
         self.assertEqual(page.recon_source.count(), 2)
         page.recon_source.setCurrentIndex(page.recon_source.findData('sql'))
-        self.assertTrue(page.inputs['holds_file'].isHidden())
-        self.assertTrue(page.inputs['activity_file'].isHidden())
-        self.assertFalse(page.inputs['detail_codes'].isHidden())
-        self.assertEqual(page.inputs['detail_codes'].text(), 'WOFF, BDRC')
+        self.assertTrue(page.inputs['banner_file'].isHidden())
+        self.assertFalse(page.inputs['submission_percentage'].isHidden())
         self.assertFalse(page.inputs['wf_files'].isHidden())
         self.assertFalse(page.production_warning.isHidden())
         wf = self.root / 'agency.xlsx'
         wf.touch()
         page.inputs['wf_files'].setText(str(wf))
         parameters = page._parse_parameters()
-        self.assertNotIn('holds_file', parameters)
-        self.assertNotIn('activity_file', parameters)
-        self.assertEqual(parameters['detail_codes'], 'WOFF, BDRC')
+        self.assertNotIn('banner_file', parameters)
+        self.assertEqual(parameters['submission_percentage'], 0.25)
         captured = []
         with patch.object(page, '_confirm', side_effect=lambda context: captured.append(context) or False):
             page._run()
         self.assertEqual(captured[0].mode, WorkflowMode.PRODUCTION)
         page.recon_source.setCurrentIndex(page.recon_source.findData('manual'))
-        self.assertFalse(page.inputs['holds_file'].isHidden())
-        self.assertTrue(page.inputs['detail_codes'].isHidden())
+        self.assertFalse(page.inputs['banner_file'].isHidden())
+        self.assertNotIn('detail_codes', page.inputs)
 
     def test_admin_trends_matches_banner_output_blocks_and_source_switching(self):
         window = self.open_app()

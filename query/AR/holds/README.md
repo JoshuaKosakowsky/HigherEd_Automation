@@ -1,6 +1,6 @@
 # Student account holds and delinquency reports
 
-## Collections tracking
+## W&F - Banner Recon (collections tracking)
 
 `collections_tracking.sql` supports analyst reconciliation of accounts formally
 sent to the collections agency, identified by a `CO` hold whose to date is
@@ -17,7 +17,8 @@ the same displayed values. The report uses current SPRIDEN identities
 or SGBSTDN filter; the qualifying CO hold defines the account population.
 
 Output: `CWID`, `First Name`, `Last Name`, `Current Account Balance`,
-`Latest Feed Date`, `Hold Code`, `From Date`, `To Date`. The balance uses the
+`Latest Feed Date`, `CO Hold`, `TO Hold`, `From Date`, `To Date`, `WOFF`,
+`BDRC`, `Total Balance`. The balance uses the
 delinquency report's all-term charges-minus-payments method with TBBDETC types
 C/P, signed reversals and rounding to cents. Future terms are included. Unknown
 detail types, missing amounts or no transactions leave the balance blank while
@@ -25,9 +26,24 @@ retaining the account; a blank is not a known zero. Missing feed dates remain
 blank. Latest Feed Date is the maximum across all account transactions, not a
 referral date, last payment date or agency-specific activity date.
 
+From 0.23.4, [issue #15](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/15)
+combines W&F's Banner sources in this query. The owner clarified during
+implementation: retain active CO accounts only, and sum signed posted Amount
+for WOFF/BDRC. TO holds use the same end-date rule as CO and add an indicator
+without adding rows. WOFF/BDRC include all dates and signed reversals, without
+using remaining Balance. No matching code activity is zero when transactions
+exist; unknown amounts stay NULL. Total Balance is Current Account Balance +
+WOFF + BDRC; a NULL component leaves it NULL. No-transaction accounts stay blank.
+
+Example: charges 500, WOFF payment Amounts 125 and -25, BDRC payment 50 give
+Current Account Balance 350, WOFF 100, BDRC 50 and Total Balance 500. Duplicate
+TO holds cannot multiply those totals. TO-only and WOFF-only accounts without
+qualifying CO remain outside the population. This replaces the old hold-only
+export schema; saved Insights questions must be updated before manual upload.
+
 Run `validate_hold_schema.sql` first, including its TBRACCD FEED_DATE check.
 Paste the SQL into a native Insights question, or choose **Connections →
-Holds — Collections tracking** in app 0.19.0 with administrator access. No
+Holds — W&F - Banner Recon** in app 0.23.4 with administrator access. No
 parameters are needed. The app reuses TEST/PROD connection controls, rejects
 incomplete API results using `Report Row Count`, removes that internal count
 from the workbook, and preserves existing files. All three date columns export

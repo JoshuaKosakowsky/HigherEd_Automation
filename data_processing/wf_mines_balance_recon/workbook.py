@@ -1,4 +1,4 @@
-"""Read original reports and collect source snapshots without matching accounts."""
+"""Read original reports and collect source snapshots and reconcile account totals."""
 from __future__ import annotations
 
 import re
@@ -18,19 +18,21 @@ from data_processing.shared.xlsx_output_format import (
 from shared.cancellation import CancellationToken
 from shared.insights.report_results import checked_report_result, prepare_excel_dates
 from .agency_reports import identify_report, read_agency_report
+from .reconciliation import add_principal_amount, reconcile_accounts
 from .source_workbooks import open_source_workbook
 
 
 HOLD_HEADERS = (
     'CWID', 'First Name', 'Last Name', 'Current Account Balance',
-    'Latest Feed Date', 'Hold Code', 'From Date', 'To Date',
+    'Latest Feed Date', 'CO Hold', 'TO Hold', 'From Date', 'To Date',
+    'WOFF', 'BDRC', 'Total Balance',
 )
 ACTIVITY_HEADERS = (
     "'ID'", "'Name'", "'Detail Code'", "'Description'", "'Amount'", "'Balance'",
     "'Term'", "'Aid Year'", "'Feed Document'", "'Feed Date'",
     'detail_code_description', 'Transaction User',
 )
-REPORT_HEADERS = {'holds': HOLD_HEADERS, 'activity': ACTIVITY_HEADERS}
+REPORT_HEADERS = {'students': HOLD_HEADERS, 'holds': HOLD_HEADERS, 'activity': ACTIVITY_HEADERS}
 
 
 def _header_key(value: object) -> str:
@@ -45,6 +47,8 @@ def prepare_report(frame: pd.DataFrame, report: str) -> pd.DataFrame:
         raise ValueError(f'The {report} report is missing required headers or has duplicate headers.')
     if 'Report Row Count' in frame.columns:
         frame = checked_report_result(frame, 'Report Row Count')
+    canonical = {_header_key(value): value for value in REPORT_HEADERS[report]}
+    frame = frame.rename(columns={value: canonical.get(_header_key(value), value) for value in frame.columns})
     return prepare_excel_dates(frame)
 
 
@@ -166,6 +170,8 @@ def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *
     style_header_row(sheet)
     format_table_columns(sheet, headers=list(frame.columns), currency_headers={
         'Current Account Balance', "'Amount'", "'Balance'", 'Orig. Balance', 'Curr. Balance', 'Collected',
+        'WOFF', 'BDRC', 'Total Balance', 'Principal Amount',
+        'Banner Total Balance', 'W&F Principal Amount', 'Difference',
     })
     for column in sheet.iter_cols(min_row=2):
         if any(isinstance(cell.value, datetime) for cell in column):
@@ -184,32 +190,26 @@ def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *
 
 
 def create_review_workbook(
-    holds: pd.DataFrame, activity: pd.DataFrame, wf_files: tuple[Path, ...], output: Path,
-    *, app_version: str,
+    students: pd.DataFrame, wf_files: tuple[Path, ...], output: Path,
+    *, app_version: str, submission_percentage: object = 0.25,
     cancellation: CancellationToken | None = None,
 ) -> int:
-    """Create Insights and consolidated agency tabs, plus raw unknown sources.
-
-    Agency cells are value snapshots with cell formatting and layout retained.
-    Cached formula values prevent broken cross-workbook references; missing
-    caches fail explicitly rather than silently turning financial data blank.
-    """
+    """Create account reconciliation, named agency tabs and other source snapshots."""
     validate_output(output, wf_files)
     book = Workbook()
     book.remove(book.active)
-    used = {'active co holds', 'banner detail codes', 'w&f collections', 'w&f returned'}
+    used = {'students in collections', 'reconciliation', 'w&f collections', 'w&f returned'}
     grouped = {}
     agency_sheets = 0
     try:
-        for name, frame, report, date_header in (
-            ('Active CO Holds', holds, 'holds', 'From Date'),
-            ('Banner Detail Codes', activity, 'activity', 'Feed Date'),
-        ):
-            frame = _ordered_report(prepare_report(frame, report), date_header)
-            _write_frame(book, name, frame, cancellation)
+        students = _ordered_report(prepare_report(students, 'students'), 'From Date')
+        _write_frame(book, 'Students in Collections', students, cancellation)
         for path in wf_files:
             if cancellation:
                 cancellation.check()
+            # Unisa verification files are accepted in the batch but omitted in full.
+            if any(creditor in path.name for creditor in ('12007', '12009', '12559', '12561')):
+                continue
             report = identify_report(path)
             imported = read_agency_report(path, report, cancellation=cancellation) if report else None
             parsed_sheets = set()
@@ -267,13 +267,21 @@ def create_review_workbook(
                 source.close()
                 if cached is not None:
                     cached.close()
-        for position, name in enumerate(('W&F Collections', 'W&F Returned'), 2):
+        collections = add_principal_amount(
+            pd.concat(grouped.get('W&F Collections', []), ignore_index=True)
+            if 'W&F Collections' in grouped else pd.DataFrame(), submission_percentage,
+        )
+        position = 1
+        for name in ('W&F Collections', 'W&F Returned'):
             if name in grouped:
-                frame = pd.concat(grouped[name], ignore_index=True)
+                frame = collections if name == 'W&F Collections' else pd.concat(grouped[name], ignore_index=True)
                 frame = _ordered_report(frame, 'Placement' if name == 'W&F Collections' else 'Return Date')
                 _write_frame(book, name, frame, cancellation, index=position)
-        book.properties.title = 'W&F - Mines Balance Recon: source review'
-        book.properties.description = f'App {app_version}. Source snapshots only; no matching or recon conclusions.'
+                position += 1
+        returned = pd.concat(grouped['W&F Returned'], ignore_index=True) if 'W&F Returned' in grouped else pd.DataFrame()
+        _write_frame(book, 'Reconciliation', reconcile_accounts(students, collections, returned), cancellation, index=1)
+        book.properties.title = 'W&F - Banner Recon'
+        book.properties.description = f'App {app_version}. Submission Percentage: {submission_percentage}. Account totals for review.'
         save_new_workbook(book, output, cancellation=cancellation)
         return agency_sheets
     finally:

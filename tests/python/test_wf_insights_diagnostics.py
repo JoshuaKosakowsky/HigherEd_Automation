@@ -23,6 +23,9 @@ class WFInsightsDiagnosticsTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.output = self.root / 'review.xlsx'
+        path_patch = patch('app.gui.services.wf_mines_balance_recon.get_shared_gui_access_path', return_value=self.root / 'access.json')
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
         wf = self.root / 'synthetic.xlsx'
         wf.touch()
         self.context = WorkflowContext('wf_mines_balance_recon', dict(
@@ -64,31 +67,31 @@ class WFInsightsDiagnosticsTests(unittest.TestCase):
     def test_stage_and_safe_categories_distinguish_auth_first_and_second_reports(self):
         for stage, error, message in (
             ('auth', InsightsBrowserAuthenticationError('SECRET auth URL'), 'sign-in/session validation'),
-            ('holds', InsightsAPIError('SECRET response', status_code=403), 'querying Collections tracking. HTTP 403'),
+            ('holds', InsightsAPIError('SECRET response', status_code=403), 'querying W&F - Banner Recon. HTTP 403'),
             ('holds', InsightsAPIError('SECRET response', status_code=401), 'session expired'),
             ('holds', InsightsAPIError('SECRET response', status_code=429), 'request limit reached'),
-            ('activity', InsightsAPIError('SECRET URL', code='timeout'), 'querying W&F - Mines Balance Recon transactions. The Insights request timed out'),
+            ('activity', InsightsAPIError('SECRET URL', code='timeout'), 'querying W&F - Banner Recon. The Insights request timed out'),
             ('activity', InsightsAPIError('SECRET database error', code='query_failed'), 'server did not complete the SQL query'),
             ('holds', FileNotFoundError('SECRET local path'), 'required local SQL file'),
             ('holds', RuntimeError('SECRET unexpected error'), 'Unexpected application error'),
         ):
             with self.subTest(stage=stage, message=message):
-                self.client.run_sql_file.side_effect = error if stage == 'holds' else None
+                self.client.run_sql_file.side_effect = error if stage in {'holds', 'activity'} else None
                 self.client.run_sql.side_effect = error if stage == 'activity' else None
                 result = self.failure(auth_error=error if stage == 'auth' else None)
                 self.assertIn(message, result)
 
     def test_missing_invalid_and_capped_counts_identify_the_report_and_safe_counts(self):
         cases = (
-            ('holds', pd.DataFrame({'Name': ['SECRET source row']}), 'Collections tracking', 'missing the Report Row Count'),
+            ('holds', pd.DataFrame({'Name': ['SECRET source row']}), 'W&F - Banner Recon', 'missing the Report Row Count'),
             ('holds', pd.DataFrame({'Name': ['SECRET source row'], 'Report Row Count': [5]}),
-             'Collections tracking', 'received 1 of 5 rows'),
+             'W&F - Banner Recon', 'received 1 of 5 rows'),
             ('activity', pd.DataFrame({'Name': ['SECRET source row'], 'Report Row Count': [1.0]}),
-             'W&F - Mines Balance Recon transactions', 'invalid or inconsistent'),
+             'W&F - Banner Recon', 'invalid or inconsistent'),
         )
         for report, frame, name, message in cases:
             with self.subTest(report=report, message=message):
-                self.client.run_sql_file.return_value = frame if report == 'holds' else self.holds
+                self.client.run_sql_file.return_value = frame
                 self.client.run_sql.return_value = frame if report == 'activity' else self.activity
                 result = self.failure()
                 self.assertIn(f'checking completeness of {name}', result)
