@@ -74,8 +74,8 @@ multiple periods is flagged for timing/reused-reference review.
 
 Both sources must be present and **debits and credits must each agree in exact
 cents**. A zero net difference does not hide offsetting errors or a missing zero
-amount row. Positive Banner amounts are debits and negative amounts are credits;
-the existing September example supports this convention. Non-SIS Workday
+amount row. Positive Banner amounts are debits and negative amounts are credits, after
+the TPS00080 sign correction described below. Non-SIS Workday
 journals are retained separately. Invalid dates/amounts and duplicate transaction
 identities block automatic substitution; suspect rows are retained in the source
 tabs with selection status. No rows are deduplicated.
@@ -89,22 +89,67 @@ source occurrence within each fiscal period; all Workday rows in the block come
 before its Banner rows. Banner rows without a Workday feed match follow last.
 Source selection statuses retain review warnings; the
 workbook does not include separate Verification or Exceptions tabs.
-Journal Number displays only a six- or seven-digit SIS Memo / Banner Feed
-Document posting code. CWIDs, manual memos and other reference formats leave
-this column blank. Original Workday Journal Entry values stay in Workday Data.
+Journal Number and Memo / Feed Document display only a six- or seven-digit
+SIS Memo / Banner Feed Document posting code. CWIDs, manual memos and other
+reference formats leave both columns blank. Original Workday Journal Entry values stay in Workday Data.
 Alternating journal groups have a light grey background across their Workday
 and Banner rows. Combined omits Status, Source Row, Included in Activity,
-Quarter and Activity Debit/Credit. Use Period Totals for reconciled totals:
+Quarter and Activity Debit/Credit. Use Period Totals for source comparisons:
 Combined's displayed Debit/Credit includes both summaries and their detail.
 
 | Sheet | Use |
 | --- | --- |
-| 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' original Debit/Credit remain visible for comparison; use Period Totals for totals without double-counting. |
-| 1305 Doc Recon | Union of feed documents from both sources, with separate debit/credit differences and editable Notes. Quarter, source row counts and status columns are omitted. |
-| 1305 CWID Recon | Banner plus non-SIS Workday student activity by fiscal period. Total Debits/Credits explicitly label the sum of Banner and Other Workday amounts. Sponsor account descriptions may supply the student's CWID; no SIS student allocation is invented. Quarter, row counts and status columns are omitted. Net Period Activity is not an ending balance. |
-| 1305 Period Totals | Period/quarter/year labels and source/combined totals across the selected date range, including periods with no supplied activity. Notes starts blank for staff comments; Status and Document Exceptions are omitted. |
+| 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' Debit/Credit remain visible for comparison, including the TPS00080 correction; Period Totals keeps each source separate. |
+| 1305 Doc Recon | Union of feed documents from both sources, with signed Workday Total Amt (SIS), Banner Total Amt, Difference (Banner minus Workday), and editable Notes. |
+| 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner minus Workday, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation and Student Worktag remain. |
+| 1305 Period Totals | Fiscal Year, Period, Quarter, Workday SIS Amt, Workday Other Amt, Banner Amt, Difference, Notes. Difference is Banner minus (Workday SIS + Workday Other). Includes empty periods in the selected range; Notes starts blank. |
 | Workday Data / Banner Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
 | Worktags (when uploaded) | Cleaned CWID, term code/description, worktag type and six-digit number. Only the requested metadata is retained. |
+
+## Workday coding and signed amounts (0.24.1)
+
+[Issue #17](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/17)
+defines the Banner description mappings and the compact amount layout. The owner
+confirmed signed **Debit minus Credit**, **Banner minus Workday** differences,
+and **Review** for unmatched ledger accounts in the implementation chat.
+Credits are stored internally as positive magnitudes, so adding Debit and Credit
+would hide reversal signs. These output changes retain the existing separate
+exact-cent debit/credit matching controls; a zero displayed Difference does not
+prove that both sides agree or authorize Banner substitution.
+
+Combined appends **Ledger Acct** and **Spend Cat** for Banner rows only. Workday
+rows leave both blank; their original ledger remains in Workday Data. Comparisons
+ignore case and surrounding whitespace. Rules are evaluated in this order:
+
+| Banner Description | Ledger Acct | Spend Cat |
+| --- | --- | --- |
+| Ends in RA | 1631e | 6152 |
+| Ends in TA | 1631e | 6153 |
+| Ends in GTF | 1631e | 6154 |
+| Contains FELLOW T&F | 5893e | 7503 if it ends in T&F; otherwise Review |
+| Contains Grad Fellowship Living Stipend | 5893e | 7502 |
+| Other description ending in T&F | Review | 7503 |
+| No matching rule | Review | Review |
+
+Ledger and spend rules are independent: the RA/TA/GTF suffix rules take priority
+for both; the living-stipend spend rule takes priority over the T&F spend suffix.
+When Banner ID contains **TPS00080**, it overrides all description rules with
+**No Ledger Applicable** and **No Spend Applicable**. Its Amount changes sign
+before matching and aggregation, including document, CWID, period and Combined
+views. Original Banner Data retains the supplied Amount and Description.
+
+Synthetic acceptance examples:
+
+- Description `Synthetic RA` maps to `1631e` / `6152`.
+- Description `Synthetic FELLOW T&F` maps to `5893e` / `7503`.
+- ID `TPS00080`, Description `10000001 Synthetic RA`, Amount +4,000 becomes
+  a credit of 4,000 (signed amount −4,000); Amount −4,000 becomes a debit of
+  4,000. Both classification fields show the exception labels above.
+- Workday SIS −25, Other Workday −7, and Banner −20 produce document Difference
+  +5, CWID Net Period Activity −13, and period Difference +12.
+- Posting references `260001` and `2600001` display; `12345`, `12345678`, and
+  `26A001` stay blank in both Combined posting-reference columns. No current-year
+  prefix is required; older exports remain usable. Raw source references remain.
 
 CWIDs follow the supplied VBA rule: eight digits beginning with `10`, taken
 from the explicit ID or the leading description/memo token. A valid Banner

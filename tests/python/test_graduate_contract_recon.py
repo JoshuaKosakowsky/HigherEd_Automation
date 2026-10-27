@@ -14,7 +14,7 @@ import pandas as pd
 from openpyxl import Workbook, load_workbook
 
 from data_processing.graduate_contract_recon.export import export_reconciliation
-from data_processing.graduate_contract_recon.reconciliation import reconcile
+from data_processing.graduate_contract_recon.reconciliation import banner_workday_classification, reconcile
 from data_processing.graduate_contract_recon.sources import (
     SourceData, banner_from_frame, fiscal_scope, money, read_source, uploaded_scope,
 )
@@ -95,11 +95,12 @@ class GraduateContractReconTests(unittest.TestCase):
             rows = list(book["1305 Combined"].iter_rows(min_row=2, values_only=True))
             self.assertEqual([row[3] for row in rows],
                              ["123456", "123456", None, "1234567", "1234567", None, None])
+            self.assertEqual([row[9] for row in rows], [row[3] for row in rows])
             self.assertEqual(rows[1][0], "10000001")
             self.assertEqual(rows[2][0], "10000001")
             combined = book["1305 Combined"]
             headers = [cell.value for cell in combined[1]]
-            self.assertEqual(len(headers), 14)
+            self.assertEqual(len(headers), 16)
             for removed in ("Status", "Source Row", "Included in Activity", "Quarter",
                             "Activity Debit", "Activity Credit"):
                 self.assertNotIn(removed, headers)
@@ -111,12 +112,31 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertTrue(all(cell.fill.fgColor.rgb == "FFEFEFEF" for cell in combined[number]))
             book.close()
 
+    def test_combined_posting_references_require_six_or_seven_digits(self):
+        feeds = ["12345", "260001", "2600001", "12345678", "26A001", "memo 260001", "=260001"]
+        result = self.build([wd_row(memo=feed) for feed in feeds],
+                            [bn_row(feed=feed) for feed in feeds])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                rows = list(book["1305 Combined"].iter_rows(min_row=2, values_only=True))
+                expected = [value for feed in feeds for value in
+                            ([feed, feed] if feed in {"260001", "2600001"} else [None, None])]
+                self.assertEqual([row[3] for row in rows], expected)
+                self.assertEqual([row[9] for row in rows], expected)
+                self.assertEqual([values[5] for _, values in result.sources[0].rows], feeds)
+                self.assertEqual([values[8] for _, values in result.sources[1].rows], feeds)
+            finally:
+                book.close()
+
     def test_missing_zero_amount_sources_never_show_agreement(self):
         result = self.build([wd_row(0, memo="9001")], [bn_row(0, feed="9002")])
         self.assertEqual([row[12] for row in result.documents], ["Missing Banner", "Missing Workday"])
         self.assertTrue(dict(result.verification)["Conclusion"].startswith("OPEN"))
 
-    def test_slim_review_sheets_keep_amounts_notes_and_clear_student_totals(self):
+    def test_signed_review_sheets_keep_amounts_notes_and_requested_layout(self):
         result = self.build(
             [wd_row(60), wd_row(5, credit=2, memo="10000001 Manual", kind="Manual")],
             [bn_row(60)])
@@ -127,24 +147,23 @@ class GraduateContractReconTests(unittest.TestCase):
             try:
                 doc = book["1305 Doc Recon"]
                 self.assertEqual([cell.value for cell in doc[1]],
-                    ["Fiscal Year", "Period", "Feed Document", "Workday Debit", "Banner Debit",
-                     "Debit Difference", "Workday Credit", "Banner Credit", "Credit Difference", "Notes"])
-                self.assertEqual([cell.value for cell in doc[2]][3:9], [60, 60, 0, 0, 0, 0])
+                    ["Fiscal Year", "Period", "Feed Document", "Workday Total Amt",
+                     "Banner Total Amt", "Difference", "Notes"])
+                self.assertEqual([cell.value for cell in doc[2]][3:6], [60, 60, 0])
                 cwid = book["1305 CWID Recon"]
                 self.assertEqual([cell.value for cell in cwid[1]],
-                    ["Fiscal Year", "Period", "CWID", "Banner Debit", "Banner Credit",
-                     "Other Workday Debit", "Other Workday Credit", "Total Debits (Banner + Other Workday)",
-                     "Total Credits (Banner + Other Workday)", "Net Period Activity", "Notes / Explanation", "Student Worktag"])
-                self.assertEqual([cell.value for cell in cwid[2]][3:10], [60, 0, 5, 2, 65, 2, 63])
-                self.assertNotEqual(cwid["H2"].number_format, "General")
+                    ["Fiscal Year", "Period", "CWID", "Banner Total Amt", "Workday Total Amt",
+                     "Net Period Activity", "Notes / Explanation", "Student Worktag"])
+                self.assertEqual([cell.value for cell in cwid[2]][3:6], [60, 3, 57])
                 periods = book["1305 Period Totals"]
-                self.assertNotIn("Document Exceptions", [cell.value for cell in periods[1]])
-                self.assertEqual(periods.max_column, 16)
-                self.assertEqual(periods["P1"].value, "Notes")
-                self.assertNotIn("Status", [cell.value for cell in periods[1]])
-                self.assertTrue(all(cell.value in (None, "") for cell in periods["P"][1:]))
-                self.assertEqual(periods["L2"].value, 65)
-                self.assertEqual(periods["M2"].value, 2)
+                self.assertEqual([cell.value for cell in periods[1]],
+                    ["Fiscal Year", "Period", "Quarter", "Workday SIS Amt", "Workday Other Amt",
+                     "Banner Amt", "Difference", "Notes"])
+                self.assertTrue(all(cell.value in (None, "") for cell in periods["H"][1:]))
+                self.assertEqual([cell.value for cell in periods[2]][3:7], [60, 3, 60, -3])
+                for ws, columns in ((doc, "DEF"), (cwid, "DEF"), (periods, "DEFG")):
+                    for column in columns:
+                        self.assertNotEqual(ws[f"{column}2"].number_format, "General")
                 self.assertEqual(doc.freeze_panes, "D2")
                 self.assertEqual(cwid.freeze_panes, "D2")
             finally:
@@ -156,6 +175,76 @@ class GraduateContractReconTests(unittest.TestCase):
         self.assertEqual(len(result.combined), 4)
         self.assertEqual(sum(row[17] for row in result.combined), 25)
         self.assertEqual(result.students[0][10], -25)
+
+    def test_tps00080_sign_is_flipped_before_matching_without_changing_source(self):
+        for amount in (Decimal("4000.00"), Decimal("-4000.00"), Decimal("0.00")):
+            with self.subTest(amount=amount):
+                debit, credit = max(-amount, Decimal("0")), max(amount, Decimal("0"))
+                result = self.build([wd_row(debit, credit)], [bn_row(
+                    amount, account="TPS00080", desc="10000001 Synthetic sponsor RA")])
+                self.assertEqual(result.documents[0][12], "Amounts agree")
+                self.assertEqual(result.documents[0][5], debit)
+                self.assertEqual(result.documents[0][8], credit)
+                self.assertEqual(result.students[0][4:6], [debit, credit])
+                self.assertEqual(result.sources[1].rows[0][1][4], amount)
+                self.assertEqual(result.combined[1][13:15], [debit, credit])
+
+        regular = self.build([wd_row(60)], [bn_row(60, account="TPS00081",
+            desc="10000001 Synthetic sponsor RA")])
+        self.assertEqual(regular.documents[0][12], "Amounts agree")
+
+    def test_banner_workday_coding_rules_and_exception_precedence(self):
+        cases = [
+            ("Synthetic RA", "1631e", "6152"),
+            ("Synthetic TA", "1631e", "6153"),
+            ("Synthetic GTF", "1631e", "6154"),
+            ("Synthetic FELLOW T&F", "5893e", "7503"),
+            ("Synthetic Grad Fellowship Living Stipend adjustment", "5893e", "7502"),
+            ("Synthetic T&F", "Review", "7503"),
+            ("Synthetic unknown", "Review", "Review"),
+            ("", "Review", "Review"),
+            ("  synthetic ra  ", "1631e", "6152"),
+            ("FELLOW T&F Synthetic RA", "1631e", "6152"),
+            ("Grad Fellowship Living Stipend T&F", "5893e", "7502"),
+        ]
+        for description, ledger, spend in cases:
+            with self.subTest(description=description):
+                self.assertEqual(banner_workday_classification("10000001", description), (ledger, spend))
+                self.assertEqual(banner_workday_classification("TPS00080", description),
+                                 ("No Ledger Applicable", "No Spend Applicable"))
+
+    def test_combined_adds_banner_coding_without_assigning_workday_memos(self):
+        result = self.build([wd_row(memo="260001")], [bn_row(feed="260001", desc="Synthetic RA")])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                combined = book["1305 Combined"]
+                self.assertEqual([cell.value for cell in combined[1]][-2:], ["Ledger Acct", "Spend Cat"])
+                self.assertEqual([cell.value for cell in combined[2]][-2:], [None, None])
+                self.assertEqual([cell.value for cell in combined[3]][-2:], ["1631e", "6152"])
+                self.assertEqual(book["Banner Data"].cell(2, 5).value, "Synthetic RA")
+            finally:
+                book.close()
+
+    def test_signed_export_reversals_and_difference_direction(self):
+        result = self.build([wd_row(0, 25), wd_row(0, 7, kind="Manual", memo="10000001 adjustment")],
+                            [bn_row(-20)])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                doc = list(book["1305 Doc Recon"].values)[1]
+                self.assertEqual(doc[3:6], (-25, -20, 5))
+                cwid = list(book["1305 CWID Recon"].values)[1]
+                self.assertEqual(cwid[3:6], (-20, -7, -13))
+                period = list(book["1305 Period Totals"].values)[1]
+                self.assertEqual(period[3:7], (-25, -7, -20, 12))
+                self.assertEqual(result.documents[0][12], "Amount difference")
+            finally:
+                book.close()
 
     def test_blank_external_reference_falls_back_to_numeric_memo(self):
         result = self.build([wd_row(memo=9001.0, ext="")], [bn_row(feed="9001.0")])

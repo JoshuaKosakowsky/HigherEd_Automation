@@ -74,7 +74,7 @@ class GraduateContractServiceTests(unittest.TestCase):
         self.assertEqual(reader.call_args_list[1].args, (self.inputs["worktag_file"], "Worktags"))
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book["1305 CWID Recon"]["L2"].value, "Grant: 123456")
+            self.assertEqual(book["1305 CWID Recon"]["H2"].value, "Grant: 123456")
             self.assertIn("Worktags", book.sheetnames)
         finally:
             book.close()

@@ -38,6 +38,27 @@ class Reconciliation:
     issues: list[Issue]
 
 
+def banner_workday_classification(account: str, description: str) -> tuple[str, str]:
+    """Infer Workday coding from Banner using the rules in issue #17."""
+    if "TPS00080" in account.upper():
+        return "No Ledger Applicable", "No Spend Applicable"
+    description = description.strip().upper()
+    if description.endswith(("TA", "RA", "GTF")):
+        ledger = "1631e"
+    elif "FELLOW T&F" in description or "GRAD FELLOWSHIP LIVING STIPEND" in description:
+        ledger = "5893e"
+    else:
+        ledger = "Review"
+    for suffix, spend in (("RA", "6152"), ("TA", "6153"), ("GTF", "6154")):
+        if description.endswith(suffix):
+            return ledger, spend
+    if "GRAD FELLOWSHIP LIVING STIPEND" in description:
+        return ledger, "7502"
+    if description.endswith("T&F"):
+        return ledger, "7503"
+    return ledger, "Review"
+
+
 def total(rows: list[Transaction], side: str) -> Decimal:
     return sum((getattr(row, side) for row in rows), ZERO)
 

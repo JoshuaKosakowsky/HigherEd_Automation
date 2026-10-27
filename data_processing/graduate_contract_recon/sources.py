@@ -302,6 +302,10 @@ def prepare_source(
                 credit = money(get("credit"), blank_zero=True)
             else:
                 amount = money(get("amount"))
+                # Issue #17: this sponsor's Banner sign is opposite Workday's.
+                # Normalize before matching/aggregation; keep the source row intact.
+                if "TPS00080" in text(get("id")).upper():
+                    amount = -amount
                 debit, credit = max(amount, ZERO), max(-amount, ZERO)
         except ValueError:
             source.dispositions[number] = "Excluded invalid amount"

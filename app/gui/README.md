@@ -304,7 +304,14 @@ The **Grad Contract Sponsor** view receives this workflow with uploads only;
 administrators can also select **Run SQL from PROD Insights** for Banner.
 Workday uploads are grouped together in a pale-blue section before Banner data.
 The form is titled **Inputs**, with the save location in a separate **Outputs**
-section. Period Totals includes a blank **Notes** column for staff comments.
+section. From patch 0.24.1, Combined adds Banner-derived **Ledger Acct** and
+**Spend Cat**, and suppresses posting references outside six or seven digits.
+TPS00080 amounts reverse sign before matching; original source tabs stay intact.
+Document/CWID/period views use signed Debit minus Credit amounts, with differences
+calculated as Banner minus Workday. Period Totals compares Banner against all
+Workday (SIS plus Other) and keeps a blank **Notes** column for staff comments.
+See the [1305 technical guide](../../data_processing/graduate_contract_recon/README.md)
+for mappings, exceptions and synthetic acceptance examples.
 Workday always requires an uploaded export.
 the optional **Grad Contract Worktag** upload reads Find Journal Lines to add a
 cleaned Worktags tab and Student Worktag column matched by CWID. Multiple distinct

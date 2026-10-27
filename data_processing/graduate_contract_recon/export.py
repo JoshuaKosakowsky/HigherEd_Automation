@@ -14,7 +14,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from data_processing.shared.xlsx_output_format import apply_default_font, format_table_columns
 from shared.cancellation import CancellationToken
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
-from .reconciliation import COMBINED_HEADERS, CWID_HEADERS, DOC_HEADERS, PERIOD_HEADERS, Reconciliation
+from .reconciliation import COMBINED_HEADERS, Reconciliation, banner_workday_classification
 from .worktags import StudentWorktags, WORKTAG_HEADERS
 
 
@@ -25,12 +25,13 @@ COMBINED_COLUMN_ORDER = (7, 11, 1, 9, 6, 4, 13, 14, 12, 3, 0, 8, 10, 19)
 COMBINED_OUTPUT_HEADERS = [COMBINED_HEADERS[index] for index in COMBINED_COLUMN_ORDER]
 COMBINED_OUTPUT_HEADERS[2] = "Recon Period"
 COMBINED_OUTPUT_HEADERS[3] = "Journal Number"
-DOC_COLUMN_ORDER = (0, 1, 3, 4, 5, 6, 7, 8, 9, 13)
-CWID_COLUMN_ORDER = (0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 14)
-PERIOD_COLUMN_ORDER = (*range(15), 16)
-CWID_OUTPUT_HEADERS = [CWID_HEADERS[index] for index in CWID_COLUMN_ORDER]
-CWID_OUTPUT_HEADERS[7] = "Total Debits (Banner + Other Workday)"
-CWID_OUTPUT_HEADERS[8] = "Total Credits (Banner + Other Workday)"
+COMBINED_OUTPUT_HEADERS += ["Ledger Acct", "Spend Cat"]
+DOC_OUTPUT_HEADERS = ["Fiscal Year", "Period", "Feed Document", "Workday Total Amt",
+                      "Banner Total Amt", "Difference", "Notes"]
+CWID_OUTPUT_HEADERS = ["Fiscal Year", "Period", "CWID", "Banner Total Amt",
+                       "Workday Total Amt", "Net Period Activity", "Notes / Explanation", "Student Worktag"]
+PERIOD_OUTPUT_HEADERS = ["Fiscal Year", "Period", "Quarter", "Workday SIS Amt",
+                         "Workday Other Amt", "Banner Amt", "Difference", "Notes"]
 
 
 def combined_output_row(row: list[object]) -> list[object]:
@@ -38,6 +39,9 @@ def combined_output_row(row: list[object]) -> list[object]:
     # Column D is the SIS/Banner posting reference, never a student identifier.
     reference = "" if str(row[18]).startswith("Other Workday activity") else str(row[3])
     values[3] = reference if re.fullmatch(r"[0-9]{6,7}", reference) else ""
+    values[9] = values[3]
+    values.extend(banner_workday_classification(str(row[8]), str(row[12]))
+                  if row[4] == "Banner" else ("", ""))
     return values
 
 
@@ -74,6 +78,7 @@ def export_reconciliation(
         currency = {header for header in headers if any(word in header for word in ("Debit", "Credit", "Difference", "Activity"))
                     and header not in {"Included in Activity"}}
         currency |= {"Amount", "Balance", "'Amount'", "'Balance'"}
+        currency |= {header for header in headers if header.endswith(" Amt")}
         format_table_columns(ws, headers=headers, currency_headers=currency,
                              count_headers={header for header in headers if "Count" in header})
         ws.freeze_panes = "A2"
@@ -99,14 +104,26 @@ def export_reconciliation(
             if shaded:
                 for cell in combined[number]:
                     cell.fill = grey
-        sheet("1305 Doc Recon", [DOC_HEADERS[index] for index in DOC_COLUMN_ORDER],
-              [[row[index] for index in DOC_COLUMN_ORDER] for row in review.documents])
-        sheet("1305 CWID Recon", [*CWID_OUTPUT_HEADERS, "Student Worktag"],
-              [[*[row[index] for index in CWID_COLUMN_ORDER],
-                worktags.by_cwid.get(str(row[3]), "No matching worktag") if worktags else ""]
-               for row in review.students])
-        sheet("1305 Period Totals", [*[PERIOD_HEADERS[index] for index in PERIOD_COLUMN_ORDER[:-1]], "Notes"],
-              [[*[row[index] for index in PERIOD_COLUMN_ORDER[:-1]], ""] for row in review.periods])
+        # Present signed amounts while retaining separate debit/credit matching
+        # controls internally: net zero must never authorize substitution.
+        documents = []
+        for row in review.documents:
+            workday_amount, banner_amount = row[4] - row[7], row[5] - row[8]
+            documents.append([row[0], row[1], row[3], workday_amount, banner_amount,
+                              banner_amount - workday_amount, row[13]])
+        sheet("1305 Doc Recon", DOC_OUTPUT_HEADERS, documents)
+        students = []
+        for row in review.students:
+            banner_amount, workday_amount = row[4] - row[5], row[6] - row[7]
+            students.append([row[0], row[1], row[3], banner_amount, workday_amount,
+                banner_amount - workday_amount, row[14],
+                worktags.by_cwid.get(str(row[3]), "No matching worktag") if worktags else ""])
+        sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS, students)
+        periods = []
+        for row in review.periods:
+            sis, other, banner_amount = row[3] - row[6], row[9] - row[10], row[4] - row[7]
+            periods.append([*row[:3], sis, other, banner_amount, banner_amount - (sis + other), ""])
+        sheet("1305 Period Totals", PERIOD_OUTPUT_HEADERS, periods)
         book["1305 Combined"].freeze_panes = "E2"
         for name in ("1305 Doc Recon", "1305 CWID Recon"):
             book[name].freeze_panes = "D2"
