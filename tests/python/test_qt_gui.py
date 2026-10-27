@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl, QTimer
 from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton, QSpinBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton, QSpinBox, QStatusBar
 
 from app.gui.main import AutomationApplication
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode, WorkflowResult
@@ -82,6 +82,52 @@ class QtGuiTests(unittest.TestCase):
         self.window.show()
         self.qt.processEvents()
         return self.window
+
+    def test_app_zoom_changes_existing_and_new_pages_and_resets(self):
+        self.addCleanup(apply_theme, self.qt)
+        window = self.open_app()
+        original_font = window.current_page.font().pointSizeF()
+        original_page = window.current_page
+        QTest.keyClick(window, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier)
+        QTest.keyClick(window, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier)
+        self.qt.processEvents()
+        self.assertIs(window.current_page, original_page)
+        self.assertAlmostEqual(window.current_page.font().pointSizeF(), original_font * .75)
+        self.assertIn("font-size: 21px", self.qt.styleSheet())
+        self.assertFalse(window.zoom_out_action.isEnabled())
+        window.show_access_management()
+        self.assertAlmostEqual(window.current_page.font().pointSizeF(), original_font * .75)
+        for _ in range(5):
+            QTest.keyClick(window, Qt.Key.Key_Plus, Qt.KeyboardModifier.ControlModifier)
+        self.qt.processEvents()
+        self.assertFalse(window.zoom_in_action.isEnabled())
+        self.assertAlmostEqual(window.current_page.font().pointSizeF(), original_font * 1.5)
+        QTest.keyClick(window, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
+        self.qt.processEvents()
+        self.assertEqual(window.zoom_percent, 100)
+        self.assertAlmostEqual(window.current_page.font().pointSizeF(), original_font)
+        QTest.keyClick(window, Qt.Key.Key_Plus,
+                       Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(window.zoom_percent, 115)
+        QTest.keyClick(window, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
+        QTest.keyClick(window, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(window.zoom_percent, 115)
+        window.zoom_out_action.trigger()
+        self.assertEqual(window.zoom_percent, 100)
+        self.assertIsNone(window.findChild(QStatusBar))
+
+    def test_navigation_can_be_hidden_and_restored_without_losing_page(self):
+        window = self.open_app()
+        original = window.current_page
+        old_width = window.content.width()
+        window.sidebar_action.setChecked(False)
+        self.qt.processEvents()
+        self.assertFalse(window.sidebar_scroll.isVisible())
+        self.assertGreater(window.content.width(), old_width)
+        self.assertIs(window.current_page, original)
+        window.sidebar_action.setChecked(True)
+        self.qt.processEvents()
+        self.assertTrue(window.sidebar_scroll.isVisible())
 
     def test_admin_navigation_and_every_registered_form_render(self):
         window = self.open_app()

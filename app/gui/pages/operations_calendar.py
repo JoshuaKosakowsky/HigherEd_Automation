@@ -8,13 +8,13 @@ from dataclasses import dataclass, replace
 from datetime import date
 from uuid import uuid4
 
-from PySide6.QtCore import QDate, QPointF, QRectF, Qt
+from PySide6.QtCore import QDate, QEvent, QPointF, QRectF, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog,
-    QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
-    QScrollArea, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget,
+    QDialogButtonBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QTreeWidget, QTreeWidgetItem,
+    QScrollArea, QSizePolicy, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget,
     QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -658,11 +658,16 @@ class TimelineHeader(QHeaderView):
         painter.setPen(QColor(BLASTER_BLUE))
         start, end = self.delegate.start, self.delegate.end
         scale = (rect.width() - 16) / ((end - start).days + 1)
+        next_label_x = rect.left()
         for year, month in month_ticks(start, end):
             day = date(year, month, 1)
             if start <= day <= end:
                 x = rect.left() + 8 + (day - start).days * scale
-                painter.drawText(int(x + 4), rect.bottom() - 9, calendar.month_abbr[month])
+                text = calendar.month_abbr[month]
+                width = painter.fontMetrics().horizontalAdvance(text)
+                if x + 4 >= next_label_x and x + 4 + width < rect.right():
+                    painter.drawText(int(x + 4), rect.bottom() - 9, text)
+                    next_label_x = x + width + 12
         painter.restore()
 
 
@@ -680,22 +685,31 @@ class OperationsCalendarPage(QWidget):
         self.group_timelines = {}
         self.attention_occurrences = []
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.addWidget(label("ADMINISTRATION", "eyebrow"))
+        layout.setContentsMargins(16, 12, 16, 12)
+        options_body = QFrame()
+        options_body.setObjectName("calendarFiltersPanel")
+        options_layout = QVBoxLayout(options_body)
+        options_layout.setContentsMargins(12, 10, 12, 10)
+        options_layout.setSpacing(8)
+        self.options_panel = QScrollArea()
+        self.options_panel.setWidgetResizable(True)
+        self.options_panel.setWidget(options_body)
+        self.options_panel.setMinimumHeight(160)
+        self.options_panel.setMaximumHeight(190)
+        self.options_panel.hide()
         layout.addWidget(label("Bursar Office Calendar", "title"))
-        layout.addWidget(label("Deadlines and coverage together. Filled marks: scheduled / reviewed · outlined marks: needs date review · red line: today.", "muted"))
-        legend = QHBoxLayout()
-        for semester, color in SEMESTER_COLORS.items():
-            swatch = QWidget()
-            swatch.setFixedSize(12, 12)
-            swatch.setStyleSheet(f"background-color: {color};")
-            swatch.setAccessibleName(SEMESTER_LABELS[semester] + " color")
-            legend.addWidget(swatch)
-            legend.addWidget(label(SEMESTER_LABELS[semester], "muted", wrap=False))
-        legend.addStretch()
-        layout.addLayout(legend)
-        filters = QHBoxLayout()
-        staff_filters = QHBoxLayout()
+        filter_heading = QHBoxLayout()
+        filter_heading.addWidget(label("Filter calendar", "field", wrap=False))
+        filter_heading.addStretch()
+        self.clear_filters_button = button("Clear filters", self._clear_filters)
+        self.clear_filters_button.setObjectName("calendarClearFilters")
+        self.clear_filters_button.setMinimumHeight(24)
+        self.clear_filters_button.setEnabled(False)
+        filter_heading.addWidget(self.clear_filters_button)
+        options_layout.addLayout(filter_heading)
+        filters = QGridLayout()
+        filters.setHorizontalSpacing(12)
+        filters.setVerticalSpacing(8)
         self.year = spin_control(date.today().year, 1901, 2198)
         self.period = QComboBox()
         self.period.addItem("Full year", 0)
@@ -703,6 +717,36 @@ class OperationsCalendarPage(QWidget):
             last = (month + 1) % 12 + 1
             self.period.addItem(f"{calendar.month_abbr[month]}–{calendar.month_abbr[last]} (3 months)", month)
         self.period.setToolTip("Choose the months to display. The year is the starting year; Nov–Jan and Dec–Feb continue into the next year.")
+        self.toolbar = QGridLayout()
+        self._toolbar_columns = 0
+        self.options_button = QToolButton()
+        self.options_button.setObjectName("calendarFilters")
+        self.options_button.setText("Filters")
+        self.options_button.setCheckable(True)
+        self.options_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.options_button.setAccessibleDescription("Filters collapsed")
+        self.options_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.options_button.setArrowType(Qt.ArrowType.RightArrow)
+        self.options_button.setMinimumHeight(38)
+        self.options_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.options_button.setToolTip("Show or hide calendar filters. Filtering does not change calendar items.")
+        self.options_button.toggled.connect(self._toggle_filters)
+        self.actions_button = QPushButton("Calendar actions")
+        self.actions_button.setMinimumHeight(38)
+        self.actions_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.actions_menu = QMenu(self.actions_button)
+        self.add_action = self.actions_menu.addAction("Add item", self._add)
+        self.review_action = self.actions_menu.addAction("Review / edit date", self._edit_date)
+        self.series_action = self.actions_menu.addAction("Edit schedule", self._edit_series)
+        self.groups_action = self.actions_menu.addAction("Groups…", self._groups)
+        self.actions_menu.addSeparator()
+        self.actions_menu.addAction("Calendar key…", self._calendar_key)
+        self.actions_menu.addAction("Reload", self._reload)
+        self.actions_menu.addSeparator()
+        self.remove_action = self.actions_menu.addAction("Remove item", self._remove)
+        self.actions_button.setMenu(self.actions_menu)
+        layout.addLayout(self.toolbar)
+        layout.addWidget(self.options_panel)
         self.category = QComboBox()
         self.category.setToolTip("Assign a category in Add item or Edit schedule. Use New category… there to add another label.")
         self.semester = QComboBox()
@@ -714,38 +758,39 @@ class OperationsCalendarPage(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find an event, coverage, or billing detail…")
         self.search.setClearButtonEnabled(True)
-        for caption, widget in (("Year", self.year), ("Calendar view", self.period),
-                                ("Category filter", self.category), ("Semester", self.semester), ("Role / person filter", self.role),
-                                ("Search calendar", self.search)):
+        self.year.setAccessibleName("Year")
+        self.period.setAccessibleName("Calendar view")
+        for index, (caption, widget) in enumerate((("Category", self.category), ("Semester", self.semester),
+                                                  ("Role / person", self.role), ("Search calendar", self.search))):
+            field_layout = QVBoxLayout()
+            field_layout.setSpacing(4)
+            field_label = label(caption, "field", wrap=False)
+            field_label.setBuddy(widget)
+            field_layout.addWidget(field_label)
+            field_layout.addWidget(widget)
             widget.setAccessibleName(caption)
-            if widget in (self.role, self.search):
-                staff_filters.addWidget(widget)
-            else:
-                column = QVBoxLayout()
-                column.setSpacing(4)
-                column.addWidget(label("Category" if widget is self.category else caption, "field", wrap=False))
-                column.addWidget(widget)
-                filters.addLayout(column, 1)
-        layout.addLayout(filters)
-        layout.addLayout(staff_filters)
-        actions = QHBoxLayout()
-        self.add_button = button("Add item", self._add, "primary")
-        self.review_button = button("Review / edit date", self._edit_date)
-        self.series_button = button("Edit schedule", self._edit_series)
-        self.remove_button = button("Remove item", self._remove)
-        self.groups_button = button("Groups…", self._groups)
-        for widget in (self.add_button, self.review_button, self.series_button, self.remove_button):
-            actions.addWidget(widget)
-        actions.addWidget(self.groups_button)
-        actions.addStretch()
-        actions.addWidget(button("Reload", self._reload))
-        layout.addLayout(actions)
+            filters.addLayout(field_layout, index // 2, index % 2)
+        filters.setColumnStretch(0, 1)
+        filters.setColumnStretch(1, 1)
+        for combo in (self.category, self.semester, self.role):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        options_layout.addLayout(filters)
         group_actions = QHBoxLayout()
-        group_actions.addWidget(button("Collapse groups", lambda: self._set_groups_collapsed(True)))
-        group_actions.addWidget(button("Expand groups", lambda: self._set_groups_collapsed(False)))
+        for caption, collapsed in (("Collapse all", True), ("Expand all", False)):
+            control = QToolButton()
+            control.setText(caption)
+            control.setToolTip(f"{caption} calendar groups")
+            control.clicked.connect(lambda checked=False, value=collapsed: self._set_groups_collapsed(value))
+            group_actions.addWidget(control)
         group_actions.addStretch()
+        self.reminders_button = QToolButton()
+        self.reminders_button.setText("Reminders")
+        self.reminders_button.setCheckable(True)
+        group_actions.addWidget(self.reminders_button)
         layout.addLayout(group_actions)
-        self.summary = label("", "status")
+        self.summary = label("", "muted")
         layout.addWidget(self.summary)
         self.table = QTableWidget(0, 3)
         table_setup(self.table, ("Event / coverage / date", "Affects", "Timeline"))
@@ -763,7 +808,6 @@ class OperationsCalendarPage(QWidget):
         self.table.itemSelectionChanged.connect(self._selection)
         self.table.horizontalHeader().sectionResized.connect(self._resize_group_timelines)
         layout.addWidget(self.table, 1)
-        layout.addWidget(label("Upcoming, date review & staffing reminders", "section"))
         self.attention = QTableWidget(0, 3)
         table_setup(self.attention, ("Date", "Event / coverage", "Reminder"))
         self.attention.setAccessibleName("Upcoming and recently passed dates")
@@ -771,20 +815,91 @@ class OperationsCalendarPage(QWidget):
         self.attention.setMaximumHeight(190)
         self.attention.itemDoubleClicked.connect(lambda _: self._edit_attention())
         layout.addWidget(self.attention)
-        self.status = label("", "muted")
-        layout.addWidget(self.status)
+        self.attention.hide()
+        self.reminders_button.toggled.connect(self.attention.setVisible)
         self.year.valueChanged.connect(self._render)
         for combo in (self.period, self.category, self.semester, self.role):
             combo.currentIndexChanged.connect(self._render)
         self.search.textChanged.connect(self._render)
         self._reload()
 
+    def _toggle_filters(self, expanded: bool) -> None:
+        self.options_panel.setVisible(expanded)
+        self.options_button.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.options_button.setAccessibleDescription("Filters expanded" if expanded else "Filters collapsed")
+        if expanded:
+            self.search.setFocus()
+            QTimer.singleShot(0, self, lambda: self.options_panel.ensureWidgetVisible(self.search))
+
+    def _clear_filters(self) -> None:
+        with (QSignalBlocker(self.category), QSignalBlocker(self.semester),
+              QSignalBlocker(self.role), QSignalBlocker(self.search)):
+            self.category.setCurrentIndex(0)
+            self.semester.setCurrentIndex(0)
+            self.role.setCurrentIndex(0)
+            self.search.clear()
+        self._render()
+
+    def _calendar_key(self) -> None:
+        colors = "<br>".join(
+            f'<span style="color:{color}">■</span> {SEMESTER_LABELS[key]}'
+            for key, color in SEMESTER_COLORS.items()
+        )
+        QMessageBox.information(
+            self, "Calendar key",
+            "Filled marks: scheduled / reviewed<br>Outlined marks: needs date review<br>"
+            "Red line: today<br>Diamonds: deadlines<br>Bars: work / coverage periods<br><br>" + colors,
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not hasattr(self, "table"):
+            return
+        width = self.width() - 32 - 2 * self.table.frameWidth() - self.table.verticalScrollBar().sizeHint().width()
+        # Keep most of a laptop viewport for dates. Exact labels remain in
+        # tooltips, and columns can still be dragged wider for detailed review.
+        self.table.setColumnWidth(0, max(150, min(235, round(width * .27))))
+        self.table.setColumnWidth(1, max(100, min(180, round(width * .18))))
+        self._layout_toolbar()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            QTimer.singleShot(0, self, self._layout_toolbar)
+
+    def _layout_toolbar(self):
+        if not hasattr(self, "actions_button"):
+            return
+        controls = (self.year, self.period, self.options_button, self.actions_button)
+        widths = [control.minimumSizeHint().width() for control in controls]
+        columns = 1
+        for candidate in (4, 2):
+            required = sum(max(widths[column::candidate]) for column in range(candidate))
+            if required + (candidate - 1) * self.toolbar.spacing() <= self.width() - 32:
+                columns = candidate
+                break
+        # Qt can compress styled controls below their hints on Windows. Reserve
+        # the measured column widths again after every font/style change, even
+        # when the toolbar stays in the same row arrangement.
+        for column in range(4):
+            self.toolbar.setColumnMinimumWidth(
+                column, max(widths[column::columns]) if column < columns else 0,
+            )
+            self.toolbar.setColumnStretch(column, int(column == (1 if columns > 1 else 0)))
+        if columns == self._toolbar_columns:
+            return
+        self._toolbar_columns = columns
+        while self.toolbar.count():
+            self.toolbar.takeAt(0)
+        for index, control in enumerate(controls):
+            self.toolbar.addWidget(control, index // columns, index % columns)
+
     def _reload(self):
         try:
             self.data = self.store.load()
             self.access = self.store.access()
         except ERRORS as error:
-            self.status.setText(str(error))
+            self.actions_button.setToolTip(str(error))
             self.access = None
             self.table.setRowCount(0)
             self.attention.setRowCount(0)
@@ -818,7 +933,7 @@ class OperationsCalendarPage(QWidget):
         self.role.setCurrentIndex(max(0, self.role.findData(role)))
         for combo in (self.category, self.role):
             combo.blockSignals(False)
-        self.status.setText(f"Shared calendar · last saved by {self.data.updated_by} at {self.data.updated_at}" if self.data.updated_by else "Shared calendar is empty. Add your first recurring item and select its affected roles or people.")
+        self.actions_button.setToolTip(f"Shared calendar · last saved by {self.data.updated_by} at {self.data.updated_at}" if self.data.updated_by else "Shared calendar is empty. Add your first recurring item and select its affected roles or people.")
         self._render()
 
     def _save(self, data):
@@ -851,6 +966,12 @@ class OperationsCalendarPage(QWidget):
     def _render(self, *_):
         if self.access is None:
             return
+        active_count = sum((self.category.currentData() is not None, self.semester.currentData() != "all",
+                            self.role.currentData() is not None, bool(self.search.text().strip())))
+        self.options_button.setText(f"Filters ({active_count})" if active_count else "Filters")
+        self.options_button.setAccessibleName(f"Calendar filters, {active_count} active")
+        self.clear_filters_button.setEnabled(active_count > 0)
+        self._layout_toolbar()
         year, month = self.year.value(), self.period.currentData() or 1
         start = date(year, month, 1)
         last_month_index = month + 1 if self.period.currentData() else 11
@@ -948,6 +1069,7 @@ class OperationsCalendarPage(QWidget):
         entries = [(row, message) for row, message in reminder_entries(self.data, self.access, date.today())
                    if self._matches(row)]
         self.attention_occurrences = [row.occurrence for row, _ in entries]
+        self.reminders_button.setText(f"Reminders ({len(entries)})")
         self.attention.setRowCount(len(entries))
         self.attention.setFixedHeight(min(190, max(80, 48 * len(entries) + 48)))
         for index, (row, message) in enumerate(entries):
@@ -1031,9 +1153,10 @@ class OperationsCalendarPage(QWidget):
             self._reload()
 
     def _selection(self):
-        self.add_button.setEnabled(self.access is not None)
-        self.groups_button.setEnabled(self.access is not None)
-        for control in (self.review_button, self.series_button, self.remove_button):
+        self.add_action.setEnabled(self.access is not None)
+        self.groups_action.setEnabled(self.access is not None)
+        self.remove_action.setEnabled(self.access is not None)
+        for control in (self.review_action, self.series_action):
             control.setEnabled(self.access is not None and self._selected() is not None)
 
     def _add(self):
@@ -1086,6 +1209,13 @@ class OperationsCalendarPage(QWidget):
     def _remove(self):
         occurrence = self._selected()
         if occurrence is None:
+            QMessageBox.information(
+                self, "Select an item to remove",
+                "Select an individual event or coverage row in the calendar, then choose "
+                "Calendar actions → Remove item.\n\n"
+                "To remove a group heading while keeping its items, use Calendar actions → Groups….",
+            )
+            self.table.setFocus()
             return
         scope, ok = QInputDialog.getItem(self, "Remove calendar item", "Remove:",
                                         ("Only this occurrence", "Entire schedule and linked coverage"), 0, False)

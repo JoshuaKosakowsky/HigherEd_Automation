@@ -12,6 +12,25 @@ layout; accent colors remain limited.
 
 ## Current architecture
 
+App 0.24.0 adds **View → Zoom in, Zoom out, Reset zoom** (75–150%).
+Use **Ctrl++** (or **Ctrl+=**) to zoom in, **Ctrl+-** to zoom out, and
+**Ctrl+0** to reset. Zoom resizes fonts and theme spacing on existing pages
+and dialogs without discarding entered values. Use **View → Show navigation**
+to hide or restore the sidebar when screen space is limited. Navigation scrolls
+vertically when needed. View choices last for the current app session.
+
+The calendar opens with filters and reminders collapsed to reserve space for the
+chart. **Filters** opens a compact panel of labeled fields and shows the number
+of active filters even when collapsed. **Clear filters** resets category,
+semester, role/person and search together, preserving the selected year/range.
+**Calendar actions** provides adding/editing, groups, reload and the calendar key;
+date and schedule actions require a selected item. Remove item prompts for an
+individual-row selection when needed, then asks for scope and confirmation.
+Hover over Calendar actions for save status.
+**Reminders** shows the existing reminder list with its count. The timeline fills the available width
+automatically, with no separate zoom control.
+These display changes do not modify shared calendar data or workflow rules.
+
 - `workflow_registry.py` holds typed, staff-facing workflow metadata.
 - `models.py` defines workflow inputs, execution context, and results.
 - `pages/` renders searchable workflow cards, registry-driven forms, and staff administration.

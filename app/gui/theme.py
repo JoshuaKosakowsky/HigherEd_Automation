@@ -1,5 +1,6 @@
 """Mines digital palette and shared Qt presentation primitives."""
 
+import re
 import sys
 
 from PySide6.QtCore import Qt
@@ -58,10 +59,16 @@ def card() -> tuple[QFrame, QVBoxLayout]:
     return frame, layout
 
 
-def apply_theme(application: QApplication) -> None:
+def apply_theme(application: QApplication, *, zoom_percent: int = 100) -> None:
     """Use a consistent light workspace, including on dark-mode desktops."""
-    application.setStyle("Fusion")
-    application.setFont(QFont("Segoe UI" if sys.platform == "win32" else "Arial", 11))
+    if not 75 <= zoom_percent <= 150:
+        raise ValueError("Interface zoom must be between 75% and 150%.")
+    scale = zoom_percent / 100
+    if application.style().objectName().casefold() != "fusion":
+        application.setStyle("Fusion")
+    font = QFont("Segoe UI" if sys.platform == "win32" else "Arial")
+    font.setPointSizeF(11 * scale)
+    application.setFont(font)
     palette = QPalette()
     for role, color in (
         (QPalette.ColorRole.Window, PAGE),
@@ -78,7 +85,7 @@ def apply_theme(application: QApplication) -> None:
     ):
         palette.setColor(role, QColor(color))
     application.setPalette(palette)
-    application.setStyleSheet(f"""
+    stylesheet = f"""
         QWidget {{ color: {TEXT}; }}
         QMainWindow, QScrollArea, QWidget#page {{ background: {PAGE}; }}
         QScrollArea {{ border: none; }}
@@ -93,6 +100,7 @@ def apply_theme(application: QApplication) -> None:
         QLabel#error {{ color: {RED_FLANNEL}; padding: 4px 0; }}
         QLabel#status {{ background: {PALE_BLUE}; border-radius: 8px; padding: 14px; }}
         QFrame#card {{ background: {WHITE}; border: 1px solid {PALE_BLUE}; border-radius: 12px; }}
+        QFrame#calendarFiltersPanel {{ background: {WHITE}; border: 1px solid {PALE_BLUE}; border-radius: 8px; }}
         QFrame#workdayInputs, QFrame#wfInputs {{ background: {PALE_BLUE}; border-left: 4px solid {BLASTER_BLUE}; border-radius: 8px; }}
         QFrame#bannerInputs {{ background: {PAGE}; border-left: 4px solid {LIGHT_BLUE}; border-radius: 8px; }}
         QFrame#workflowOutputs {{ background: {WHITE}; border: 1px solid {PALE_BLUE}; border-radius: 8px; }}
@@ -102,10 +110,15 @@ def apply_theme(application: QApplication) -> None:
         QFrame#sidebar QLabel#brandLogo {{ background: {WHITE}; border-radius: 6px; }}
         QFrame#sidebar QLabel#sideTitle {{ color: {WHITE}; font-size: 16px; font-weight: 600; }}
         QFrame#sidebar QLabel#institution {{ font-size: 10px; }}
-        QPushButton {{ background: {WHITE}; border: 1px solid {LIGHT_BLUE};
-            border-radius: 7px; padding: 8px 14px; font-weight: 600; }}
-        QPushButton:hover {{ background: {PALE_BLUE}; border-color: {BLASTER_BLUE}; }}
-        QPushButton:focus {{ border: 2px solid {EARTH_BLUE}; }}
+        QPushButton, QToolButton#calendarFilters {{ background: {WHITE}; border: 1px solid {LIGHT_BLUE};
+            border-radius: 7px; padding: 8px 14px; min-height: 20px; font-weight: 600; }}
+        QPushButton:hover, QToolButton#calendarFilters:hover {{ background: {PALE_BLUE}; border-color: {BLASTER_BLUE}; }}
+        QPushButton:focus, QToolButton#calendarFilters:focus {{ border: 2px solid {EARTH_BLUE}; }}
+        QToolButton#calendarFilters:checked {{ background: {PALE_BLUE}; border-color: {BLASTER_BLUE}; }}
+        QPushButton#calendarClearFilters {{ background: transparent; border: none; padding: 2px 4px; color: {EARTH_BLUE}; }}
+        QPushButton#calendarClearFilters:hover {{ background: {PALE_BLUE}; }}
+        QPushButton#calendarClearFilters:focus {{ border: 1px solid {EARTH_BLUE}; }}
+        QPushButton#calendarClearFilters:disabled {{ color: {DARK_GRAY}; }}
         QPushButton:disabled {{ color: {DARK_GRAY}; background: {PAGE}; border-color: {PALE_BLUE}; }}
         QPushButton#primary {{ background: {BLASTER_BLUE}; color: {WHITE}; border: 1px solid {BLASTER_BLUE}; }}
         QPushButton#primary:hover {{ background: {DARK_BLUE}; }}
@@ -148,4 +161,9 @@ def apply_theme(application: QApplication) -> None:
         QScrollBar:vertical {{ width: 12px; background: {PAGE}; }}
         QScrollBar::handle:vertical {{ background: {LIGHT_BLUE}; min-height: 30px; border-radius: 5px; }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-    """)
+    """
+    # Scale explicit stylesheet sizes too; changing only the font leaves titles
+    # and control padding at their original size and saves little screen space.
+    application.setStyleSheet(re.sub(
+        r"(\d+)px", lambda match: f"{round(int(match[1]) * scale)}px", stylesheet,
+    ))

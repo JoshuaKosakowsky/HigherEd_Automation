@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMessageBox
 
@@ -127,7 +127,7 @@ class CalendarGuiTests(unittest.TestCase):
         self.assertTrue(page.rows[0].coverage)
         self.assertEqual(page.table.item(0, 1).text(), "Cashier")
         page.table.selectRow(0)
-        self.assertTrue(page.review_button.isEnabled())
+        self.assertTrue(page.review_action.isEnabled())
         self.assertEqual(page._selected().event.id, "deadline")
         page.grab()
 
@@ -140,6 +140,212 @@ class CalendarGuiTests(unittest.TestCase):
         self.assertEqual(page.table.rowCount(), 3)
         self.assertEqual(page.period.currentText(), "Nov–Jan (3 months)")
         page.grab()
+
+    def test_laptop_layout_reserves_space_for_timeline_and_keeps_panels_available(self):
+        self.store.save(self.synthetic_calendar())
+        window = self.keep(AutomationApplication(user_login_override="ADMIN", access_config_path=self.access_path))
+        window.resize(1000, 700)
+        window.show()
+        window.show_operations_calendar()
+        self.qt.processEvents()
+        page = window.current_page
+        self.assertEqual(window.size().width(), 1000)
+        self.assertGreater(page.table.height(), 400)
+        self.assertGreater(page.table.columnWidth(2), page.table.viewport().width() * .5)
+        self.assertFalse(page.options_panel.isVisible())
+        self.assertFalse(page.attention.isVisible())
+        page.options_button.click()
+        self.qt.processEvents()
+        self.assertTrue(page.options_panel.isVisible())
+        self.assertTrue(page.actions_button.isVisible())
+        self.assertGreaterEqual(page.search.x(), page.role.geometry().right())
+        page.options_button.click()
+        page.reminders_button.click()
+        self.qt.processEvents()
+        self.assertTrue(page.attention.isVisible())
+        self.assertGreater(page.attention.rowCount(), 0)
+        self.assertGreater(page.table.height(), 250)
+
+    def test_resizing_and_hidden_filters_preserve_calendar(self):
+        self.store.save(self.synthetic_calendar())
+        page = self.page()
+        before = self.store.path.read_bytes()
+        rows = list(page.rows)
+        width = page.table.columnWidth(2)
+        page.resize(850, 700)
+        self.qt.processEvents()
+        self.assertLess(page.table.columnWidth(2), width)
+        self.assertEqual(page.rows, rows)
+        page.search.setText("Dual counter")
+        self.assertEqual(page.options_button.text(), "Filters (1)")
+        self.assertEqual(len(page.rows), 1)
+        page.search.clear()
+        self.assertEqual(page.options_button.text(), "Filters")
+        self.assertEqual(self.store.path.read_bytes(), before)
+        page.grab()
+
+    def test_filter_panel_counts_clears_and_keeps_date_range_and_saved_calendar(self):
+        self.store.save(self.synthetic_calendar())
+        page = self.page()
+        saved = self.store.path.read_bytes()
+        page.period.setCurrentIndex(page.period.findData(9))
+        page.options_button.click()
+        self.qt.processEvents()
+        self.assertEqual(page.options_button.arrowType(), Qt.ArrowType.DownArrow)
+        self.assertTrue(page.search.hasFocus())
+        self.assertFalse(page.clear_filters_button.isEnabled())
+        page.category.setCurrentIndex(page.category.findData("Tuition"))
+        page.semester.setCurrentIndex(page.semester.findData(None))
+        page.role.setCurrentIndex(page.role.findData(json.dumps(["cashier", None])))
+        page.search.setText("Dual counter")
+        self.assertEqual(page.options_button.text(), "Filters (4)")
+        self.assertTrue(page.clear_filters_button.isEnabled())
+        self.assertEqual(len(page.rows), 1)
+        page.options_button.click()
+        self.assertEqual(page.options_button.arrowType(), Qt.ArrowType.RightArrow)
+        self.assertEqual(page.options_button.text(), "Filters (4)")
+        page.options_button.click()
+        page.clear_filters_button.click()
+        self.assertEqual(page.options_button.text(), "Filters")
+        self.assertFalse(page.clear_filters_button.isEnabled())
+        self.assertEqual(page.year.value(), 2026)
+        self.assertEqual(page.period.currentData(), 9)
+        self.assertEqual(len(page.rows), 6)
+        self.assertEqual(self.store.path.read_bytes(), saved)
+
+    def test_calendar_actions_are_available_without_opening_filters(self):
+        self.store.save(self.synthetic_calendar())
+        page = self.page()
+        self.assertFalse(page.options_panel.isVisible())
+        self.assertFalse(page.review_action.isEnabled())
+        self.assertTrue(page.remove_action.isEnabled())
+        self.assertTrue(page.add_action.isEnabled())
+        page.table.selectRow(0)
+        self.assertTrue(page.review_action.isEnabled())
+        self.assertTrue(page.series_action.isEnabled())
+        self.assertTrue(page.remove_action.isEnabled())
+        with patch("app.gui.pages.operations_calendar.EventDialog") as dialog:
+            dialog.return_value.exec.return_value = QDialog.DialogCode.Rejected
+            page.add_action.trigger()
+            dialog.assert_called_once_with(page, page.data, page.access)
+        self.assertFalse(page.options_panel.isVisible())
+
+    def click_remove_menu_item(self, page):
+        QTest.mouseClick(page.actions_button, Qt.MouseButton.LeftButton)
+        self.qt.processEvents()
+        self.assertTrue(page.actions_menu.isVisible())
+        self.assertTrue(page.remove_action.isEnabled())
+        QTest.mouseClick(page.actions_menu, Qt.MouseButton.LeftButton,
+                         pos=page.actions_menu.actionGeometry(page.remove_action).center())
+        self.qt.processEvents()
+
+    def test_remove_menu_explains_missing_individual_selection_without_changing_data(self):
+        self.store.save(self.grouped_data())
+        page = self.page()
+        before = self.store.path.read_bytes()
+        for group_selected in (False, True):
+            with self.subTest(group_selected=group_selected):
+                if group_selected:
+                    page.table.selectRow(next(i for i, row in enumerate(page.display_rows)
+                                              if isinstance(row, CalendarGroup)))
+                with patch.object(QMessageBox, "information") as information, \
+                        patch.object(QInputDialog, "getItem") as scope:
+                    self.click_remove_menu_item(page)
+                self.assertIn("Select an individual event", information.call_args.args[2])
+                scope.assert_not_called()
+                self.assertEqual(self.store.path.read_bytes(), before)
+
+    def test_remove_menu_hides_only_selected_occurrence(self):
+        self.store.save(self.synthetic_calendar())
+        page = self.page()
+        row = next(i for i, row in enumerate(page.display_rows) if row.occurrence.event.id == "billing")
+        page.table.selectRow(row)
+        selected = page._selected()
+        with patch.object(QInputDialog, "getItem", return_value=("Only this occurrence", True)), \
+                patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.click_remove_menu_item(page)
+        saved = self.store.load()
+        self.assertEqual(len(saved.events), 2)
+        self.assertEqual(len(saved.overrides), 1)
+        self.assertTrue(saved.overrides[0].hidden)
+        self.assertEqual(saved.overrides[0].event_id, selected.event.id)
+        self.assertEqual(saved.overrides[0].nominal, selected.nominal)
+        self.assertEqual(len(page.rows), 14)
+
+    def test_remove_menu_deletes_selected_schedule_and_linked_coverage(self):
+        self.store.save(self.grouped_data())
+        page = self.page()
+        row = next(i for i, row in enumerate(page.display_rows)
+                   if not isinstance(row, CalendarGroup) and row.occurrence.event.id == "deadline")
+        page.table.selectRow(row)
+        with patch.object(QInputDialog, "getItem", return_value=("Entire schedule and linked coverage", True)), \
+                patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            self.click_remove_menu_item(page)
+        saved = self.store.load()
+        self.assertEqual([event.id for event in saved.events], ["billing"])
+        self.assertEqual(saved.groups[0].id, "fall")
+        self.assertFalse(any(row.occurrence.event.id == "deadline" for row in page.rows))
+
+    def test_remove_menu_cancellation_preserves_saved_calendar(self):
+        self.store.save(self.synthetic_calendar())
+        page = self.page()
+        page.table.selectRow(0)
+        before = self.store.path.read_bytes()
+        for accept_scope in (False, True):
+            with self.subTest(accept_scope=accept_scope):
+                with patch.object(QInputDialog, "getItem", return_value=("Only this occurrence", accept_scope)), \
+                        patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as confirm:
+                    self.click_remove_menu_item(page)
+                self.assertEqual(confirm.call_count, int(accept_scope))
+                self.assertEqual(self.store.path.read_bytes(), before)
+
+    def test_toolbar_wraps_at_large_zoom_without_clipping_filter_or_action_buttons(self):
+        self.addCleanup(apply_theme, self.qt)
+        window = self.keep(AutomationApplication(user_login_override="ADMIN", access_config_path=self.access_path))
+        window.resize(900, 640)
+        window.show()
+        window.show_operations_calendar()
+        window._apply_zoom(150)
+        self.qt.processEvents()
+        page = window.current_page
+
+        def settle_layout():
+            self.qt.processEvents()
+            page.layout().activate()
+            self.qt.processEvents()
+
+        settle_layout()
+        wrapped_columns = page._toolbar_columns
+        self.assertIn(wrapped_columns, (1, 2))
+        controls = (page.year, page.period, page.options_button, page.actions_button)
+        for control in controls:
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
+        self.assertGreater(page.options_button.y(), page.year.y())
+        # Simulate wider platform font metrics using a measured hint that still
+        # fits the available width, rather than assuming a fixed label's width.
+        margins = page.layout().contentsMargins()
+        wide_hint = QSize(page.width() - margins.left() - margins.right(),
+                          page.actions_button.minimumSizeHint().height())
+        with patch.object(page.actions_button, "minimumSizeHint", return_value=wide_hint):
+            page._layout_toolbar()
+            settle_layout()
+            self.assertEqual(page._toolbar_columns, 1)
+            self.assertEqual(window.width(), 900)
+            self.assertGreaterEqual(page.actions_button.width(), wide_hint.width())
+        page._layout_toolbar()
+        settle_layout()
+        self.assertEqual(page._toolbar_columns, wrapped_columns)
+        for control in controls:
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
+        window._apply_zoom(100)
+        settle_layout()
+        for control in controls:
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
+        window.resize(1200, 800)
+        settle_layout()
+        self.assertEqual(page._toolbar_columns, 4)
+        for control in controls:
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
 
     def test_category_and_affected_role_are_saved_on_the_item(self):
         page = self.page()
@@ -292,7 +498,8 @@ class CalendarGuiTests(unittest.TestCase):
             self.assertFalse(page._save(page.data))
         page._reload()
         self.assertEqual(page.table.rowCount(), 0)
-        self.assertFalse(page.add_button.isEnabled())
+        self.assertFalse(page.add_action.isEnabled())
+        self.assertFalse(page.remove_action.isEnabled())
 
     def grouped_data(self):
         data = self.synthetic_calendar()
@@ -307,7 +514,7 @@ class CalendarGuiTests(unittest.TestCase):
         reminder_count = page.attention.rowCount()
         page.table.selectRow(0)
         self.assertIsNone(page._selected())
-        self.assertFalse(page.review_button.isEnabled())
+        self.assertFalse(page.review_action.isEnabled())
         control = page.group_buttons["fall"]
         self.assertGreaterEqual(control.height(), 44)
         QTest.mouseClick(control, Qt.MouseButton.LeftButton,
