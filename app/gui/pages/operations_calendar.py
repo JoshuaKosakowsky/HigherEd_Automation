@@ -871,8 +871,21 @@ class OperationsCalendarPage(QWidget):
         if not hasattr(self, "actions_button"):
             return
         controls = (self.year, self.period, self.options_button, self.actions_button)
-        required = sum(control.minimumSizeHint().width() for control in controls) + 3 * self.toolbar.spacing()
-        columns = 4 if required <= self.width() - 32 else 2
+        widths = [control.minimumSizeHint().width() for control in controls]
+        columns = 1
+        for candidate in (4, 2):
+            required = sum(max(widths[column::candidate]) for column in range(candidate))
+            if required + (candidate - 1) * self.toolbar.spacing() <= self.width() - 32:
+                columns = candidate
+                break
+        # Qt can compress styled controls below their hints on Windows. Reserve
+        # the measured column widths again after every font/style change, even
+        # when the toolbar stays in the same row arrangement.
+        for column in range(4):
+            self.toolbar.setColumnMinimumWidth(
+                column, max(widths[column::columns]) if column < columns else 0,
+            )
+            self.toolbar.setColumnStretch(column, int(column == (1 if columns > 1 else 0)))
         if columns == self._toolbar_columns:
             return
         self._toolbar_columns = columns
@@ -880,7 +893,6 @@ class OperationsCalendarPage(QWidget):
             self.toolbar.takeAt(0)
         for index, control in enumerate(controls):
             self.toolbar.addWidget(control, index // columns, index % columns)
-        self.toolbar.setColumnStretch(1, 1)
 
     def _reload(self):
         try:

@@ -312,6 +312,21 @@ class CalendarGuiTests(unittest.TestCase):
         for control in (page.options_button, page.actions_button):
             self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
         self.assertGreater(page.options_button.y(), page.year.y())
+        # Exercise wider text metrics without depending on a Windows font being
+        # installed locally. A single column must fit before the window grows.
+        original_text = page.actions_button.text()
+        page.actions_button.setText("Calendar actions: edit and remove")
+        page._layout_toolbar()
+        self.qt.processEvents()
+        self.assertEqual(page._toolbar_columns, 1)
+        self.assertEqual(window.width(), 900)
+        self.assertGreaterEqual(page.actions_button.width(), page.actions_button.minimumSizeHint().width())
+        page.actions_button.setText(original_text)
+        page._layout_toolbar()
+        self.qt.processEvents()
+        self.assertEqual(page._toolbar_columns, 2)
+        for control in (page.options_button, page.actions_button):
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
         window._apply_zoom(100)
         self.qt.processEvents()
         self.assertEqual(page._toolbar_columns, 4)

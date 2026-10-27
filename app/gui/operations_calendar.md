@@ -13,8 +13,8 @@ and search fields. Its arrow and highlight indicate whether the panel is open;
 the button shows the active-filter count even when closed. **Clear filters**
 resets those four fields together without changing the selected year/date range.
 Opening the panel focuses search; close it to regain chart space. The toolbar
-wraps onto two rows when needed to keep its buttons readable. At enlarged
-app zoom the panel can scroll to keep every field accessible.
+wraps onto two rows, or a single column when needed, to keep its buttons readable.
+At enlarged app zoom the panel can scroll to keep every field accessible.
 
 **Calendar actions** provides Add item, Review / edit date, Edit schedule, Groups,
 Calendar key, Reload and Remove item independently of the filters. Select an
