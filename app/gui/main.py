@@ -9,10 +9,10 @@ from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QMainWindow, QMessageBox,
-    QStackedWidget, QVBoxLayout, QWidget,
+    QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from app.gui import APP_NAME, APP_VERSION
@@ -75,7 +75,11 @@ class AutomationApplication(QMainWindow):
         row.setSpacing(0)
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(230)
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setFixedWidth(230)
+        self.sidebar_scroll.setWidget(self.sidebar)
         navigation = QVBoxLayout(self.sidebar)
         navigation.setContentsMargins(22, 30, 22, 22)
         navigation.setSpacing(12)
@@ -117,13 +121,46 @@ class AutomationApplication(QMainWindow):
         navigation.addWidget(self.updates_button)
         navigation.addWidget(button("About this app", self._about, "nav"))
         navigation.addWidget(label(f"Version {APP_VERSION}", wrap=False))
-        row.addWidget(self.sidebar)
+        row.addWidget(self.sidebar_scroll)
         self.content = QStackedWidget()
         row.addWidget(self.content, 1)
         self.setCentralWidget(shell)
+        self._setup_view_controls()
         self._reload_access(bootstrap=True)
         self.show_home(reload=False)
         self.logger.info("Application started: version=%s", APP_VERSION)
+
+    def _setup_view_controls(self) -> None:
+        view = self.menuBar().addMenu("View")
+        self.zoom_out_action = view.addAction("Zoom out")
+        self.zoom_out_action.setShortcut(QKeySequence("Ctrl+-"))
+        self.zoom_out_action.triggered.connect(lambda: self._step_zoom(-1))
+        self.zoom_in_action = view.addAction("Zoom in")
+        self.zoom_in_action.setShortcuts([
+            QKeySequence("Ctrl++"), QKeySequence("Ctrl+Shift++"), QKeySequence("Ctrl+="),
+        ])
+        self.zoom_in_action.triggered.connect(lambda: self._step_zoom(1))
+        reset = view.addAction("Reset zoom")
+        reset.setShortcut(QKeySequence("Ctrl+0"))
+        reset.triggered.connect(lambda: self._apply_zoom(100))
+        view.addSeparator()
+        self.sidebar_action = view.addAction("Show navigation")
+        self.sidebar_action.setCheckable(True)
+        self.sidebar_action.setChecked(True)
+        self.sidebar_action.toggled.connect(self.sidebar_scroll.setVisible)
+        self.zoom_percent = 100
+
+    def _step_zoom(self, direction: int) -> None:
+        levels = (75, 85, 100, 115, 125, 150)
+        index = max(0, min(len(levels) - 1, levels.index(self.zoom_percent) + direction))
+        self._apply_zoom(levels[index])
+
+    def _apply_zoom(self, percent: int) -> None:
+        apply_theme(QApplication.instance(), zoom_percent=percent)
+        self.zoom_percent = percent
+        self.sidebar_scroll.setFixedWidth(round(230 * percent / 100))
+        self.zoom_out_action.setEnabled(percent > 75)
+        self.zoom_in_action.setEnabled(percent < 150)
 
     def _load_access_configuration(self, *, bootstrap: bool = False) -> AccessConfiguration:
         if self.access_config_path.exists():

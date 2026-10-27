@@ -1,9 +1,41 @@
-# Bursar Office Calendar (0.18.0)
+# Bursar Office Calendar
 
 Only active application administrators can open or edit this calendar. All
 administrators share the same calendar; assigning a staff member or role to an
 item does not grant them calendar access. The calendar is a visual planning
 aid, with no Started/In progress/Complete statuses and no external notifications.
+
+## Laptop layout and zoom (0.24.0)
+
+The chart gets most of the initial page height. Year and date range stay visible;
+**Filters** opens a compact panel with labeled category, semester, role/person
+and search fields. Its arrow and highlight indicate whether the panel is open;
+the button shows the active-filter count even when closed. **Clear filters**
+resets those four fields together without changing the selected year/date range.
+Opening the panel focuses search; close it to regain chart space. The toolbar
+wraps onto two rows when needed to keep its buttons readable. At enlarged
+app zoom the panel can scroll to keep every field accessible.
+
+**Calendar actions** provides Add item, Review / edit date, Edit schedule, Groups,
+Calendar key, Reload and Remove item independently of the filters. Select an
+individual timeline item to enable date/schedule edits. **Remove item** explains
+how to select an item if no individual row is selected; group headings are managed
+through **Groups…**. Removal still asks for its scope and explicit confirmation. The calendar
+key explains marks and semester colors; hover over Calendar actions for save status.
+**Reminders (count)** opens or
+closes the reminder table; collapsing it leaves dates and reminder calculations
+unchanged. Double-click a timeline item to review/edit its date as before.
+
+The event and affected-person columns adapt to the window width; hover for full
+details or drag their borders wider. The timeline fills the remaining width
+automatically. Crowded month labels
+are spaced to avoid overlap. The existing three-month view offers more detail
+without horizontal scrolling, including across a year boundary.
+
+For the whole interface, use **Ctrl++** (or **Ctrl+=**) to zoom in, **Ctrl+-**
+to zoom out, or the **View** menu's zoom actions (75–150%). Ctrl+0 resets app zoom. The View menu also lets you
+hide/restore navigation for more chart width. These choices last for the current
+session and do not save or rewrite the shared calendar.
 
 ## Group related items with independent dates
 
@@ -42,7 +74,7 @@ It does not fill the gaps between independent activities. Overlapping or closely
 spaced marks use separate lanes so one cannot hide another; narrow views may
 therefore make a group heading taller. Hover over the group timeline for dates,
 semester labels, affected staff, and review information; expand it to edit an
-individual item. **Collapse groups** and **Expand groups** change all group
+individual item. **Collapse all** and **Expand all** change all group
 headings together. Groups with
 no matching items in the selected view are hidden.
 
