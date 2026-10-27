@@ -300,6 +300,7 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(page.mode.count(), 0)
         self.assertFalse(page.inputs['banner_file'].isHidden())
         self.assertNotIn('detail_codes', page.inputs)
+        self.assertNotIn('submission_percentage', page.inputs)
         self.assertEqual(page.inputs['banner_file'].parentWidget().objectName(), 'bannerInputs')
         self.assertEqual(page.inputs['wf_files'].parentWidget().objectName(), 'wfInputs')
         paths = [self.root / f'synthetic_wf_{index}.xlsx' for index in range(3)]
@@ -324,7 +325,7 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(page.recon_source.count(), 2)
         page.recon_source.setCurrentIndex(page.recon_source.findData('sql'))
         self.assertTrue(page.inputs['banner_file'].isHidden())
-        self.assertFalse(page.inputs['submission_percentage'].isHidden())
+        self.assertNotIn('submission_percentage', page.inputs)
         self.assertFalse(page.inputs['wf_files'].isHidden())
         self.assertFalse(page.production_warning.isHidden())
         wf = self.root / 'agency.xlsx'
@@ -332,7 +333,7 @@ class QtGuiTests(unittest.TestCase):
         page.inputs['wf_files'].setText(str(wf))
         parameters = page._parse_parameters()
         self.assertNotIn('banner_file', parameters)
-        self.assertEqual(parameters['submission_percentage'], 0.25)
+        self.assertNotIn('submission_percentage', parameters)
         captured = []
         with patch.object(page, '_confirm', side_effect=lambda context: captured.append(context) or False):
             page._run()

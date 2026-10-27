@@ -23,8 +23,8 @@ from .source_workbooks import open_source_workbook
 
 
 HOLD_HEADERS = (
-    'CWID', 'First Name', 'Last Name', 'Current Account Balance',
-    'Latest Feed Date', 'CO Hold', 'TO Hold', 'From Date', 'To Date',
+    'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold',
+    'CO From Date', 'CO To Date', 'Current Account Balance',
     'WOFF', 'BDRC', 'Total Balance',
 )
 ACTIVITY_HEADERS = (
@@ -49,6 +49,8 @@ def prepare_report(frame: pd.DataFrame, report: str) -> pd.DataFrame:
         frame = checked_report_result(frame, 'Report Row Count')
     canonical = {_header_key(value): value for value in REPORT_HEADERS[report]}
     frame = frame.rename(columns={value: canonical.get(_header_key(value), value) for value in frame.columns})
+    if report in {'students', 'holds'}:
+        frame = frame.loc[:, list(REPORT_HEADERS[report])]
     return prepare_excel_dates(frame)
 
 
@@ -202,7 +204,7 @@ def create_review_workbook(
     grouped = {}
     agency_sheets = 0
     try:
-        students = _ordered_report(prepare_report(students, 'students'), 'From Date')
+        students = _ordered_report(prepare_report(students, 'students'), 'CO From Date')
         _write_frame(book, 'Students in Collections', students, cancellation)
         for path in wf_files:
             if cancellation:
@@ -279,7 +281,7 @@ def create_review_workbook(
                 _write_frame(book, name, frame, cancellation, index=position)
                 position += 1
         returned = pd.concat(grouped['W&F Returned'], ignore_index=True) if 'W&F Returned' in grouped else pd.DataFrame()
-        _write_frame(book, 'Reconciliation', reconcile_accounts(students, collections, returned), cancellation, index=1)
+        _write_frame(book, 'Reconciliation', reconcile_accounts(students, collections, returned), cancellation, index=0)
         book.properties.title = 'W&F - Banner Recon'
         book.properties.description = f'App {app_version}. Submission Percentage: {submission_percentage}. Account totals for review.'
         save_new_workbook(book, output, cancellation=cancellation)

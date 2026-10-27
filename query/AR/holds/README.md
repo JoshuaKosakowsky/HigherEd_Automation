@@ -16,15 +16,14 @@ the same displayed values. The report uses current SPRIDEN identities
 (`SPRIDEN_CHANGE_IND IS NULL`), assumed unique per PIDM. There is no enrollment
 or SGBSTDN filter; the qualifying CO hold defines the account population.
 
-Output: `CWID`, `First Name`, `Last Name`, `Current Account Balance`,
-`Latest Feed Date`, `CO Hold`, `TO Hold`, `From Date`, `To Date`, `WOFF`,
-`BDRC`, `Total Balance`. The balance uses the
+Output (0.23.5): `CWID`, `Last Name`, `First Name`, `CO Hold`, `TO Hold`,
+`CO From Date`, `CO To Date`, `Current Account Balance`, `WOFF`, `BDRC`,
+`Total Balance`. Latest Feed Date is no longer selected. The balance uses the
 delinquency report's all-term charges-minus-payments method with TBBDETC types
 C/P, signed reversals and rounding to cents. Future terms are included. Unknown
 detail types, missing amounts or no transactions leave the balance blank while
-retaining the account; a blank is not a known zero. Missing feed dates remain
-blank. Latest Feed Date is the maximum across all account transactions, not a
-referral date, last payment date or agency-specific activity date.
+retaining the account; a blank is not a known zero. Transaction feed dates do
+not restrict the population or balances.
 
 From 0.23.4, [issue #15](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/15)
 combines W&F's Banner sources in this query. The owner clarified during
@@ -41,13 +40,13 @@ TO holds cannot multiply those totals. TO-only and WOFF-only accounts without
 qualifying CO remain outside the population. This replaces the old hold-only
 export schema; saved Insights questions must be updated before manual upload.
 
-Run `validate_hold_schema.sql` first, including its TBRACCD FEED_DATE check.
+Run `validate_hold_schema.sql` first.
 Paste the SQL into a native Insights question, or choose **Connections →
 Holds — W&F - Banner Recon** in app 0.23.4 with administrator access. No
 parameters are needed. The app reuses TEST/PROD connection controls, rejects
 incomplete API results using `Report Row Count`, removes that internal count
-from the workbook, and preserves existing files. All three date columns export
-as real Excel dates/timestamps. Publishing a saved Insights question is separate.
+from the workbook, and preserves existing files. Both CO date columns export
+as real Excel calendar dates. Publishing a saved Insights question is separate.
 App 0.19.1 preserves far-future hold dates such as 9999-12-31 as real Excel
 dates; these exceed pandas' default timestamp range. Invalid dates still stop
 the export without saving a workbook.
@@ -59,8 +58,8 @@ Synthetic acceptance examples (today = 2099-10-02):
   once, without multiplying the balance. A newer expired hold does not win.
 - Charges 100, charge reversal -25, payment 20 and payment reversal -5 produce
   60, including across terms. Balances 0 and -50 remain in the output.
-- A qualifying hold with no transaction rows remains with blank balance/feed
-  date; an unknown detail type leaves balance blank for reconciliation.
+- A qualifying hold with no transaction rows remains with blank balances; an
+  unknown detail type leaves balance blank for reconciliation.
 
 Tests execute the actual SQL in SQLite with date syntax and the clock adapted,
 and exercise the mocked app export. Before operational use, validate native

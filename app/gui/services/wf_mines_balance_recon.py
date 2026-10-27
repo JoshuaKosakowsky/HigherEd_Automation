@@ -9,7 +9,7 @@ from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.shared.workbook_output import validate_output
 from data_processing.wf_mines_balance_recon.workbook import create_review_workbook, read_insights_file
 from data_processing.wf_mines_balance_recon.source_workbooks import SOURCE_SUFFIXES
-from data_processing.wf_mines_balance_recon.reconciliation import submission_fraction
+from data_processing.wf_mines_balance_recon.reconciliation import load_submission_percentage
 from shared.cancellation import WorkflowCancelled
 from shared.insights.auth import InsightsAuthenticationError
 from shared.insights.browser_auth import InsightsBrowserAuthenticationError
@@ -61,7 +61,7 @@ def _safe_extraction_failure(error: Exception, stage: str) -> str:
 
 
 def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
-    percentage = submission_fraction(context.parameters.get('submission_percentage', 0.25))
+    percentage = load_submission_percentage()
     source = context.parameters.get('banner_source')
     if source not in {'manual', 'sql'}:
         raise ValueError('Choose the Insights data source.')

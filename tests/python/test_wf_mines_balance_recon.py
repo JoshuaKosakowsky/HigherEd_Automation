@@ -19,8 +19,8 @@ from shared.cancellation import CancellationToken, WorkflowCancelled
 
 
 def holds_frame():
-    return pd.DataFrame([['TEST-1', 'Synthetic', 'Student', -5, '2099-10-01',
-                          'CO', None, '2099-01-01', '9999-12-31', 25, 10, 30]], columns=HOLD_HEADERS)
+    return pd.DataFrame([['TEST-1', 'Student', 'Synthetic', 'CO', None,
+                          '2099-01-01', '9999-12-31', -5, 25, 10, 30]], columns=HOLD_HEADERS)
 
 
 def activity_frame():
@@ -88,8 +88,8 @@ class WFMinesBalanceTests(unittest.TestCase):
         book = load_workbook(self.output)
         try:
             self.assertEqual(len(book.sheetnames), 5)
-            self.assertEqual(book.sheetnames[:2], ['Students in Collections', 'Reconciliation'])
-            self.assertEqual(book['Students in Collections']['I2'].value, datetime(9999, 12, 31))
+            self.assertEqual(book.sheetnames[:2], ['Reconciliation', 'Students in Collections'])
+            self.assertEqual(book['Students in Collections']['G2'].value, datetime(9999, 12, 31))
             agency = book[book.sheetnames[2]]
             self.assertEqual(agency['A2'].value, '0000123')
             self.assertEqual(agency['B2'].number_format, '$#,##0.00')
@@ -106,6 +106,26 @@ class WFMinesBalanceTests(unittest.TestCase):
         finally:
             book.close()
         self.assertTrue(all(path.read_bytes() == content for path, content in originals.items()))
+
+    def test_upload_normalizes_column_order_and_drops_latest_feed_date(self):
+        frame = holds_frame()
+        frame['Latest Feed Date'] = 'obsolete column is ignored'
+        write_frame(self.holds, frame[list(reversed(frame.columns))])
+        run_wf_mines_balance_recon(self.context())
+        book = load_workbook(self.output)
+        try:
+            sheet = book['Students in Collections']
+            self.assertEqual(tuple(cell.value for cell in sheet[1]), (
+                'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold',
+                'CO From Date', 'CO To Date', 'Current Account Balance',
+                'WOFF', 'BDRC', 'Total Balance',
+            ))
+            self.assertEqual(sheet['B2'].value, 'Student')
+            self.assertEqual(sheet['C2'].value, 'Synthetic')
+            self.assertEqual(sheet['G2'].value, datetime(9999, 12, 31))
+            self.assertEqual(sheet['H2'].value, -5)
+        finally:
+            book.close()
 
     def test_batch_same_names_long_names_and_sheet_name_collisions_preserve_all_files(self):
         files = []
@@ -138,7 +158,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         book = load_workbook(self.output)
         try:
             self.assertEqual(book.sheetnames[:4], [
-                'Students in Collections', 'Reconciliation', 'W&F Collections', 'W&F Returned',
+                'Reconciliation', 'Students in Collections', 'W&F Collections', 'W&F Returned',
             ])
             self.assertEqual(book['W&F Collections'].max_row, 7)
             self.assertEqual(book['W&F Returned'].max_row, 2)
@@ -199,7 +219,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         from test_wf_agency_reports import agency_file
         holds = pd.concat([holds_frame()] * 3, ignore_index=True)
         holds['CWID'] = ['H-old', 'H-new', 'H-blank']
-        holds['From Date'] = ['2098-12-31 10:00:00', '2099-01-02 14:30:00', None]
+        holds['CO From Date'] = ['2098-12-31 10:00:00', '2099-01-02 14:30:00', None]
         activity = pd.concat([activity_frame()] * 4, ignore_index=True)
         activity["'ID'"] = ['T-old', 'T-new', 'T-blank', 'T-tie']
         activity["'Feed Date'"] = ['2098-12-31 10:00:00', '2099-01-02 14:30:00', None, '2099-01-02 14:30:00']
@@ -238,9 +258,9 @@ class WFMinesBalanceTests(unittest.TestCase):
         self.assertNotIn('Sources', result.message)
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book.sheetnames, ['Students in Collections', 'Reconciliation', 'W&F Collections', 'W&F Returned'])
+            self.assertEqual(book.sheetnames, ['Reconciliation', 'Students in Collections', 'W&F Collections', 'W&F Returned'])
             for name, expected, date_column in (
-                ('Students in Collections', ['H-new', 'H-old', 'H-blank'], 'H'),
+                ('Students in Collections', ['H-new', 'H-old', 'H-blank'], 'F'),
                 ('W&F Collections', ['C-new', 'C-earlier', 'C-old', 'C-unknown', 'C-blank'], 'C'),
                 ('W&F Returned', ['R-new', 'R-mid', 'R-old'], 'H'),
             ):
@@ -252,7 +272,7 @@ class WFMinesBalanceTests(unittest.TestCase):
                             self.assertEqual(cell.value.time(), datetime.min.time())
                             self.assertEqual(cell.number_format, 'yyyy-mm-dd')
             self.assertEqual(book['W&F Collections']['C5'].value, 'unknown date')
-            self.assertEqual(book['Students in Collections']['I2'].value, datetime(9999, 12, 31))
+            self.assertEqual(book['Students in Collections']['G2'].value, datetime(9999, 12, 31))
             self.assertEqual(book['W&F Returned']['G2'].number_format, 'yyyy-mm-dd')
         finally:
             book.close()
@@ -285,7 +305,7 @@ class WFMinesBalanceTests(unittest.TestCase):
             writer.writerow(HOLD_HEADERS)
             writer.writerows(holds_frame().itertuples(index=False, name=None))
         frame = read_insights_file(path, 'students')
-        self.assertEqual(frame.iloc[0]['To Date'].year, 9999)
+        self.assertEqual(frame.iloc[0]['CO To Date'].year, 9999)
         write_frame(self.holds, pd.DataFrame(columns=HOLD_HEADERS))
         write_frame(self.activity, pd.DataFrame(columns=ACTIVITY_HEADERS))
         run_wf_mines_balance_recon(self.context())
@@ -398,7 +418,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         client.run_sql.assert_not_called()
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book['Students in Collections'].max_column, 12)
+            self.assertEqual(book['Students in Collections'].max_column, 11)
             self.assertNotIn('Banner Detail Codes', book.sheetnames)
         finally:
             book.close()

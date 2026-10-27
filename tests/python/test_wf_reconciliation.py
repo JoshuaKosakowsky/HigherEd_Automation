@@ -1,12 +1,15 @@
 """Synthetic acceptance cases for issue #15's financial and matching rules."""
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 from decimal import Decimal
 
 import pandas as pd
 from openpyxl import load_workbook
 
 from data_processing.wf_mines_balance_recon.reconciliation import (
-    add_principal_amount, reconcile_accounts, submission_fraction,
+    add_principal_amount, reconcile_accounts, submission_fraction, load_submission_percentage,
 )
 import test_collections_tracking as collections_tests
 import test_wf_mines_balance_recon as wf_tests
@@ -71,6 +74,27 @@ class ReconciliationRulesTests(unittest.TestCase):
                 )
 
 
+class CommissionConfigurationTests(unittest.TestCase):
+    def test_institution_default_and_admin_configured_fraction(self):
+        self.assertEqual(load_submission_percentage(), Decimal('0.25'))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'commission.json'
+            path.write_text('{"submission_percentage": 0.30}')
+            self.assertEqual(load_submission_percentage(path), Decimal('0.30'))
+
+    def test_missing_malformed_or_invalid_config_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'commission.json'
+            with self.assertRaises(ValueError):
+                load_submission_percentage(path)
+            for text in ('invalid JSON', '[]', '{}', '{"submission_percentage": true}',
+                         '{"submission_percentage": 25}', '{"submission_percentage": -0.1}',
+                         '{"submission_percentage": "NaN"}'):
+                path.write_text(text)
+                with self.subTest(config=text), self.assertRaises(ValueError):
+                    load_submission_percentage(path)
+
+
 class CombinedBannerSQLTests(unittest.TestCase):
     setUp = collections_tests.CollectionsTrackingTests.setUp
     account = collections_tests.CollectionsTrackingTests.account
@@ -132,10 +156,11 @@ class ReconciliationWorkbookTests(unittest.TestCase):
             path.write_bytes(b'Unisa file must not be parsed or copied')
             skipped.append(path)
         self.params['wf_files'] = (collections, returned, *skipped)
+        self.params['submission_percentage'] = 0.99  # Run inputs cannot override institution policy.
         run_wf_mines_balance_recon(self.context())
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book.sheetnames, ['Students in Collections', 'Reconciliation', 'W&F Collections', 'W&F Returned'])
+            self.assertEqual(book.sheetnames, ['Reconciliation', 'Students in Collections', 'W&F Collections', 'W&F Returned'])
             rows = list(book['Reconciliation'].values)
             self.assertEqual(rows[1], ('0000123', 'Synthetic', 'Student', 150, 150, 0, 1))
             self.assertEqual(rows[2], ('W-only', None, None, None, 20, None, 0))
@@ -145,13 +170,28 @@ class ReconciliationWorkbookTests(unittest.TestCase):
         finally:
             book.close()
 
+    def test_workflow_uses_admin_configuration_instead_of_run_parameter(self):
+        config = self.root / 'commission.json'
+        config.write_text('{"submission_percentage": 0.5}')
+        self.params['wf_files'] = (agency_file(self.root),)
+        self.params['submission_percentage'] = 0
+        with patch('app.gui.services.wf_mines_balance_recon.load_submission_percentage',
+                   side_effect=lambda: load_submission_percentage(config)):
+            run_wf_mines_balance_recon(self.context())
+        book = load_workbook(self.output)
+        try:
+            self.assertEqual(book['W&F Collections']['E2'].value, 66.67)
+            self.assertIn('0.5', book.properties.description)
+        finally:
+            book.close()
+
     def test_returned_without_collections_precedes_other_source_tabs(self):
         returned = agency_file(self.root, returned=True)
         self.params['wf_files'] = (self.agency, returned)
         run_wf_mines_balance_recon(self.context())
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book.sheetnames[:3], ['Students in Collections', 'Reconciliation', 'W&F Returned'])
+            self.assertEqual(book.sheetnames[:3], ['Reconciliation', 'Students in Collections', 'W&F Returned'])
             self.assertTrue(book.sheetnames[3].startswith('WF '))
         finally:
             book.close()
@@ -163,7 +203,7 @@ class ReconciliationWorkbookTests(unittest.TestCase):
         run_wf_mines_balance_recon(self.context())
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book.sheetnames, ['Students in Collections', 'Reconciliation'])
+            self.assertEqual(book.sheetnames, ['Reconciliation', 'Students in Collections'])
             self.assertIsNone(book['Reconciliation']['E2'].value)
         finally:
             book.close()

@@ -76,7 +76,7 @@ class WorkflowDetailPage(QScrollArea):
             parameter_layout = form_layout
             if definition.workflow_id in {"graduate_contract_recon", "trends", "wf_mines_balance_recon"}:
                 group = ("Outputs" if parameter.key == "output_file" else
-                         "W&F" if parameter.key in {"wf_files", "submission_percentage"} else
+                         "W&F" if parameter.key == "wf_files" else
                          "Workday" if parameter.key in {"workday_file", "worktag_file"} else "Banner")
                 if group not in input_groups:
                     frame = QFrame()

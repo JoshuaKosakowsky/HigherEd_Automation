@@ -57,7 +57,7 @@ class CollectionsTrackingTests(unittest.TestCase):
         self.account(6, start=None)
         rows = self.db.execute(self.query).fetchall()
         self.assertEqual([row[0] for row in rows], ["TEST-5", "TEST-6"])
-        self.assertEqual([row[5] for row in rows], ["CO", "CO"])
+        self.assertEqual([row[3] for row in rows], ["CO", "CO"])
         self.assertTrue(all(row[-1] == 2 for row in rows))
 
     def test_latest_qualifying_hold_nulls_ties_and_duplicates(self):
@@ -73,11 +73,11 @@ class CollectionsTrackingTests(unittest.TestCase):
             INSERT INTO saturn.spriden VALUES (1, 'OLD', 'Old', 'Name', 'N');
         """)
         self.assertEqual(self.db.execute(self.query).fetchall(), [
-            ('TEST-1', 'Synthetic', 'Student', 100, '2099-10-01',
-             'CO', None, '2099-03-01', '2099-12-01', 0, 0, 100, 1),
+            ('TEST-1', 'Student', 'Synthetic', 'CO', None,
+             '2099-03-01', '2099-12-01', 100, 0, 0, 100, 1),
         ])
 
-    def test_all_term_net_balance_reversals_zero_credit_and_latest_feed(self):
+    def test_all_term_net_balance_reversals_zero_and_credit(self):
         for pidm in range(1, 4):
             self.account(pidm)
             self.transaction(pidm, 100)
@@ -87,8 +87,7 @@ class CollectionsTrackingTests(unittest.TestCase):
         self.transaction(2, 100, "PAYMENT")
         self.transaction(3, 150, "PAYMENT")
         rows = self.db.execute(self.query).fetchall()
-        self.assertEqual([row[3] for row in rows], [60, 0, -50])
-        self.assertEqual(rows[0][4], "2099-10-02 14:30:00")
+        self.assertEqual([row[7] for row in rows], [60, 0, -50])
 
     def test_missing_or_unknown_transactions_keep_account_with_blank_balance(self):
         for pidm in range(1, 5):
@@ -99,15 +98,14 @@ class CollectionsTrackingTests(unittest.TestCase):
         self.transaction(4, 50, "BAD")
         rows = self.db.execute(self.query).fetchall()
         self.assertEqual(len(rows), 4)
-        self.assertTrue(all(row[3] is None for row in rows))
-        self.assertIsNone(rows[0][4])
+        self.assertTrue(all(row[7] is None for row in rows))
 
     def test_empty_results_keep_expected_headers(self):
         cursor = self.db.execute(self.query)
         self.assertEqual(cursor.fetchall(), [])
         self.assertEqual([col[0] for col in cursor.description], [
-            "CWID", "First Name", "Last Name", "Current Account Balance",
-            "Latest Feed Date", "CO Hold", "TO Hold", "From Date", "To Date",
+            "CWID", "Last Name", "First Name", "CO Hold", "TO Hold",
+            "CO From Date", "CO To Date", "Current Account Balance",
             "WOFF", "BDRC", "Total Balance", "Report Row Count",
         ])
 
@@ -153,14 +151,18 @@ class CollectionsTrackingTests(unittest.TestCase):
                         workbook = load_workbook(output)
                         try:
                             sheet = workbook.active
-                            self.assertEqual(sheet.max_column, 12)
+                            self.assertEqual(sheet.max_column, 11)
+                            self.assertEqual(tuple(cell.value for cell in sheet[1]), (
+                                'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold',
+                                'CO From Date', 'CO To Date', 'Current Account Balance',
+                                'WOFF', 'BDRC', 'Total Balance',
+                            ))
                             self.assertEqual(sheet.max_row, 1 if empty else 2)
                             if not empty:
-                                self.assertEqual(sheet['D2'].value, -50)
-                                self.assertEqual(sheet['E2'].value, datetime(2099, 10, 2, 14, 30))
-                                self.assertEqual(sheet['H2'].value, datetime(2099, 1, 1))
-                                self.assertTrue(sheet['I2'].is_date)
-                                self.assertEqual(sheet['I2'].value, datetime(9999, 12, 31))
+                                self.assertEqual(sheet['H2'].value, -50)
+                                self.assertEqual(sheet['F2'].value, datetime(2099, 1, 1))
+                                self.assertTrue(sheet['G2'].is_date)
+                                self.assertEqual(sheet['G2'].value, datetime(9999, 12, 31))
                         finally:
                             workbook.close()
 

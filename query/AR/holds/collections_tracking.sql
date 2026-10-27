@@ -6,8 +6,7 @@ One row per current identity/PIDM: latest qualifying FROM_DATE (NULL last),
 then latest TO_DATE. Hold dates are calendar dates in the output.
 Balance is all-term charges minus payments/credits, preserving reversal signs.
 Unknown amounts/types or absent transactions leave balance NULL for review;
-they never remove a qualifying account. Latest Feed Date is account-wide,
-not the collection referral date or a collections-only payment date.
+they never remove a qualifying account.
 TO uses the same strictly-after-today end-date rule; it never expands the CO
 population or creates extra rows. WOFF/BDRC are all-history signed Amount sums.
 Absent code activity is zero when transactions exist; unknown amounts are NULL.
@@ -46,7 +45,6 @@ account_totals AS (
             WHEN 'C' THEN t.tbraccd_amount
             WHEN 'P' THEN -t.tbraccd_amount
         END), 2) END AS total_balance,
-        MAX(t.tbraccd_feed_date) AS latest_feed_date,
         -- Signed posted Amount totals, not remaining transaction balances.
         CASE WHEN SUM(CASE WHEN t.tbraccd_detail_code = 'WOFF'
                           AND t.tbraccd_amount IS NULL THEN 1 ELSE 0 END) > 0
@@ -66,14 +64,13 @@ account_totals AS (
 )
 SELECT
     s.spriden_id AS "CWID",
-    s.spriden_first_name AS "First Name",
     s.spriden_last_name AS "Last Name",
-    a.total_balance AS "Current Account Balance",
-    a.latest_feed_date AS "Latest Feed Date",
+    s.spriden_first_name AS "First Name",
     'CO' AS "CO Hold",
     CASE WHEN th.pidm IS NOT NULL THEN 'TO' END AS "TO Hold",
-    CAST(h.from_date AS date) AS "From Date",
-    CAST(h.to_date AS date) AS "To Date",
+    CAST(h.from_date AS date) AS "CO From Date",
+    CAST(h.to_date AS date) AS "CO To Date",
+    a.total_balance AS "Current Account Balance",
     a.woff AS "WOFF",
     a.bdrc AS "BDRC",
     a.total_balance + a.woff + a.bdrc AS "Total Balance",

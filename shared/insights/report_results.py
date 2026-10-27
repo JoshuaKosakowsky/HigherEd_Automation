@@ -59,7 +59,7 @@ def _excel_calendar_date(value: object) -> date | None:
 
 def prepare_excel_dates(dataframe: pd.DataFrame) -> pd.DataFrame:
     """Preserve calendar dates through year 9999 and UTC feed timestamps."""
-    calendar_columns = {"Account Activity Date", "From Date", "To Date"}
+    calendar_columns = {"Account Activity Date", "From Date", "To Date", "CO From Date", "CO To Date"}
     date_columns = [column for column in dataframe.columns if isinstance(column, str) and (
         column.strip("'\"").endswith("Feed Date") or column.strip("'\"") in calendar_columns
     )]

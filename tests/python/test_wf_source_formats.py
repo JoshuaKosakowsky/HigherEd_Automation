@@ -87,7 +87,7 @@ class WFSourceFormatTests(unittest.TestCase):
         self.params['banner_file'] = self.xls('students', 'combined.xls')
         returned = self.xls('returned', 'Report - ReturnedAccounts- 12003-2099-10-01.xls')
         book = self.run_review((returned,))
-        self.assertEqual(book['Students in Collections']['I2'].value, datetime(9999, 12, 31))
+        self.assertEqual(book['Students in Collections']['G2'].value, datetime(9999, 12, 31))
         self.assertEqual(book['W&F Returned'].max_row, 2)
         self.assertEqual(book['W&F Returned']['A2'].value, '0000123')
         self.assertEqual(book['W&F Returned']['G2'].value, datetime(2099, 1, 1))
@@ -103,7 +103,7 @@ class WFSourceFormatTests(unittest.TestCase):
         output = self.run_review((agency,))
         self.assertEqual(output['W&F Collections']['B2'].value, 'Synthetic Caf\u00e9')
         self.assertEqual(output['W&F Collections']['J2'].value, 'No Fees')
-        self.assertIsNone(output['Students in Collections']['G2'].value)
+        self.assertIsNone(output['Students in Collections']['E2'].value)
 
     def test_unknown_csv_keeps_leading_zero_ids_and_formula_like_text_literal(self):
         path = self.root / 'demographics.csv'

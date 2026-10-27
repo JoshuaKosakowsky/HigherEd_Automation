@@ -1,7 +1,9 @@
 """Account-level W&F comparisons defined in GitHub issue #15."""
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 
 import pandas as pd
 
@@ -13,6 +15,7 @@ RECONCILIATION_HEADERS = (
     'W&F Principal Amount', 'Difference', 'W&F Returned',
 )
 _CENT = Decimal('0.01')
+COMMISSION_CONFIG = Path(__file__).resolve().parents[2] / 'config/institutions/mines/wf_reconciliation.json'
 
 
 def submission_fraction(value: object) -> Decimal:
@@ -24,6 +27,17 @@ def submission_fraction(value: object) -> Decimal:
     if not fraction.is_finite() or not 0 <= fraction <= 1:
         raise ValueError('Submission Percentage must be a fraction between 0 and 1 (0.25 = 25%).')
     return fraction
+
+
+def load_submission_percentage(path: Path = COMMISSION_CONFIG) -> Decimal:
+    """Read the institution's admin-maintained commission, outside run inputs."""
+    try:
+        settings = json.loads(path.read_text(encoding='utf-8'), parse_float=Decimal)
+    except (OSError, ValueError):
+        raise ValueError('W&F commission configuration is missing or unreadable. Contact the application administrator.') from None
+    if not isinstance(settings, dict) or 'submission_percentage' not in settings:
+        raise ValueError('W&F commission configuration must contain submission_percentage.')
+    return submission_fraction(settings['submission_percentage'])
 
 
 def add_principal_amount(collections: pd.DataFrame, percentage: object) -> pd.DataFrame:

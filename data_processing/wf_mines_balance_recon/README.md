@@ -13,15 +13,14 @@ change Banner or W&F records.
 - **Insights data**: upload one complete **W&F - Banner Recon** export from
   `query/AR/holds/collections_tracking.sql`. CSV, XLS, XLSX and XLSM are supported.
   The old separate holds and transaction exports cannot substitute for this
-  combined report. Up to 30 title/header rows are allowed; exactly one matching
+  combined report. Update saved Insights questions to the current SQL before
+  downloading reports with the renamed CO date columns. Up to 30 title/header rows are allowed; exactly one matching
   table is required. Headers are matched without case/quote/whitespace differences.
 - **Williams and Fudge uploads**: select/drop multiple CSV, XLS, XLSX or XLSM files.
   Additional batches append to the list; repeated paths are not added twice.
   Every file whose name contains `12007`, `12009`, `12559` or `12561` is omitted
   completely, including extra worksheets, because these are Unisa verifications.
   All files may remain selected in the upload batch; source files are untouched.
-- **Submission Percentage (fraction)**: default `0.25` means 25%; accepts 0–1.
-  This setting applies in upload and SQL modes and is recorded in workbook metadata.
 - **Outputs**: choose an approved existing folder and a new XLSX filename.
 
 Administrators can choose **Run SQL from PROD Insights** instead of uploading
@@ -40,14 +39,24 @@ stage without exposing raw URLs, server responses, credentials or student rows.
 Connections offers **Holds — W&F - Banner Recon** for standalone query verification.
 Publishing/updating a saved question in Insights is a separate operational step.
 
+## Commission configuration (0.23.5)
+
+The workflow has no commission input for staff or administrators. The institution
+configuration at `config/institutions/mines/wf_reconciliation.json` sets
+`submission_percentage` to `0.25` (25%). Administrators maintain this non-secret
+file through the normal application deployment process. It accepts a finite
+fraction from 0 to 1, applies to upload and SQL modes, and is recorded in workbook
+metadata. Invalid or missing configuration stops the run. Workflow parameters
+cannot override it.
+
 ## Banner business rules
 
 One row per current identity/PIDM with a CO hold ending strictly after today,
-using the latest qualifying CO From Date (NULL last), then latest To Date.
+using the latest qualifying CO From Date (NULL last), then latest CO To Date.
 There is no enrollment, positive-balance or From Date restriction. Separate
 `CO Hold` and `TO Hold` columns prevent hold joins from duplicating accounts.
 TO is present when a TO hold also ends strictly after today; it does not expand
-the CO population. From Date and To Date describe the selected CO hold.
+the CO population. CO From Date and CO To Date describe the selected CO hold.
 
 `Current Account Balance` retains all-term charges minus payments using detail
 code types C/P and signed reversals. `WOFF` and `BDRC` each sum all-history signed
@@ -57,18 +66,22 @@ they do not use remaining transaction Balance or a feed-date window.
 A code with no activity is zero when account transactions exist. Unknown code
 amounts remain blank; unknown detail types/missing amounts leave account balance
 blank. Accounts without transactions retain blank balances. Missing amounts
-never become a known zero. Latest Feed Date remains account-wide activity context.
+never become a known zero. Latest Feed Date is omitted from the combined report.
 See [SQL rules and validation](../../query/AR/holds/README.md).
 
 ## Workbook and reconciliation rules
 
 | Tab | Content |
 | --- | --- |
-| Students in Collections | Combined Banner report: CWID, names, account balance/feed date, CO/TO holds, CO dates, WOFF, BDRC and Total Balance |
 | Reconciliation | CWID, First Name, Last Name, Banner Total Balance, W&F Principal Amount, Difference, W&F Returned |
+| Students in Collections | Combined Banner report: CWID, Last Name, First Name, CO Hold, TO Hold, CO From Date, CO To Date, Current Account Balance, WOFF, BDRC, Total Balance (in this order) |
 | W&F Collections | Consolidated Account Status reports with creditor, fee type, source file and Principal Amount |
 | W&F Returned | Consolidated Returned Accounts reports with creditor and source file |
 | WF file - worksheet | Other source worksheets, retaining value snapshots and layout |
+
+From patch 0.23.5, tab order is Reconciliation, Students in Collections,
+W&F Collections, W&F Returned, then other source worksheets. Agency tabs appear
+when those reports are supplied.
 
 Students in Collections sorts newest first by CO From Date; agency tabs sort
 newest first by Placement / Return Date. Dates display without times, including
