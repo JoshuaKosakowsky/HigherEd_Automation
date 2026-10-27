@@ -53,15 +53,15 @@ This is read-only in both source systems.
   (for example SU26 → Summer 2026). Names and unrelated source fields are omitted.
   Only Grant, Project and Operating Account with six-digit numbers are kept;
   leading zeros remain intact.
-- **Student Worktag** matches by CWID across the supplied worktag export. Every
-  distinct type/number is listed, separated by semicolons, so a first-match lookup
-  cannot hide multiple funding assignments. The Worktags tab preserves the term
-  for each assignment. This is student metadata, not allocation of amounts to
-  worktags; fiscal periods are not assumed to correspond to academic terms.
-  Upload the relevant worktag population. An unmatched CWID shows **No matching
-  worktag**; without the optional upload, the column stays blank. Repeated identical
-  CWID/term/tag assignments are collapsed. Ambiguous/missing CWIDs are not assigned;
-  malformed rows contribute to a worktag warning count in the completion message.
+- **Project**, **Grant**, and **Operating Account** on CWID Recon match by CWID
+  across the supplied worktag export. Each field lists every distinct six-digit
+  number for that type, separated by semicolons; leading zeros remain intact.
+  The Worktags tab preserves the term for each assignment. These are student
+  metadata, not allocation of amounts; fiscal periods are not assumed to match
+  academic terms. Upload the relevant worktag population. Missing types, unmatched
+  CWIDs, and runs without the optional upload leave these three fields blank.
+  Repeated identical CWID/term/tag assignments are collapsed. Ambiguous/missing
+  CWIDs are not assigned; malformed rows contribute to the worktag warning count.
 
 ## Matching and output
 
@@ -89,24 +89,28 @@ source occurrence within each fiscal period; all Workday rows in the block come
 before its Banner rows. Banner rows without a Workday feed match follow last.
 Source selection statuses retain review warnings; the
 workbook does not include separate Verification or Exceptions tabs.
-Journal Number and Memo / Feed Document display only a six- or seven-digit
-SIS Memo / Banner Feed Document posting code. CWIDs, manual memos and other
-reference formats leave both columns blank. Original Workday Journal Entry values stay in Workday Data.
-Alternating journal groups have a light grey background across their Workday
-and Banner rows. Combined omits Status, Source Row, Included in Activity,
-Quarter and Activity Debit/Credit. Use Period Totals for source comparisons:
-Combined's displayed Debit/Credit includes both summaries and their detail.
+Combined includes a row only when its normalized Memo / Feed Document is exactly
+six or seven digits. It keeps the complete reference in both Journal Number and
+Memo / Feed Document; it does not blank a reference and retain the row. There is
+no current-year prefix requirement. Other Workday activity with a numeric memo
+qualifies under the same rule. Rows failing the filter remain in the raw source
+tabs and still contribute to document/CWID/period calculations and controls.
+Original Workday Journal Entry values stay in Workday Data. Alternating retained
+journal groups have a light grey background across their Workday and Banner rows.
+Combined omits Status, Source Row, Included in Activity, Quarter and Activity
+Debit/Credit. Use Period Totals for source comparisons: Combined is a filtered
+review view and displays both summaries and detail.
 
 | Sheet | Use |
 | --- | --- |
 | 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' Debit/Credit remain visible for comparison, including the TPS00080 correction; Period Totals keeps each source separate. |
 | 1305 Doc Recon | Union of feed documents from both sources, with signed Workday Total Amt (SIS), Banner Total Amt, Difference (Banner minus Workday), and editable Notes. |
-| 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner minus Workday, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation and Student Worktag remain. |
+| 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner minus Workday, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation remains; Project, Grant, Operating Account, Ledger Acct and Spend Cat provide student coding. |
 | 1305 Period Totals | Fiscal Year, Period, Quarter, Workday SIS Amt, Workday Other Amt, Banner Amt, Difference, Notes. Difference is Banner minus (Workday SIS + Workday Other). Includes empty periods in the selected range; Notes starts blank. |
 | Workday Data / Banner Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
 | Worktags (when uploaded) | Cleaned CWID, term code/description, worktag type and six-digit number. Only the requested metadata is retained. |
 
-## Workday coding and signed amounts (0.24.1)
+## Workday coding and signed amounts (0.24.2)
 
 [Issue #17](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/17)
 defines the Banner description mappings and the compact amount layout. The owner
@@ -117,9 +121,12 @@ would hide reversal signs. These output changes retain the existing separate
 exact-cent debit/credit matching controls; a zero displayed Difference does not
 prove that both sides agree or authorize Banner substitution.
 
-Combined appends **Ledger Acct** and **Spend Cat** for Banner rows only. Workday
-rows leave both blank; their original ledger remains in Workday Data. Comparisons
-ignore case and surrounding whitespace. Rules are evaluated in this order:
+CWID Recon appends **Ledger Acct** and **Spend Cat**, calculated from Banner rows
+for the same student, fiscal year and period. Each cell lists every distinct
+matching code or exception label, separated by semicolons; no first-match choice
+or allocation of the student's total to a single code is inferred. A student
+with only non-SIS Workday activity shows Review for both. Combined has neither
+column. Comparisons ignore case and surrounding whitespace. Rules follow:
 
 | Banner Description | Ledger Acct | Spend Cat |
 | --- | --- | --- |
@@ -147,9 +154,14 @@ Synthetic acceptance examples:
   4,000. Both classification fields show the exception labels above.
 - Workday SIS −25, Other Workday −7, and Banner −20 produce document Difference
   +5, CWID Net Period Activity −13, and period Difference +12.
-- Posting references `260001` and `2600001` display; `12345`, `12345678`, and
-  `26A001` stay blank in both Combined posting-reference columns. No current-year
-  prefix is required; older exports remain usable. Raw source references remain.
+- Posting references `260001`, `2600001`, and `250001` retain their rows in
+  Combined; rows with `12345`, `12345678`, or `26A001` are excluded from that
+  sheet entirely. No current-year prefix is required. Raw source rows and other
+  reconciliation sheets retain the full selected activity.
+- A student with RA and TA Banner rows has Ledger Acct `1631e` and Spend Cat
+  `6152; 6153`. A worktag export containing Project `654321`, Grant `012345`,
+  and Grant `000001` supplies Project `654321`, Grant `000001; 012345`, and a
+  blank Operating Account. Financial rows are not duplicated.
 
 CWIDs follow the supplied VBA rule: eight digits beginning with `10`, taken
 from the explicit ID or the leading description/memo token. A valid Banner

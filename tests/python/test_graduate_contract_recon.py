@@ -94,26 +94,25 @@ class GraduateContractReconTests(unittest.TestCase):
             book = load_workbook(output)
             rows = list(book["1305 Combined"].iter_rows(min_row=2, values_only=True))
             self.assertEqual([row[3] for row in rows],
-                             ["123456", "123456", None, "1234567", "1234567", None, None])
+                             ["123456", "123456", "1234567", "1234567"])
             self.assertEqual([row[9] for row in rows], [row[3] for row in rows])
             self.assertEqual(rows[1][0], "10000001")
-            self.assertEqual(rows[2][0], "10000001")
+            self.assertEqual(rows[3][0], "10000001")
             combined = book["1305 Combined"]
             headers = [cell.value for cell in combined[1]]
-            self.assertEqual(len(headers), 16)
+            self.assertEqual(len(headers), 14)
             for removed in ("Status", "Source Row", "Included in Activity", "Quarter",
                             "Activity Debit", "Activity Credit"):
                 self.assertNotIn(removed, headers)
-            # First journal white, intervening manual row grey, next journal
-            # white, last journal grey; detail shares its summary's fill.
-            self.assertEqual([combined.cell(number, 1).fill.patternType for number in range(2, 9)],
-                             [None, None, "solid", None, None, "solid", "solid"])
-            for number in (4, 7, 8):
+            # Filtering must not shift the shading away from its journal rows.
+            self.assertEqual([combined.cell(number, 1).fill.patternType for number in range(2, 6)],
+                             [None, None, "solid", "solid"])
+            for number in (4, 5):
                 self.assertTrue(all(cell.fill.fgColor.rgb == "FFEFEFEF" for cell in combined[number]))
             book.close()
 
     def test_combined_posting_references_require_six_or_seven_digits(self):
-        feeds = ["12345", "260001", "2600001", "12345678", "26A001", "memo 260001", "=260001"]
+        feeds = ["12345", "260001", "2600001", "250001", "12345678", "26A001", "memo 260001", "=260001"]
         result = self.build([wd_row(memo=feed) for feed in feeds],
                             [bn_row(feed=feed) for feed in feeds])
         with tempfile.TemporaryDirectory() as folder:
@@ -122,10 +121,12 @@ class GraduateContractReconTests(unittest.TestCase):
             book = load_workbook(output)
             try:
                 rows = list(book["1305 Combined"].iter_rows(min_row=2, values_only=True))
-                expected = [value for feed in feeds for value in
-                            ([feed, feed] if feed in {"260001", "2600001"} else [None, None])]
+                expected = [feed for feed in ("260001", "2600001", "250001") for _ in range(2)]
                 self.assertEqual([row[3] for row in rows], expected)
                 self.assertEqual([row[9] for row in rows], expected)
+                self.assertEqual(book["1305 Combined"].max_row, 7)
+                self.assertEqual(len(result.documents), len(feeds))
+                self.assertEqual(len(result.combined), len(feeds) * 2)
                 self.assertEqual([values[5] for _, values in result.sources[0].rows], feeds)
                 self.assertEqual([values[8] for _, values in result.sources[1].rows], feeds)
             finally:
@@ -153,8 +154,10 @@ class GraduateContractReconTests(unittest.TestCase):
                 cwid = book["1305 CWID Recon"]
                 self.assertEqual([cell.value for cell in cwid[1]],
                     ["Fiscal Year", "Period", "CWID", "Banner Total Amt", "Workday Total Amt",
-                     "Net Period Activity", "Notes / Explanation", "Student Worktag"])
+                     "Net Period Activity", "Notes / Explanation", "Project", "Grant",
+                     "Operating Account", "Ledger Acct", "Spend Cat"])
                 self.assertEqual([cell.value for cell in cwid[2]][3:6], [60, 3, 57])
+                self.assertEqual([cell.value for cell in cwid[2]][7:10], [None, None, None])
                 periods = book["1305 Period Totals"]
                 self.assertEqual([cell.value for cell in periods[1]],
                     ["Fiscal Year", "Period", "Quarter", "Workday SIS Amt", "Workday Other Amt",
@@ -166,6 +169,43 @@ class GraduateContractReconTests(unittest.TestCase):
                         self.assertNotEqual(ws[f"{column}2"].number_format, "General")
                 self.assertEqual(doc.freeze_panes, "D2")
                 self.assertEqual(cwid.freeze_panes, "D2")
+            finally:
+                book.close()
+
+    def test_combined_filter_keeps_numeric_manual_memos_and_all_other_activity_views(self):
+        result = self.build([wd_row(10, memo="250001", kind="Manual", cwid="10000001"),
+                             wd_row(20, memo="10000001 adjustment", kind="Manual")],
+                            [bn_row(30, feed="12345")])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                combined = book["1305 Combined"]
+                self.assertEqual(combined.max_row, 2)
+                self.assertEqual(combined["D2"].value, "250001")
+                self.assertEqual(combined["J2"].value, "250001")
+                self.assertEqual(combined["G2"].value, 10)
+                self.assertEqual(book["1305 CWID Recon"]["D2"].value, 30)
+                self.assertEqual(book["1305 CWID Recon"]["E2"].value, 30)
+                self.assertEqual(book["1305 Period Totals"]["E2"].value, 30)
+                self.assertEqual(book["1305 Doc Recon"]["C2"].value, "12345")
+                self.assertEqual(book["Workday Data"].max_row, 3)
+                self.assertEqual(book["Banner Data"].max_row, 2)
+            finally:
+                book.close()
+
+    def test_combined_filter_can_produce_a_header_only_sheet(self):
+        result = self.build([wd_row()], [bn_row()])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                self.assertEqual(book["1305 Combined"].max_row, 1)
+                self.assertEqual(book["1305 Combined"].auto_filter.ref, "A1:N1")
+                self.assertEqual(book["1305 Doc Recon"]["E2"].value, 60)
+                self.assertEqual(book["1305 Period Totals"]["F2"].value, 60)
             finally:
                 book.close()
 
@@ -213,17 +253,39 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertEqual(banner_workday_classification("TPS00080", description),
                                  ("No Ledger Applicable", "No Spend Applicable"))
 
-    def test_combined_adds_banner_coding_without_assigning_workday_memos(self):
-        result = self.build([wd_row(memo="260001")], [bn_row(feed="260001", desc="Synthetic RA")])
+    def test_cwid_coding_retains_all_distinct_banner_classifications_by_period(self):
+        self.params = BannerActivityParameters.from_inputs("2026-09-01", "2026-10-31", "TPDT")
+        result = self.build([wd_row(memo="260001"),
+                             wd_row(5, kind="Manual", memo="10000002 Synthetic RA")], [
+            bn_row(feed="260001", desc="Synthetic RA"),
+            bn_row(feed="260001", desc="Synthetic TA"),
+            bn_row(feed="260001", desc="Synthetic RA"),
+            bn_row(feed="260001", desc="Synthetic FELLOW T&F"),
+            bn_row(feed="260001", desc="10000001 Synthetic GTF", account="TPS00080"),
+            bn_row(feed="260001", desc="Synthetic unknown"),
+            bn_row(feed="260002", day="2026-10-01", desc="Synthetic GTF"),
+        ])
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "review.xlsx"
             export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
             book = load_workbook(output)
             try:
                 combined = book["1305 Combined"]
-                self.assertEqual([cell.value for cell in combined[1]][-2:], ["Ledger Acct", "Spend Cat"])
-                self.assertEqual([cell.value for cell in combined[2]][-2:], [None, None])
-                self.assertEqual([cell.value for cell in combined[3]][-2:], ["1631e", "6152"])
+                self.assertNotIn("Ledger Acct", [cell.value for cell in combined[1]])
+                self.assertNotIn("Spend Cat", [cell.value for cell in combined[1]])
+                cwid = book["1305 CWID Recon"]
+                self.assertEqual([cell.value for cell in cwid[1]][-5:],
+                                 ["Project", "Grant", "Operating Account", "Ledger Acct", "Spend Cat"])
+                self.assertEqual(cwid["K2"].value, "1631e; 5893e; No Ledger Applicable; Review")
+                self.assertEqual(cwid["L2"].value, "6152; 6153; 7503; No Spend Applicable; Review")
+                # A Workday-only student's memo must not invent Banner coding.
+                self.assertEqual(cwid["C3"].value, "10000002")
+                self.assertEqual(cwid["K3"].value, "Review")
+                self.assertEqual(cwid["L3"].value, "Review")
+                self.assertEqual(cwid["D2"].value, 240)
+                self.assertEqual(cwid["B4"].value, "P04")
+                self.assertEqual(cwid["K4"].value, "1631e")
+                self.assertEqual(cwid["L4"].value, "6154")
                 self.assertEqual(book["Banner Data"].cell(2, 5).value, "Synthetic RA")
             finally:
                 book.close()
@@ -314,7 +376,8 @@ class GraduateContractReconTests(unittest.TestCase):
                 money(value)
 
     def test_export_is_plain_literal_preserves_sources_and_refuses_overwrite_or_cancel(self):
-        result = self.build([wd_row(memo="=TEST_FORMULA", kind="Manual", cwid="10000001")], [bn_row()])
+        result = self.build([wd_row(memo="=TEST_FORMULA", kind="Manual", cwid="10000001")],
+                            [bn_row(feed="260001")])
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "review.xlsx"
             export_reconciliation(result, output, app_version="synthetic", banner_source="manual")

@@ -16,7 +16,8 @@ DOC_HEADERS = ["Fiscal Year", "Period", "Quarter", "Feed Document", "Workday Deb
     "Banner Row Count", "Status", "Notes", "Review Status"]
 CWID_HEADERS = ["Fiscal Year", "Period", "Quarter", "CWID", "Banner Debit", "Banner Credit",
     "Other Workday Debit", "Other Workday Credit", "Debits", "Credits", "Net Period Activity",
-    "Banner Row Count", "Other Workday Row Count", "Review Status", "Notes / Explanation"]
+    "Banner Row Count", "Other Workday Row Count", "Review Status", "Notes / Explanation",
+    "Ledger Acct", "Spend Cat"]
 COMBINED_HEADERS = ["Fiscal Year", "Period", "Quarter", "Memo / Feed Document", "Source", "Source Row",
     "Date", "CWID", "Account ID", "Journal Entry", "Detail Code", "Term", "Description / Original Memo",
     "Debit", "Credit", "Included in Activity", "Activity Debit", "Activity Credit", "Status", "Transaction User"]
@@ -149,10 +150,16 @@ def reconcile(
         other = [row for row in rows if row.source == "Workday"]
         debit, credit = total(rows, "debit"), total(rows, "credit")
         follow_up = blocked or any(row.concerns or (row.source == "Banner" and statuses.get(row.group_key) != "Amounts agree") for row in rows)
+        # A student may have several Banner descriptions/codings in one period.
+        # Retain all distinct values rather than assigning the first one's code
+        # to the student's entire amount. Non-SIS Workday supplies no Banner rule.
+        coding = [banner_workday_classification(row.account, row.memo) for row in br]
+        ledgers = "; ".join(sorted({ledger for ledger, _ in coding})) or "Review"
+        spend_categories = "; ".join(sorted({spend for _, spend in coding})) or "Review"
         students.append([f"FY{year}", period, f"Q{(int(period[1:]) - 1) // 3 + 1}", cwid,
             total(br, "debit"), total(br, "credit"), total(other, "debit"), total(other, "credit"),
             debit, credit, debit - credit, len(br), len(other),
-            "Follow-up needed" if follow_up else "Not reviewed", ""])
+            "Follow-up needed" if follow_up else "Not reviewed", "", ledgers, spend_categories])
 
     periods = []
     current = parameters.start_date.replace(day=1)

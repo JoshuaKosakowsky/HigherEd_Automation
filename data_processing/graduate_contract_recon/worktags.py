@@ -19,14 +19,14 @@ WORKTAG_PATTERN = re.compile(
 @dataclass(frozen=True)
 class StudentWorktags:
     rows: list[list[str]]
-    by_cwid: dict[str, str]
+    by_cwid: dict[str, dict[str, str]]
     warning_count: int
 
 
 def prepare_worktags(source: SourceData) -> StudentWorktags:
     """Keep every distinct student/term/tag assignment, never just the first."""
     rows = []
-    assignments: dict[str, set[str]] = {}
+    assignments: dict[str, dict[str, set[str]]] = {}
     seen = set()
     warnings = 0
     for _, values in source.rows:
@@ -49,7 +49,10 @@ def prepare_worktags(source: SourceData) -> StudentWorktags:
                 seen.add(entry)
                 rows.append(list(entry))
             if cwid and code:
-                assignments.setdefault(cwid, set()).add(f"{kind}: {code}")
+                assignments.setdefault(cwid, {}).setdefault(kind, set()).add(code)
     if not rows:
         raise ValueError("Grad Contract Worktag export contains no data rows.")
-    return StudentWorktags(rows, {cwid: "; ".join(sorted(tags)) for cwid, tags in assignments.items()}, warnings)
+    return StudentWorktags(rows, {
+        cwid: {kind: "; ".join(sorted(codes)) for kind, codes in tags.items()}
+        for cwid, tags in assignments.items()
+    }, warnings)

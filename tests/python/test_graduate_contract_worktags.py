@@ -30,7 +30,7 @@ class StudentWorktagTests(unittest.TestCase):
             ["10000001", "SU26", "Summer 2026", "Project", "654321"],
             ["10000001", "FA26", "Fall 2026", "Operating Account", "123456"]])
         self.assertEqual(result.by_cwid["10000001"],
-            "Grant: 012345; Operating Account: 123456; Project: 654321")
+            {"Grant": "012345", "Operating Account": "123456", "Project": "654321"})
         self.assertEqual(result.warning_count, 0)
 
     def test_missing_ambiguous_ids_and_wrong_tag_lengths_are_not_guessed(self):
@@ -61,7 +61,7 @@ class StudentWorktagTests(unittest.TestCase):
         review = builder.build([wd_row()], [bn_row(amount=30), bn_row(amount=30, account="10000002")])
         tags = prepare_worktags(worktag_source([
             ["10000001 SU26 Synthetic", "Grant: 012345\nProject: 654321"],
-            ["10000001 FA26 Synthetic", "Grant: 012345"],
+            ["10000001 FA26 Synthetic", "Grant: 012345\nGrant: 000001\nOperating Account: 123456"],
         ]))
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "review.xlsx"
@@ -71,11 +71,16 @@ class StudentWorktagTests(unittest.TestCase):
                 self.assertEqual(len(book.sheetnames), 7)
                 self.assertEqual(book["Worktags"].max_column, 5)
                 self.assertEqual(book["1305 CWID Recon"].max_row, 3)
-                self.assertEqual(book["1305 CWID Recon"]["H1"].value, "Student Worktag")
-                self.assertEqual(book["1305 CWID Recon"]["H2"].value, "Grant: 012345; Project: 654321")
+                self.assertEqual([cell.value for cell in book["1305 CWID Recon"][1]][7:10],
+                                 ["Project", "Grant", "Operating Account"])
+                self.assertEqual([cell.value for cell in book["1305 CWID Recon"][2]][7:10],
+                                 ["654321", "000001; 012345", "123456"])
+                for column in ("H", "I", "J"):
+                    self.assertEqual(book["1305 CWID Recon"][f"{column}2"].number_format, "@")
                 self.assertEqual(book["Worktags"]["E2"].value, "012345")
                 self.assertEqual(book["Worktags"]["E2"].number_format, "@")
-                self.assertEqual(book["1305 CWID Recon"]["H3"].value, "No matching worktag")
+                self.assertEqual([cell.value for cell in book["1305 CWID Recon"][3]][7:10],
+                                 [None, None, None])
                 self.assertEqual(book["1305 CWID Recon"]["D2"].value, 30)
                 self.assertTrue(all(not sheet.tables for sheet in book))
             finally:

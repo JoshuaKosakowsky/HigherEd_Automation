@@ -14,7 +14,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from data_processing.shared.xlsx_output_format import apply_default_font, format_table_columns
 from shared.cancellation import CancellationToken
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
-from .reconciliation import COMBINED_HEADERS, Reconciliation, banner_workday_classification
+from .reconciliation import COMBINED_HEADERS, Reconciliation
 from .worktags import StudentWorktags, WORKTAG_HEADERS
 
 
@@ -25,23 +25,20 @@ COMBINED_COLUMN_ORDER = (7, 11, 1, 9, 6, 4, 13, 14, 12, 3, 0, 8, 10, 19)
 COMBINED_OUTPUT_HEADERS = [COMBINED_HEADERS[index] for index in COMBINED_COLUMN_ORDER]
 COMBINED_OUTPUT_HEADERS[2] = "Recon Period"
 COMBINED_OUTPUT_HEADERS[3] = "Journal Number"
-COMBINED_OUTPUT_HEADERS += ["Ledger Acct", "Spend Cat"]
 DOC_OUTPUT_HEADERS = ["Fiscal Year", "Period", "Feed Document", "Workday Total Amt",
                       "Banner Total Amt", "Difference", "Notes"]
 CWID_OUTPUT_HEADERS = ["Fiscal Year", "Period", "CWID", "Banner Total Amt",
-                       "Workday Total Amt", "Net Period Activity", "Notes / Explanation", "Student Worktag"]
+                       "Workday Total Amt", "Net Period Activity", "Notes / Explanation",
+                       "Project", "Grant", "Operating Account", "Ledger Acct", "Spend Cat"]
 PERIOD_OUTPUT_HEADERS = ["Fiscal Year", "Period", "Quarter", "Workday SIS Amt",
                          "Workday Other Amt", "Banner Amt", "Difference", "Notes"]
 
 
 def combined_output_row(row: list[object]) -> list[object]:
     values = [row[index] for index in COMBINED_COLUMN_ORDER]
-    # Column D is the SIS/Banner posting reference, never a student identifier.
-    reference = "" if str(row[18]).startswith("Other Workday activity") else str(row[3])
-    values[3] = reference if re.fullmatch(r"[0-9]{6,7}", reference) else ""
+    # The caller has selected rows with six- or seven-digit posting references.
+    values[3] = str(row[3])
     values[9] = values[3]
-    values.extend(banner_workday_classification(str(row[8]), str(row[12]))
-                  if row[4] == "Banner" else ("", ""))
     return values
 
 
@@ -86,14 +83,17 @@ def export_reconciliation(
         return ws
 
     try:
+        # Filter the Combined view only. Source/financial controls retain all
+        # selected activity, including manual rows and invalid posting references.
+        combined_rows = [row for row in review.combined if re.fullmatch(r"[0-9]{6,7}", str(row[3]))]
         combined = sheet("1305 Combined", COMBINED_OUTPUT_HEADERS,
-                         [combined_output_row(row) for row in review.combined])
+                         [combined_output_row(row) for row in combined_rows])
         grey = PatternFill(fill_type="solid", fgColor="FFEFEFEF")
         previous_group = None
         shaded = True
-        for number, row in enumerate(review.combined, 2):
+        for number, row in enumerate(combined_rows, 2):
             # Keep the same journal in separate periods visually separate too.
-            # Blank journal numbers use the feed, or the individual manual row.
+            # Manual activity retains its individual source-row grouping.
             reference = combined.cell(number, 4).value or row[3]
             if str(row[18]).startswith("Other Workday activity"):
                 reference = (row[4], row[5])
@@ -115,10 +115,15 @@ def export_reconciliation(
         students = []
         for row in review.students:
             banner_amount, workday_amount = row[4] - row[5], row[6] - row[7]
+            tags = worktags.by_cwid.get(str(row[3]), {}) if worktags else {}
             students.append([row[0], row[1], row[3], banner_amount, workday_amount,
                 banner_amount - workday_amount, row[14],
-                worktags.by_cwid.get(str(row[3]), "No matching worktag") if worktags else ""])
+                *[tags.get(kind, "") for kind in ("Project", "Grant", "Operating Account")],
+                row[15], row[16]])
         sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS, students)
+        for column in ("H", "I", "J"):
+            for cell in book["1305 CWID Recon"][column][1:]:
+                cell.number_format = "@"
         periods = []
         for row in review.periods:
             sis, other, banner_amount = row[3] - row[6], row[9] - row[10], row[4] - row[7]
@@ -140,10 +145,11 @@ def export_reconciliation(
                 [[number, *values, *([None] * (len(source.headers) - len(values))),
                   source.dispositions.get(number, "")] for number, values in source.rows])
         wrap_headers = {"Notes", "Notes / Explanation", "Description / Original Memo",
-                        "Status", "Memo / Feed Document", "Issue", "Student Worktag"}
+                        "Status", "Memo / Feed Document", "Issue", "Project", "Grant",
+                        "Operating Account", "Ledger Acct", "Spend Cat"}
         for ws in book:
             for cell in ws[1]:
-                if cell.value in {"Notes", "Notes / Explanation", "Status", "Review Status", "Student Worktag"}:
+                if cell.value in {"Notes", "Notes / Explanation", "Status", "Review Status"}:
                     ws.column_dimensions[cell.column_letter].width = 45
             for row in ws.iter_rows(min_row=2):
                 lines = 1

@@ -304,8 +304,11 @@ The **Grad Contract Sponsor** view receives this workflow with uploads only;
 administrators can also select **Run SQL from PROD Insights** for Banner.
 Workday uploads are grouped together in a pale-blue section before Banner data.
 The form is titled **Inputs**, with the save location in a separate **Outputs**
-section. From patch 0.24.1, Combined adds Banner-derived **Ledger Acct** and
-**Spend Cat**, and suppresses posting references outside six or seven digits.
+section. From patch 0.24.2, CWID Recon includes Banner-derived **Ledger Acct** and
+**Spend Cat**, listing all distinct values per student and fiscal period.
+Combined excludes entire rows whose Memo / Feed Document is not exactly six or
+seven digits, without a current-year prefix requirement; other reconciliation
+views retain their full activity.
 TPS00080 amounts reverse sign before matching; original source tabs stay intact.
 Document/CWID/period views use signed Debit minus Credit amounts, with differences
 calculated as Banner minus Workday. Period Totals compares Banner against all
@@ -314,8 +317,9 @@ See the [1305 technical guide](../../data_processing/graduate_contract_recon/REA
 for mappings, exceptions and synthetic acceptance examples.
 Workday always requires an uploaded export.
 the optional **Grad Contract Worktag** upload reads Find Journal Lines to add a
-cleaned Worktags tab and Student Worktag column matched by CWID. Multiple distinct
-worktags are retained; names and unrelated export columns are discarded.
+cleaned Worktags tab and separate **Project**, **Grant**, and **Operating Account**
+columns on CWID Recon. Each type keeps all distinct numbers per CWID, including
+leading zeros; missing types stay blank. Names and unrelated export columns are discarded.
 Inclusive dates and detail codes appear only for **Run SQL from PROD Insights**.
 SQL detail codes default to **TPDT, TPLE, Z0LE** and remain editable; at least one
 code is required. File upload mode uses all valid Banner codes and the dates
