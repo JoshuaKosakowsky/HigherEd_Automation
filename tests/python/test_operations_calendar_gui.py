@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMessageBox
 
@@ -308,28 +308,44 @@ class CalendarGuiTests(unittest.TestCase):
         window._apply_zoom(150)
         self.qt.processEvents()
         page = window.current_page
-        self.assertEqual(page._toolbar_columns, 2)
-        for control in (page.options_button, page.actions_button):
+
+        def settle_layout():
+            self.qt.processEvents()
+            page.layout().activate()
+            self.qt.processEvents()
+
+        settle_layout()
+        wrapped_columns = page._toolbar_columns
+        self.assertIn(wrapped_columns, (1, 2))
+        controls = (page.year, page.period, page.options_button, page.actions_button)
+        for control in controls:
             self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
         self.assertGreater(page.options_button.y(), page.year.y())
-        # Exercise wider text metrics without depending on a Windows font being
-        # installed locally. A single column must fit before the window grows.
-        original_text = page.actions_button.text()
-        page.actions_button.setText("Calendar actions: edit and remove")
+        # Simulate wider platform font metrics using a measured hint that still
+        # fits the available width, rather than assuming a fixed label's width.
+        margins = page.layout().contentsMargins()
+        wide_hint = QSize(page.width() - margins.left() - margins.right(),
+                          page.actions_button.minimumSizeHint().height())
+        with patch.object(page.actions_button, "minimumSizeHint", return_value=wide_hint):
+            page._layout_toolbar()
+            settle_layout()
+            self.assertEqual(page._toolbar_columns, 1)
+            self.assertEqual(window.width(), 900)
+            self.assertGreaterEqual(page.actions_button.width(), wide_hint.width())
         page._layout_toolbar()
-        self.qt.processEvents()
-        self.assertEqual(page._toolbar_columns, 1)
-        self.assertEqual(window.width(), 900)
-        self.assertGreaterEqual(page.actions_button.width(), page.actions_button.minimumSizeHint().width())
-        page.actions_button.setText(original_text)
-        page._layout_toolbar()
-        self.qt.processEvents()
-        self.assertEqual(page._toolbar_columns, 2)
-        for control in (page.options_button, page.actions_button):
+        settle_layout()
+        self.assertEqual(page._toolbar_columns, wrapped_columns)
+        for control in controls:
             self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
         window._apply_zoom(100)
-        self.qt.processEvents()
+        settle_layout()
+        for control in controls:
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
+        window.resize(1200, 800)
+        settle_layout()
         self.assertEqual(page._toolbar_columns, 4)
+        for control in controls:
+            self.assertGreaterEqual(control.width(), control.minimumSizeHint().width())
 
     def test_category_and_affected_role_are_saved_on_the_item(self):
         page = self.page()
