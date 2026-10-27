@@ -105,6 +105,11 @@ principals for a CWID are summed without deduplicating source records. An unknow
 principal makes that CWID's aggregate unknown. Banner Total Balance is copied
 from Banner; `Difference = Banner Total Balance - W&F Principal Amount` only
 when both amounts are known. An absent source stays blank, including Difference.
+From patch 0.23.6, reconciliation money columns display known zero as `$0.00`.
+A blank Difference means the comparison cannot be calculated because a source or
+amount is missing/unreadable. It stays blank, with a yellow fill and explanatory
+Excel cell note. A known zero Difference means both known totals are equal.
+Amounts are not replaced with text or assumed to be zero.
 `W&F Returned` is numeric 1 when the CWID appears in any included Returned report,
 otherwise 0; returned-only accounts do not expand the reconciliation population.
 Reconciliation follows Banner's displayed order, then W&F-only CWIDs in upload order.
@@ -141,8 +146,10 @@ by Creditor, Type and Source File. Returned retains its original nine columns,
 then Creditor and Source File. Text IDs and simple zero-padded numeric IDs retain
 leading zeros. Duplicate agency records remain separate source rows.
 
-Returned rows explicitly labeled `Total Accounts:` followed by a numeric count
-are removed in full. Unlabeled summaries require matching account count and at
+From patch 0.23.6, both Collections and Returned rows whose Your Accnt # is
+explicitly labeled `Total Accounts` are removed in full. A colon and numeric
+count (including comma-grouped counts) are optional; case and whitespace are
+ignored. These rows do not contribute to principal totals or reconciliation. Unlabeled summaries require matching account count and at
 least two monetary totals, or exact full-range SUM formulas. An uncertain row
 is retained; data after an identified footer fails. Financial/missing-name rows
 are not silently dropped. Review unexpected source layouts before use.

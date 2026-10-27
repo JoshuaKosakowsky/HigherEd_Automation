@@ -109,6 +109,41 @@ class WFAgencyReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'account data follows a summary row'):
             read_agency_report(path, identify_report(path))
 
+    def test_explicit_total_accounts_rows_are_removed_from_both_report_types(self):
+        for returned in (False, True):
+            with self.subTest(returned=returned):
+                path = agency_file(self.root, returned=returned, footer=False)
+                book = load_workbook(path)
+                for number, label in enumerate((
+                    'Total Accounts:1', 'total accounts: 5', ' Total Accounts ', 'Total Accounts: 1,234',
+                ), 8):
+                    book.active.cell(number, 1, label)
+                    book.active.cell(number, 4, 98765)  # Explicit labels do not need matching sums.
+                    book.active.cell(number, 5, 12345)
+                book.save(path)
+                book.close()
+                result = read_agency_report(path, identify_report(path))
+                self.assertEqual(result.frame['Your Accnt #'].tolist(), ['0000123'])
+                self.assertIn('4 verified total row(s) excluded', result.sheets[0].notes)
+
+    def test_account_after_collections_total_still_stops(self):
+        path = agency_file(self.root)
+        book = load_workbook(path)
+        book.active['A8'] = 'Total Accounts:1'
+        for column in range(1, 8):
+            book.active.cell(9, column, book.active.cell(7, column).value)
+        book.save(path)
+        book.close()
+        with self.assertRaisesRegex(ValueError, 'account data follows a summary row'):
+            read_agency_report(path, identify_report(path))
+
+    def test_total_words_in_account_name_do_not_remove_a_real_account(self):
+        path = agency_file(self.root, rows=[
+            ['TEST-1', 'Total Accounts', None, 100, 75, 25, None],
+        ], footer=False)
+        result = read_agency_report(path, identify_report(path))
+        self.assertEqual(result.frame['Your Accnt #'].tolist(), ['TEST-1'])
+
     def test_missing_account_fields_and_unverified_totals_are_retained(self):
         rows = [['0000123', 'Synthetic Student', None, 100, 75, 25, None],
                 [None, None, None, 100, 75, 25, None]]

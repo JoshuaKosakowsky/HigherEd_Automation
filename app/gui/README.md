@@ -267,7 +267,9 @@ layout with CO From Date / CO To Date and no Latest Feed Date. Fees principal di
 other types retain Orig. Balance. Unisa filenames containing 12007, 12009, 12559
 or 12561 are omitted. Reconciliation includes CWIDs from Banner or W&F Collections,
 sums multiple W&F accounts and shows Difference and a 1/0 Returned flag. Unknown
-or absent amounts remain blank. Source rows, dates, footer checks, formula-cache
+or absent amounts remain blank. Patch 0.23.6 removes explicit Total Accounts
+footers from both agency reports; reconciliation zeros display as $0.00, while
+blank Differences have a yellow fill and explanatory cell note. Source rows, dates, footer checks, formula-cache
 handling, cancellation and exclusive output creation retain their safeguards.
 See the [W&F technical guide](../../data_processing/wf_mines_balance_recon/README.md)
 for current business rules, synthetic examples and operational validation.

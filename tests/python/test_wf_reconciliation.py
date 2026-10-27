@@ -170,6 +170,55 @@ class ReconciliationWorkbookTests(unittest.TestCase):
         finally:
             book.close()
 
+    def test_collections_totals_never_reach_workbook_or_reconciliation(self):
+        files = []
+        for creditor in ('12003', '12004', '12005', '12006'):
+            path = agency_file(self.root, creditor)
+            book = load_workbook(path)
+            book.active['A8'] = 'Total Accounts: 1'
+            book.active['D8'] = 99999
+            book.save(path)
+            book.close()
+            files.append(path)
+        self.params['wf_files'] = tuple(files)
+        run_wf_mines_balance_recon(self.context())
+        book = load_workbook(self.output)
+        try:
+            rows = list(book['W&F Collections'].values)
+            self.assertEqual(len(rows), 5)  # Header plus four actual account rows.
+            self.assertEqual([row[0] for row in rows[1:]], ['0000123'] * 4)
+            recon = {row[0]: row for row in list(book['Reconciliation'].values)[1:]}
+            self.assertEqual(set(recon), {'TEST-1', '0000123'})
+            self.assertEqual(recon['0000123'][4], 320)
+        finally:
+            book.close()
+
+    def test_zero_difference_is_numeric_and_missing_difference_has_review_note(self):
+        students = holds_frame()
+        students['CWID'] = ['0000123']
+        students['Total Balance'] = [80]
+        write_frame(self.holds, students)
+        self.params['wf_files'] = (agency_file(self.root, rows=[
+            ['0000123', 'Synthetic', None, 100, 75, 25, None],
+            ['W-only', 'Agency only', None, 0, 0, 0, None],
+        ], footer=False),)
+        run_wf_mines_balance_recon(self.context())
+        book = load_workbook(self.output)
+        try:
+            sheet = book['Reconciliation']
+            zero, missing = sheet['F2'], sheet['F3']
+            self.assertEqual(zero.value, 0)
+            self.assertEqual(zero.data_type, 'n')
+            self.assertEqual(zero.number_format.split(';')[2], '$0.00')
+            self.assertIsNone(zero.comment)
+            self.assertIsNone(missing.value)
+            self.assertEqual(missing.fill.fgColor.rgb, '00FFF2CC')
+            self.assertIn('not a zero', missing.comment.text)
+            self.assertEqual(sheet['E3'].value, 0)
+            self.assertEqual(sheet['E3'].number_format.split(';')[2], '$0.00')
+        finally:
+            book.close()
+
     def test_workflow_uses_admin_configuration_instead_of_run_parameter(self):
         config = self.root / 'commission.json'
         config.write_text('{"submission_percentage": 0.5}')

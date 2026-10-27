@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Alignment
+from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, PatternFill
 
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
 from data_processing.shared.xlsx_output_format import (
@@ -175,6 +176,22 @@ def _write_frame(book: Workbook, name: str, frame: pd.DataFrame, cancellation, *
         'WOFF', 'BDRC', 'Total Balance', 'Principal Amount',
         'Banner Total Balance', 'W&F Principal Amount', 'Difference',
     })
+    if name == 'Reconciliation':
+        # A known zero is a match; absent/unknown totals must stay visibly distinct.
+        for column in sheet.iter_cols():
+            header = column[0].value
+            if header not in {'Banner Total Balance', 'W&F Principal Amount', 'Difference'}:
+                continue
+            for cell in column[1:]:
+                cell.number_format = '$#,##0.00;[Red]($#,##0.00);$0.00'
+                if header == 'Difference' and cell.value is None:
+                    cell.fill = PatternFill('solid', fgColor='FFF2CC')
+                    cell.comment = Comment(
+                        'Not calculated: Banner Total Balance or W&F Principal Amount '
+                        'is missing or unreadable. The CWID may occur in only one source. '
+                        'A blank is not a zero or a confirmed match.',
+                        'Mines Bursar Automation',
+                    )
     for column in sheet.iter_cols(min_row=2):
         if any(isinstance(cell.value, datetime) for cell in column):
             dimension = sheet.column_dimensions[column[0].column_letter]

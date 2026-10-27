@@ -187,8 +187,8 @@ def read_agency_report(
                     continue
                 # If account data appears after a verified summary below, fail
                 # the run rather than silently dropping any intervening rows.
-                labeled_total = report.report_type == 'returned' and re.fullmatch(
-                    r'\s*Total\s+Accounts\s*:\s*[0-9]+\s*', str(cells[0].value), re.IGNORECASE,
+                labeled_total = re.fullmatch(
+                    r'\s*Total\s+Accounts\s*:?\s*(?:[0-9]+(?:,[0-9]{3})*)?\s*', str(cells[0].value), re.IGNORECASE,
                 )
                 if labeled_total or _verified_footer(cells, report.headers, records, source_rows):
                     excluded += 1
