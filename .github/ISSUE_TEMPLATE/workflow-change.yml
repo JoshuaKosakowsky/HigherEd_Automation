@@ -1,22 +1,22 @@
-name: Workflow change
-description: Describe a workflow fix or improvement with clear expected results and examples.
+name: General issue
+description: Report a problem, suggest an improvement, or request a change.
 body:
   - type: markdown
     attributes:
       value: |
-        Use this optional form for a workflow fix or improvement. Every field is
-        optional, and you can also choose a blank issue. Fill in what you know;
-        list unresolved business decisions under Open questions.
+        Use this optional form to describe a problem, improvement, or proposed
+        change. Every field is optional, and you can also choose a blank issue.
+        Fill in what you know; list anything undecided under Open questions.
 
-        Use synthetic examples and sanitized screenshots rather than student
-        records, financial records, credentials, or session information.
+        Use made-up examples and sanitized screenshots. Leave out personal data,
+        credentials, and other sensitive information.
 
   - type: input
-    id: workflow-version
+    id: affected-area
     attributes:
-      label: Workflow and application version
-      description: Name the affected workflow and the version where you observed the behavior.
-      placeholder: "1305 Graduate Contract Recon; version shown in the app"
+      label: Affected area and version
+      description: Identify the relevant feature, process, document, or component. Include a version if useful.
+      placeholder: Area or item involved; version or environment if relevant.
     validations:
       required: false
 
@@ -24,7 +24,7 @@ body:
     id: goal
     attributes:
       label: Goal
-      description: What operational result should this change achieve?
+      description: What problem should this address, or what outcome would you like?
       placeholder: Describe the outcome and why it matters.
     validations:
       required: false
@@ -33,8 +33,8 @@ body:
     id: current-behavior
     attributes:
       label: Current behavior
-      description: Describe what happens now and the steps or inputs that produce it.
-      placeholder: Name the affected output, worksheet, columns, and observed result.
+      description: Describe what happens today. For something new, explain the current limitation or need.
+      placeholder: Describe the situation and any steps needed to reproduce it.
     validations:
       required: false
 
@@ -42,29 +42,23 @@ body:
     id: expected-behavior
     attributes:
       label: Expected behavior
-      description: Specify exact sheet and column names, grouping, formulas, sign conventions, and filtering rules where applicable.
+      description: Describe the intended result. Include specific names, rules, or calculations where they matter.
       placeholder: |
-        Output or worksheet:
-        Columns to add, remove, rename, or reorder:
-        Grouping or matching keys:
-        Formula and sign convention:
-        Rows to include or exclude (distinguish excluding a row from blanking a cell):
-        Exceptions and missing-data behavior:
+        Desired result:
+        Relevant details or conditions:
+        Exceptions or special cases:
     validations:
       required: false
 
   - type: textarea
-    id: synthetic-examples
+    id: examples
     attributes:
-      label: Synthetic examples
-      description: Give inputs and exact expected outputs. Include an exception, reversal, or missing-data case when relevant.
+      label: Examples
+      description: Give a made-up example or a short before-and-after comparison if helpful.
       placeholder: |
-        Example for CWID Net Period Activity only:
-        Same synthetic student, fiscal year, and period:
-        signed Banner +6,334.62 and signed non-SIS Workday -6,334.62 -> 0.00.
-        signed Banner +6,334.62 and signed non-SIS Workday -6,300.00 -> +34.62.
-
-        Replace these examples with cases for this change.
+        Starting situation or input:
+        Current result:
+        Expected result:
     validations:
       required: false
 
@@ -72,7 +66,7 @@ body:
     id: scope
     attributes:
       label: Scope and behavior to preserve
-      description: Identify what should change and which existing rules, outputs, or safeguards should remain.
+      description: Identify what should change and what should stay the same.
       placeholder: |
         Change:
         Preserve:
@@ -84,10 +78,10 @@ body:
     id: open-questions
     attributes:
       label: Open questions and references
-      description: List decisions needing owner confirmation and link relevant issues, PRs, or workflow documentation. Distinguish confirmed rules from proposals.
+      description: List anything needing clarification and link related issues, changes, or documentation. Distinguish agreed decisions from proposals.
       placeholder: |
-        Confirmed rules and references:
-        Questions to resolve before implementing the affected behavior:
+        Agreed decisions and references:
+        Questions still to resolve:
     validations:
       required: false
 
@@ -97,10 +91,10 @@ body:
       label: Acceptance checks
       description: These track completion after the issue is created; they are not prerequisites for submitting it. Edit or remove them as needed.
       value: |
-        - [ ] Expected behavior and open business decisions are confirmed.
-        - [ ] Synthetic examples produce the expected results.
-        - [ ] Relevant tests and checks pass; unverified behavior is identified.
-        - [ ] Workflow documentation reflects any changed business rules.
-        - [ ] Owner reviews the generated output or affected behavior before closure.
+        - [ ] Expected results and open questions are agreed.
+        - [ ] Relevant examples have been checked.
+        - [ ] Relevant checks pass; anything unverified is recorded.
+        - [ ] Documentation is updated where needed.
+        - [ ] Results are reviewed before closure.
     validations:
       required: false
