@@ -376,6 +376,17 @@ whether a check remains uncashed. TEST/PROD selection, administrator checks,
 complete-result checks and new-file Excel export use the existing report service.
 See [the report's rules and validation](../../query/AR/contact_information/refund_check_contacts_README.md).
 
+In **0.25.0**, administrators can select **Holds — Collections demographic and
+academic profile**. It uses the same SQL that can be pasted into Insights and
+includes all historical CO hold date pairs, an active flag, age, current
+race/ethnicity/sex/gender codes, and academic context for the term containing
+each hold's start date. Majors/level, registered credits, prior GPA/standing and
+reconstructed class retain their source terms and review flags. First-generation
+status stays Unknown until a local mapping is verified. Later term outcomes are
+labeled separately. No parameters are needed; the existing TEST/PROD,
+administrator, completeness and new-file export checks apply. See
+[profile fields and first-generation verification](../../query/AR/holds/collections_student_profile_README.md).
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

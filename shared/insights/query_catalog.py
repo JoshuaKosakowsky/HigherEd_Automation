@@ -70,6 +70,15 @@ class InsightsQuery:
 
 QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
+        "collections_student_profile", "Holds", "Collections demographic and academic profile",
+        "AR/holds/collections_student_profile.sql",
+        "All historical CO holds with an active flag and academic context for the term "
+        "containing each hold's start date. Includes age, current race/sex/gender codes, "
+        "term-effective majors/level, credits, prior academic standing and reconstructed GPA/class. "
+        "First-generation mapping needs local verification; later term outcomes are labeled.",
+        administrator_only=True, result_count_column="Report Row Count",
+    ),
+    InsightsQuery(
         "wf_mines_balance_transactions", "Activity", "W&F - Mines Balance Recon transactions",
         "AR/activity/wf_mines_balance_transactions.sql",
         "All-date transaction source for the future W&F - Mines Balance Recon. "
