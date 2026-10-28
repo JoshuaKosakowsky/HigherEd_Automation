@@ -1,5 +1,17 @@
 # Student account holds and delinquency reports
 
+## Collections demographic and academic profile
+
+`collections_student_profile.sql` is the shared Insights/app report for all
+historical CO hold date pairs, with an active flag and academic context from
+the term containing each CO start date. It includes demographics, term-effective
+program/major/level, credit load, prior GPA/standing and reconstructed class.
+First-generation mapping needs local verification; later outcomes and current
+source records are labeled. Run `validate_collections_profile_schema.sql` and
+`inspect_collections_profile_codes.sql` before local acceptance. See
+[field definitions, first-generation discovery and acceptance checks](collections_student_profile_README.md).
+App 0.25.0 exposes it through the administrator-only Connections report picker.
+
 ## W&F - Banner Recon (collections tracking)
 
 `collections_tracking.sql` supports analyst reconciliation of accounts formally
