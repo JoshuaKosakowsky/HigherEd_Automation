@@ -2,7 +2,7 @@
 
 import csv
 from io import BytesIO
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 import re
@@ -156,7 +156,7 @@ class GraduateContractReconTests(unittest.TestCase):
                     ["Fiscal Year", "Period", "CWID", "Banner Total Amt", "Workday Total Amt",
                      "Net Period Activity", "Notes / Explanation", "Project", "Grant",
                      "Operating Account", "Ledger Acct", "Spend Cat"])
-                self.assertEqual([cell.value for cell in cwid[2]][3:6], [60, 3, 57])
+                self.assertEqual([cell.value for cell in cwid[2]][3:6], [60, 3, 63])
                 self.assertEqual([cell.value for cell in cwid[2]][7:10], [None, None, None])
                 periods = book["1305 Period Totals"]
                 self.assertEqual([cell.value for cell in periods[1]],
@@ -286,7 +286,7 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertEqual(cwid["B4"].value, "P04")
                 self.assertEqual(cwid["K4"].value, "1631e")
                 self.assertEqual(cwid["L4"].value, "6154")
-                self.assertEqual(book["Banner Data"].cell(2, 5).value, "Synthetic RA")
+                self.assertEqual(book["Banner Data"].cell(2, 4).value, "Synthetic RA")
             finally:
                 book.close()
 
@@ -301,12 +301,101 @@ class GraduateContractReconTests(unittest.TestCase):
                 doc = list(book["1305 Doc Recon"].values)[1]
                 self.assertEqual(doc[3:6], (-25, -20, 5))
                 cwid = list(book["1305 CWID Recon"].values)[1]
-                self.assertEqual(cwid[3:6], (-20, -7, -13))
+                self.assertEqual(cwid[3:6], (-20, -7, -27))
                 period = list(book["1305 Period Totals"].values)[1]
                 self.assertEqual(period[3:7], (-25, -7, -20, 12))
                 self.assertEqual(result.documents[0][12], "Amount difference")
             finally:
                 book.close()
+
+    def test_cwid_activity_adds_signed_banner_and_non_sis_workday_amounts(self):
+        cases = [
+            ("6334.62", "-6334.62", "0.00"),
+            ("-6334.62", "6334.62", "0.00"),
+            ("6334.62", "-6300.00", "34.62"),
+            ("6300.00", "-6334.62", "-34.62"),
+            ("25.00", "7.00", "32.00"),
+            ("-25.00", "-7.00", "-32.00"),
+            ("25.00", None, "25.00"),
+            (None, "-7.00", "-7.00"),
+        ]
+        for banner, workday_amount, expected in cases:
+            with self.subTest(banner=banner, workday=workday_amount):
+                amount = Decimal(workday_amount or "0")
+                wd = [wd_row(max(amount, 0), max(-amount, 0), kind="Manual",
+                             memo="10000001 adjustment")] if workday_amount is not None else []
+                bn = [bn_row(Decimal(banner))] if banner is not None else []
+                result = self.build(wd, bn)
+                self.assertEqual(result.students[0][10], Decimal(expected))
+                with tempfile.TemporaryDirectory() as folder:
+                    output = Path(folder) / "review.xlsx"
+                    export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+                    book = load_workbook(output)
+                    try:
+                        row = list(book["1305 CWID Recon"].values)[1]
+                        self.assertEqual(row[3:6], (float(banner or 0), float(workday_amount or 0),
+                                                   float(expected)))
+                    finally:
+                        book.close()
+
+    def test_banner_output_omits_review_columns_and_formats_feed_dates_only(self):
+        dates = ["2026-09-30T23:59:59Z", "2026-09-30T23:59:59-06:00",
+                 datetime(2026, 9, 30, 15, 45, 12), date(2026, 9, 30), 46295.5,
+                 "09/30/2026 11:59:59 PM", None, "invalid", "=TEST_FORMULA"]
+        result = self.build([wd_row()], [bn_row(day=value) for value in dates])
+        original_rows = [list(values) for _, values in result.sources[1].rows]
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="sql")
+            book = load_workbook(output)
+            try:
+                banner = book["Banner Data"]
+                headers = [cell.value for cell in banner[1]]
+                self.assertEqual(headers, [header for header in BN_HEADERS if header != "'Aid Year'"])
+                self.assertEqual(banner.max_row, len(dates) + 1)
+                date_column = headers.index("'Feed Date'") + 1
+                for row in range(2, 8):
+                    cell = banner.cell(row, date_column)
+                    self.assertEqual(cell.value, datetime(2026, 9, 30))
+                    self.assertEqual(cell.number_format, "yyyy-mm-dd")
+                self.assertIsNone(banner.cell(8, date_column).value)
+                self.assertEqual(banner.cell(9, date_column).value, "invalid")
+                self.assertEqual(banner.cell(10, date_column).value, "=TEST_FORMULA")
+                self.assertEqual(banner.cell(10, date_column).data_type, "s")
+                self.assertEqual(banner["A2"].value, "10000001")
+                self.assertEqual(banner["E2"].value, 60)
+                self.assertEqual(banner.auto_filter.ref, "A1:K10")
+                self.assertEqual([cell.value for cell in book["Workday Data"][1]],
+                                 ["Source Row", *WD_HEADERS, "Selection Status"])
+            finally:
+                book.close()
+        self.assertEqual(result.sources[1].headers, BN_HEADERS)
+        self.assertEqual([values for _, values in result.sources[1].rows], original_rows)
+
+    def test_uploaded_banner_output_handles_reordered_unquoted_headers_and_short_rows(self):
+        headers = ["Aid Year", "Feed Date", "Amount", "Description", "ID", "Feed Document", "Detail Code"]
+        values = ["2099", "2026-09-30T12:34:56Z", 60, "=TEST_FORMULA", "10000001", "260001", "TPDT"]
+        with tempfile.TemporaryDirectory() as folder:
+            source_path = Path(folder) / "banner.csv"
+            with source_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerows([headers, values, ["2099", "invalid"]])
+            original = source_path.read_bytes()
+            result = reconcile(workday([wd_row(memo="260001")]), read_source(source_path, "Banner"), self.params)
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                banner = book["Banner Data"]
+                self.assertEqual([cell.value for cell in banner[1]], headers[1:])
+                self.assertEqual(banner["A2"].value, datetime(2026, 9, 30))
+                self.assertEqual(banner["A2"].number_format, "yyyy-mm-dd")
+                self.assertEqual(banner["C2"].value, "=TEST_FORMULA")
+                self.assertEqual(banner["C2"].data_type, "s")
+                self.assertEqual(list(banner.values)[2], ("invalid", None, None, None, None, None))
+            finally:
+                book.close()
+            self.assertEqual(source_path.read_bytes(), original)
 
     def test_blank_external_reference_falls_back_to_numeric_memo(self):
         result = self.build([wd_row(memo=9001.0, ext="")], [bn_row(feed="9001.0")])

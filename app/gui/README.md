@@ -309,9 +309,12 @@ section. From patch 0.24.2, CWID Recon includes Banner-derived **Ledger Acct** a
 Combined excludes entire rows whose Memo / Feed Document is not exactly six or
 seven digits, without a current-year prefix requirement; other reconciliation
 views retain their full activity.
-TPS00080 amounts reverse sign before matching; original source tabs stay intact.
-Document/CWID/period views use signed Debit minus Credit amounts, with differences
-calculated as Banner minus Workday. Period Totals compares Banner against all
+TPS00080 amounts reverse sign before matching; original input files stay intact.
+From patch 0.25.1, Banner Data omits Source Row, Aid Year and Selection Status,
+and displays valid Feed Dates as yyyy-mm-dd without a time. All source rows remain.
+Document/CWID/period views use signed Debit minus Credit amounts. CWID Net Period
+Activity adds Banner and non-SIS Workday, so opposite signs wash to zero.
+Document Difference is Banner minus Workday. Period Totals compares Banner against all
 Workday (SIS plus Other) and keeps a blank **Notes** column for staff comments.
 See the [1305 technical guide](../../data_processing/graduate_contract_recon/README.md)
 for mappings, exceptions and synthetic acceptance examples.

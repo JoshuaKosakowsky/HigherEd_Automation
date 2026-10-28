@@ -78,7 +78,8 @@ amount row. Positive Banner amounts are debits and negative amounts are credits,
 the TPS00080 sign correction described below. Non-SIS Workday
 journals are retained separately. Invalid dates/amounts and duplicate transaction
 identities block automatic substitution; suspect rows are retained in the source
-tabs with selection status. No rows are deduplicated.
+tabs. Workday Data includes selection status; Banner Data omits that column.
+No rows are deduplicated.
 
 The output uses plain worksheets, freeze panes and ordinary filters, without
 Excel Tables. All financial results are calculated by Python as a snapshot;
@@ -87,7 +88,7 @@ Combined begins with CWID, Term, Recon Period and Journal Number, following the
 employee's Journal Lines Data layout. Feed blocks follow the first Workday
 source occurrence within each fiscal period; all Workday rows in the block come
 before its Banner rows. Banner rows without a Workday feed match follow last.
-Source selection statuses retain review warnings; the
+Workday selection statuses retain review warnings; the
 workbook does not include separate Verification or Exceptions tabs.
 Combined includes a row only when its normalized Memo / Feed Document is exactly
 six or seven digits. It keeps the complete reference in both Journal Number and
@@ -105,17 +106,22 @@ review view and displays both summaries and detail.
 | --- | --- |
 | 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' Debit/Credit remain visible for comparison, including the TPS00080 correction; Period Totals keeps each source separate. |
 | 1305 Doc Recon | Union of feed documents from both sources, with signed Workday Total Amt (SIS), Banner Total Amt, Difference (Banner minus Workday), and editable Notes. |
-| 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner minus Workday, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation remains; Project, Grant, Operating Account, Ledger Acct and Spend Cat provide student coding. |
+| 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner plus Workday; opposite signed amounts wash to zero. This is activity, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation remains; Project, Grant, Operating Account, Ledger Acct and Spend Cat provide student coding. |
 | 1305 Period Totals | Fiscal Year, Period, Quarter, Workday SIS Amt, Workday Other Amt, Banner Amt, Difference, Notes. Difference is Banner minus (Workday SIS + Workday Other). Includes empty periods in the selected range; Notes starts blank. |
-| Workday Data / Banner Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
+| Workday Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
+| Banner Data | Source rows, including excluded rows, with Source Row, Aid Year and Selection Status omitted. Valid Feed Date values are real Excel dates displayed as yyyy-mm-dd, without time or time-zone conversion. Blank/invalid dates remain as supplied. Other source values remain literal, including text beginning with `=`. Original input files and internal selection controls are unchanged. |
 | Worktags (when uploaded) | Cleaned CWID, term code/description, worktag type and six-digit number. Only the requested metadata is retained. |
 
-## Workday coding and signed amounts (0.24.2)
+## Workday coding and signed amounts (0.25.1)
 
 [Issue #17](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/17)
-defines the Banner description mappings and the compact amount layout. The owner
-confirmed signed **Debit minus Credit**, **Banner minus Workday** differences,
-and **Review** for unmatched ledger accounts in the implementation chat.
+defines the Banner description mappings and the compact amount layout. Signed
+amounts use **Debit minus Credit**, and unmatched ledger accounts show **Review**.
+The owner's 0.25.1 correction makes CWID **Net Period Activity** the sum of signed
+**Banner Total Amt + Workday Total Amt**, so charges and offsetting non-SIS
+Workday activity wash. This replaces the prior CWID subtraction interpretation;
+document Difference remains **Banner minus Workday**, and period Difference
+remains **Banner minus (Workday SIS + Workday Other)**.
 Credits are stored internally as positive magnitudes, so adding Debit and Credit
 would hide reversal signs. These output changes retain the existing separate
 exact-cent debit/credit matching controls; a zero displayed Difference does not
@@ -153,7 +159,10 @@ Synthetic acceptance examples:
   a credit of 4,000 (signed amount −4,000); Amount −4,000 becomes a debit of
   4,000. Both classification fields show the exception labels above.
 - Workday SIS −25, Other Workday −7, and Banner −20 produce document Difference
-  +5, CWID Net Period Activity −13, and period Difference +12.
+  +5, CWID Net Period Activity −27, and period Difference +12.
+- Banner +6,334.62 and non-SIS Workday −6,334.62 for the same CWID/fiscal period
+  produce Net Period Activity 0.00. Banner +6,334.62 and non-SIS Workday −6,300.00
+  leave +34.62; Banner −25 and non-SIS Workday −7 produce −32.
 - Posting references `260001`, `2600001`, and `250001` retain their rows in
   Combined; rows with `12345`, `12345678`, or `26A001` are excluded from that
   sheet entirely. No current-year prefix is required. Raw source rows and other

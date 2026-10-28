@@ -15,6 +15,7 @@ from data_processing.shared.xlsx_output_format import apply_default_font, format
 from shared.cancellation import CancellationToken
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
 from .reconciliation import COMBINED_HEADERS, Reconciliation
+from .sources import header_key, parse_date
 from .worktags import StudentWorktags, WORKTAG_HEADERS
 
 
@@ -116,8 +117,9 @@ def export_reconciliation(
         for row in review.students:
             banner_amount, workday_amount = row[4] - row[5], row[6] - row[7]
             tags = worktags.by_cwid.get(str(row[3]), {}) if worktags else {}
+            # Reuse the reconciler's signed Banner + non-SIS Workday net activity.
             students.append([row[0], row[1], row[3], banner_amount, workday_amount,
-                banner_amount - workday_amount, row[14],
+                row[10], row[14],
                 *[tags.get(kind, "") for kind in ("Project", "Grant", "Operating Account")],
                 row[15], row[16]])
         sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS, students)
@@ -141,6 +143,24 @@ def export_reconciliation(
         for source in review.sources:
             if any(len(values) > len(source.headers) for _, values in source.rows):
                 raise ValueError(f"{source.source} has source rows wider than the headers.")
+            if source.source == "Banner":
+                columns = [index for index, header in enumerate(source.headers)
+                           if header_key(header) not in {"sourcerow", "aidyear", "selectionstatus"}]
+                rows = []
+                for _, values in source.rows:
+                    row = []
+                    for index in columns:
+                        value = values[index] if index < len(values) else None
+                        if index == source.columns["feed_date"]:
+                            try:
+                                value = parse_date(value)
+                            except (ValueError, TypeError, OverflowError):
+                                # Keep blank/invalid source values visible for review.
+                                pass
+                        row.append(value)
+                    rows.append(row)
+                sheet("Banner Data", [source.headers[index] for index in columns], rows)
+                continue
             sheet(f"{source.source} Data", ["Source Row", *source.headers, "Selection Status"],
                 [[number, *values, *([None] * (len(source.headers) - len(values))),
                   source.dispositions.get(number, "")] for number, values in source.rows])
