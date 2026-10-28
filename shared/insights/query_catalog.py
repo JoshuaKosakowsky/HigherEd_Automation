@@ -72,8 +72,8 @@ QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
         "collections_student_profile", "Holds", "Collections demographic and academic profile",
         "AR/holds/collections_student_profile.sql",
-        "All historical CO holds with an active flag and academic context for the term "
-        "containing each hold's start date. Includes age, current race/sex/gender codes, "
+        "All historical CO holds with status and academic context for the term "
+        "containing each hold's start date. Includes age, current races/recorded sex, "
         "term-effective majors/level, credits, prior academic standing and reconstructed GPA/class. "
         "Separate Admissions (FGA) and FAFSA (FGF) first-generation indicators; "
         "missing information stays Unknown. Later term outcomes are labeled.",

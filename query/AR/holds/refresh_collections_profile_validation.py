@@ -9,6 +9,18 @@ START = "-- BEGIN COLLECTIONS PROFILE SQL"
 END = "-- END COLLECTIONS PROFILE SQL"
 
 
+# Diagnostic-only join keys; never added to the profile's public output.
+VALIDATION_KEYS = '    h.pidm AS "Banner PIDM",\n    h.co_hold_number AS "CO Hold Number",\n'
+
+
+def validation_report_sql(report: str) -> str:
+    """Retain internal identity for aggregate checks without exporting it."""
+    marker = "\nSELECT\n"
+    if report.count(marker) != 1:
+        raise ValueError("Expected one final collections report SELECT.")
+    return report.strip().removesuffix(";").replace(marker, marker + VALIDATION_KEYS, 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="Refresh the embedded report; default checks only.")
@@ -23,7 +35,7 @@ def main() -> None:
     _, _, after = remaining.partition(END)
     if END not in remaining:
         parser.exit(1, "Collections report block markers are out of order.\n")
-    refreshed = before + START + "\n" + report.strip().removesuffix(";") + "\n" + END + after
+    refreshed = before + START + "\n" + validation_report_sql(report) + "\n" + END + after
     if args.write:
         path.write_text(refreshed, encoding="utf-8", newline="\n")
         print("Refreshed the collections validation SQL from the shared report.")

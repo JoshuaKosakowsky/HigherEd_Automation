@@ -11,27 +11,45 @@ Patch **0.25.2** replaces `First Generation` and `First Generation Source` with
 `First Generation Admissions` and `First Generation FAFSA`. Update saved
 Insights questions with the revised SQL to match the app's two separate indicators.
 
+Patch **0.25.4** trims the profile output and formats `CO Term Start Date` and
+`CO Term End Date` as `YYYY-MM-DD` text without a time component (missing terms
+stay blank). Replace the entire saved Insights SQL to apply the revised output.
+The hold population, row grain, calculations and first-generation rules are unchanged.
+
+Removed output columns: `Report Date`, `Banner PIDM`, `Identity Review`,
+`CO Hold Number`, `Source Hold Rows`, `Active CO Hold`, `Current Recorded Sex Code`,
+`Current Gender Identity Code`, `Current Ethnicity Code`, `Current Race Codes`,
+`CO Term Description`, `Containing Term Count`, `Academic Context Review`,
+`Program Effective Term`, `CO Term Student Level Code`, `CO Term Attributes`,
+`Registration Review`, `Prior Academic History Through Term`, `Prior History Review`,
+`Prior Academic Standing Term`, and `Historical Data Limitation`.
+`CO Hold Status`, readable recorded sex/races, `Current Race Count`,
+`CO Term Attribute Codes` and `Attribute Effective Term` remain. Review caveats
+are documented here rather than repeated in each output row.
+
 ## Population and row meaning
 
-The owner selected **all historical CO holds with an active flag** and the
+The report retains **all historical CO holds**, with hold status and the
 **term containing the CO start date**. No balance, current enrollment, student
 status or program-history requirement removes a CO account. Missing current
 identity, demographics and academic history remain visible.
 
 One row represents a PIDM and distinct calendar-date pair (`CO From Date`,
-`CO To Date`). Duplicate date pairs collapse with `Source Hold Rows` showing
-their source count. Distinct dates remain separate, even for the same person.
+`CO To Date`). Duplicate date pairs collapse internally. Distinct dates remain
+separate, even for the same person.
 `Student CO Hold Count` counts these date pairs, not verified agency placements.
-`CO Hold Number` is a chronological display sequence, not a persistent event ID;
-use PIDM and the two dates to reconcile an export. Count distinct PIDMs for a
-student headcount; summing rows gives the number of retained hold date pairs.
+PIDM and chronological hold numbers remain internal join keys. For identified
+accounts, use CWID and the two dates to reconcile an export. Missing identities
+remain as blank CWIDs; do not combine those rows as one student. Use the
+aggregate validator for distinct-student counts, which use internal PIDMs.
+Summing rows gives the number of retained hold date pairs.
 SPRHOLD cannot recover records that were deleted or prior versions overwritten.
 
-`Active CO Hold = Yes` requires from date on/before report date and to date
-strictly after report date. A hold ending today is ended; a future start is
-scheduled. Missing dates or an end before its start yield `Unknown` and review.
-This start-and-end definition belongs to this historical report; the W&F
-report retains its existing end-date-only population rule.
+`CO Hold Status` is `Active` when the from date is on/before report date and
+the to date is strictly after report date. A hold ending today is `Ended`;
+a future start is `Scheduled`. Missing dates or an end before its start yield
+`Review dates`. This start-and-end definition belongs to this historical report;
+the W&F report retains its existing end-date-only population rule.
 
 `CO From Date` is a proxy for entering collections. It does not establish the
 agency's actual referral/placement date. No agency-date or debt-amount inference
@@ -41,21 +59,21 @@ is made. The report uses the database's `CURRENT_DATE` for its report date.
 
 | Field group | Source and interpretation |
 | --- | --- |
-| Identity | Current unchanged `SPRIDEN`; missing/multiple identities are flagged. PIDM retains unmatched accounts. |
+| Identity | Current unchanged `SPRIDEN`; one identity is selected deterministically. Unmatched accounts remain with blank identity fields; PIDM is internal only. |
 | Age at CO start | Whole years from `SPBPERS_BIRTH_DATE` to the hold start date, accounting for birthday. Missing/impossible dates stay blank. Full birth date is not exported. |
-| Sex and gender | Separate current `SPBPERS_SEX` and `SPBPERS_GNDR_CODE`; the latter is the institution's raw gender identity code, not inferred from sex. Verify local code meanings in GTVGNDR. |
-| Race and ethnicity | Current `GENERAL.GORPRAC`/`GORRACE` retain every distinct reported race in ordered lists. `SPBPERS_ETHN_CDE` is retained separately as a raw ethnicity code. No race or ethnicity is inferred from names. |
+| Recorded sex | Readable current `SPBPERS_SEX` description. The raw sex, gender identity and ethnicity code columns are omitted. |
+| Race | Current `GENERAL.GORPRAC`/`GORRACE` retain every distinct reported race description in an ordered list and a race count. Raw race codes are omitted. No race is inferred from names. |
 | Containing term | Inclusive `STVTERM_START_DATE` through `STVTERM_END_DATE`, ignoring time of day. A gap or overlap supplies no term and no program/registration/later term outcomes. No nearest-term fallback. |
-| Level, status, degree, major | Latest `SGBSTDN_TERM_CODE_EFF` on/before the containing term. Codes and descriptions expose UG/GR and declared primary/secondary-curriculum majors. `_MAJR_CODE_2` is the secondary curriculum's major, not a second major within the primary curriculum. |
-| First generation | Separate Admissions (`FGA`) and FAFSA (`FGF`) indicators. Each is `Yes` only when its code is in the CO term's effective attribute set; otherwise `Unknown`. Raw attribute codes/descriptions and their effective term remain visible. |
-| Credit load | `SFRSTCR_CREDIT_HR` summed only for statuses whose `STVRSTS_INCL_SECT_ENRL = Y`. Zero-credit counting courses remain counted. Unknown statuses or missing/negative counting credits make the credit total blank. No retained registration rows produce zero credits with an explicit review message. |
+| Level, status, degree, major | Latest `SGBSTDN_TERM_CODE_EFF` on/before the containing term. The readable level and primary/secondary-curriculum majors remain; raw level code and program effective term are omitted. `_MAJR_CODE_2` is the secondary curriculum's major, not a second major within the primary curriculum. |
+| First generation | Separate Admissions (`FGA`) and FAFSA (`FGF`) indicators. Each is `Yes` only when its code is in the CO term's effective attribute set; otherwise `Unknown`. Raw attribute codes and their effective term remain visible; descriptions are omitted. |
+| Credit load | `SFRSTCR_CREDIT_HR` summed only for statuses whose `STVRSTS_INCL_SECT_ENRL = Y`. Zero-credit counting courses remain counted. Unknown statuses or missing/negative counting credits make the credit total blank. No retained registration rows produce zero credits; the per-row review message is omitted. |
 | Prior GPA | Reconstructed institutional quality points divided by institutional GPA hours over terms ending strictly before CO began, at the CO-term student level. Zero GPA hours produce blank GPA. Transfer quality points never enter the institution GPA. |
 | Prior earned credits | Sum of institutional and transfer `SHRTGPA_HOURS_EARNED` at that same level, for terms ending before CO. Missing term dates or missing/negative earned credits make the reconstruction unknown. No history is not assumed zero. |
 | Class at CO start | UG: below 30 earned credits Freshman, 30–<60 Sophomore, 60–<90 Junior, 90+ Senior. GR is Graduate; other/unknown levels or missing credits are Unknown. This is a reconstruction, not Banner's official class-calculation function. |
-| Prior academic standing | Latest completed term's `SHRTTRM_ASTD_CODE_END_OF_TERM` and `STVASTD` description. Its term is shown; a missing standing code stays blank. SHRTTRM standing is keyed by student/term, not student level. |
+| Prior academic standing | Latest completed term's `SHRTTRM_ASTD_CODE_END_OF_TERM` and `STVASTD` description. Its source term is internal; a missing standing code stays blank. SHRTTRM standing is keyed by student/term, not student level. |
 | Later outcomes | The containing term's institutional GPA and end-of-term academic standing have explicit `Later Outcome` labels. These may have been established after the CO start date. |
 
-Current race, ethnicity, sex, gender and registration rows are **current records**,
+Current race, recorded sex and registration rows are **current records**,
 including when joined to an older CO term. Term-effective program and attribute
 rows may also have been corrected later. Prior GPA/credits are reconstructed
 from current term-history records; repeats, forgiveness, transfer posting dates,
@@ -63,7 +81,8 @@ pre-Banner totals and later corrections may prevent an exact historical GPA or
 classification. A transfer row with no dated term, including a `000000` term,
 requires review. No Oracle Banner functions are called in PostgreSQL Insights.
 
-The report labels these limits and retains source terms and review columns.
+The output omits several source-term and review columns; these limits
+still apply. Blank or Unknown values retain the existing missing-context rules.
 It is descriptive collections research, not a point-in-time ML training set.
 In particular, later outcomes and current demographic values must not be
 silently treated as information known before collections. A future prediction
@@ -102,7 +121,6 @@ can overlap and do not establish the code's presence at CO start.
 
 1. Run `validate_collections_profile_schema.sql` in the intended Insights
    database. Investigate every `MISSING` entry before running the main report.
-   In particular confirm `SPBPERS_GNDR_CODE` is replicated and available.
 2. `inspect_collections_profile_codes.sql` remains a discovery query for the
    attributes used by historical CO students and potential first-generation
    sources. Its distinct-student usage counts are not a snapshot at CO start
@@ -120,8 +138,11 @@ and run it without parameters. It returns a **Total** row and the four normal
 Admissions/FAFSA combinations, including zero-count combinations. No CWID,
 name, PIDM, individual hold date, or student-level attribute list is returned.
 
-The query evaluates an exact embedded copy of the shared report. It separately
-reads `SGRSATT` to find the greatest effective attribute term on/before each
+The query evaluates a generated copy of the shared report, adding internal
+`Banner PIDM` and `CO Hold Number` projections only for validation joins and
+distinct-student counts. These keys are absent from the public profile and the
+validator's final aggregate output; all other report SQL is copied unchanged.
+It separately reads `SGRSATT` to find the greatest effective attribute term on/before each
 reported CO term and uses independent existence checks for FGA/FGF. It compares
 those expected indicators and the expected attribute term to the report output.
 The checks can detect a wrong source mapping, Yes/Unknown default, invalid
@@ -170,8 +191,9 @@ variables. Save/publish that question through the normal owner process. The app
 runs the repository SQL directly; it does not require a saved question ID.
 The SQL's internal `Report Row Count` allows the existing app service to reject
 truncated results and is removed from the app workbook. It counts hold date
-pairs. CO dates preserve calendar dates through year 9999 in Excel. Other
-date fields may arrive as ISO date text depending on the Insights API.
+pairs. CO dates preserve calendar dates through year 9999 in Excel. The two CO
+term boundary dates are explicitly formatted as ISO date text.
+The app workbook retains those exact `YYYY-MM-DD` strings.
 
 Before operational use, compare distinct CO students/date pairs to SOAHOLD;
 compare program/major/level to SGASTDN, registration to SFAREGS, standing to

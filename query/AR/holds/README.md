@@ -3,13 +3,14 @@
 ## Collections demographic and academic profile
 
 `collections_student_profile.sql` is the shared Insights/app report for all
-historical CO hold date pairs, with an active flag and academic context from
+historical CO hold date pairs, with hold status and academic context from
 the term containing each CO start date. It includes demographics, term-effective
 program/major/level, credit load, prior GPA/standing and reconstructed class.
 From patch 0.25.2, Admissions (FGA) and FAFSA (FGF) have separate first-generation
 indicators: each is Yes when its code is in the CO term's effective attribute
-set and Unknown otherwise. Later outcomes and current source records are
-labeled. Run `validate_collections_profile_schema.sql` and
+set and Unknown otherwise. Later outcomes are labeled. Patch 0.25.4 removes
+redundant metadata/raw-code/review columns and displays the two CO term
+boundary dates as YYYY-MM-DD. Run `validate_collections_profile_schema.sql` and
 `inspect_collections_profile_codes.sql` before local acceptance. See
 [field definitions, first-generation indicators and acceptance checks](collections_student_profile_README.md).
 App 0.25.0 exposes it through the administrator-only Connections report picker.

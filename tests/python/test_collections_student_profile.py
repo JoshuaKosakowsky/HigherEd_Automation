@@ -39,6 +39,7 @@ def sqlite_sql(sql):
         "CAST(EXTRACT(YEAR FROM AGE(h.from_date, CAST(b.spbpers_birth_date AS date))) AS integer)",
         "age_years(h.from_date, b.spbpers_birth_date)",
     )
+    sql = re.sub(r"TO_CHAR\(([\w.]+), 'YYYY-MM-DD'\)", r"strftime('%Y-%m-%d', \1)", sql)
     sql = re.sub(r"CAST\(([\w.]+) AS date\)", r"date(\1)", sql)
     return re.sub(
         r"STRING_AGG\(([\w.]+), '; ' ORDER BY ([\w.]+)\)",
@@ -142,34 +143,43 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
         rows = self.rows()
         self.assertEqual(len(rows), 8)
         self.assertTrue(all(row["Report Row Count"] == 8 for row in rows))
-        by_id = {row["Banner PIDM"]: row for row in rows}
-        self.assertEqual([by_id[i]["Active CO Hold"] for i in range(1, 7)],
-                         ["No", "No", "Yes", "No", "Unknown", "Unknown"])
-        self.assertEqual(by_id[4]["CO Hold Status"], "Scheduled")
-        self.assertEqual(by_id[3]["Source Hold Rows"], 2)
-        self.assertEqual(by_id[3]["Student CO Hold Count"], 2)
-        self.assertIsNone(by_id[7]["CWID"])
-        self.assertEqual(by_id[7]["Identity Review"], "Review current identity")
+        by_id = {row["CWID"]: row for row in rows}
+        self.assertEqual([by_id[f"TEST-{i}"]["CO Hold Status"] for i in range(1, 7)],
+                         ["Ended", "Ended", "Active", "Scheduled", "Review dates", "Review dates"])
+        self.assertEqual(by_id["TEST-4"]["CO Hold Status"], "Scheduled")
+        self.assertEqual(by_id["TEST-3"]["Student CO Hold Count"], 2)
+        self.assertIsNone(by_id[None]["CWID"])
 
     def test_containing_term_boundaries_gaps_and_overlaps(self):
         for pidm, start in ((1, "2099-08-20"), (2, "2099-12-15"), (3, "2099-07-01")):
             self.student(pidm, start)
         rows = self.rows()
         self.assertEqual([r["CO Term"] for r in rows], ["209980", "209980", None])
-        self.assertEqual(rows[2]["Academic Context Review"], "No containing term")
         self.insert("saturn.stvterm", "209981", "Overlapping", "2099-08-01", "2099-12-31")
         rows = self.rows()
         self.assertTrue(all(r["CO Term"] is None for r in rows))
-        self.assertEqual(rows[0]["Containing Term Count"], 2)
         self.assertIsNone(rows[0]["CO Term Primary Major"])
         self.assertIsNone(rows[0]["CO Term Registered Credits"])
+
+    def test_term_dates_are_iso_dates_without_time_and_missing_terms_stay_null(self):
+        self.student()
+        self.db.execute("""UPDATE saturn.stvterm
+            SET stvterm_start_date = '2099-08-20 12:34:56',
+                stvterm_end_date = '2099-12-15 23:59:59'
+            WHERE stvterm_code = '209980'""")
+        row = self.rows()[0]
+        self.assertEqual(row["CO Term Start Date"], "2099-08-20")
+        self.assertEqual(row["CO Term End Date"], "2099-12-15")
+        self.db.execute("UPDATE saturn.sprhold SET sprhold_from_date = '2099-07-01'")
+        row = self.rows()[0]
+        self.assertIsNone(row["CO Term Start Date"])
+        self.assertIsNone(row["CO Term End Date"])
 
     def test_program_history_excludes_future_changes_and_keeps_old_hold_context(self):
         self.student()
         self.insert("saturn.sgbstdn", 1, "209980", "UG", "C", "AS", "BS", "MAJB", "MAJA")
         self.insert("saturn.sgbstdn", 1, "210010", "GR", "C", "AS", "MS", "MAJA", None)
         row = self.rows()[0]
-        self.assertEqual(row["Program Effective Term"], "209980")
         self.assertEqual(row["CO Term Primary Major"], "Synthetic Major B")
         self.assertEqual(row["CO Term Student Level"], "Undergraduate")
         self.insert("saturn.sprhold", 1, "CO", "2099-01-20", "2099-05-10")
@@ -186,8 +196,6 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
         row = self.rows()[0]
         self.assertEqual(row["Age at CO Start"], 19)
         self.assertEqual(row["Current Recorded Sex"], "Female")
-        self.assertEqual(row["Current Gender Identity Code"], "SYNTHETIC")
-        self.assertEqual(row["Current Race Codes"], "A; B")
         self.assertEqual(row["Current Races"], "Synthetic race A; Synthetic race B")
         self.assertEqual(row["Current Race Count"], 2)
         self.db.execute("UPDATE saturn.sprhold SET sprhold_from_date = '2099-09-11'")
@@ -266,7 +274,6 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
         self.assertAlmostEqual(row["Reconstructed Institution GPA Before CO"], 3.333)
         self.assertEqual(row["Reconstructed Earned Credits Before CO"], 60)
         self.assertEqual(row["Reconstructed Class at CO Start"], "Junior")
-        self.assertEqual(row["Prior Academic History Through Term"], "209910")
         self.assertEqual(row["Prior Academic Standing"], "Good standing")
         self.assertEqual(row["CO Term Institution GPA - Later Outcome"], 1)
         self.assertEqual(row["CO Term End Standing - Later Outcome"], "Probation")
@@ -297,7 +304,6 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
         self.gpa(term="000000", kind="T", quality=0, hours=0, earned=30)
         row = self.rows()[0]
         self.assertIsNone(row["Reconstructed Earned Credits Before CO"])
-        self.assertEqual(row["Prior History Review"], "Missing or invalid history - review")
 
     def test_registration_excludes_drops_and_preserves_zero_and_unknown(self):
         self.student()
@@ -318,7 +324,6 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
         self.db.execute("UPDATE saturn.sgbstdn SET sgbstdn_term_code_eff = '210010'")
         self.insert('saturn.sgrsatt', 1, '209980', 'FGA')
         row = self.rows()[0]
-        self.assertEqual(row["Academic Context Review"], "No program effective by CO term")
         self.assertIsNone(row["CO Term Student Level"])
         self.assertEqual(row['First Generation Admissions'], 'Yes')
         self.assertEqual(row['First Generation FAFSA'], 'Unknown')
@@ -328,7 +333,45 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
         cursor = self.db.execute(sqlite_sql(self.query.render_sql()))
         self.assertEqual(cursor.fetchall(), [])
         headings = [column[0] for column in cursor.description]
-        self.assertEqual(len(set(headings)), len(headings))
+        self.assertEqual(headings, [
+            'CWID',
+            'Last Name',
+            'First Name',
+            'Student CO Hold Count',
+            'CO From Date',
+            'CO To Date',
+            'CO Hold Status',
+            'Age at CO Start',
+            'Current Recorded Sex',
+            'Current Races',
+            'Current Race Count',
+            'CO Term',
+            'CO Term Start Date',
+            'CO Term End Date',
+            'CO Term Student Level',
+            'CO Term Student Type Code',
+            'CO Term Student Status Code',
+            'CO Term Primary Degree Code',
+            'CO Term Primary Major Code',
+            'CO Term Primary Major',
+            'CO Term Secondary Curriculum Major Code',
+            'CO Term Secondary Curriculum Major',
+            'First Generation Admissions',
+            'First Generation FAFSA',
+            'Attribute Effective Term',
+            'CO Term Attribute Codes',
+            'CO Term Registered Credits',
+            'CO Term Counting Courses',
+            'Reconstructed Institution GPA Before CO',
+            'Reconstructed Earned Credits Before CO',
+            'Reconstructed Class at CO Start',
+            'Prior Academic Standing Code',
+            'Prior Academic Standing',
+            'CO Term Institution GPA - Later Outcome',
+            'CO Term End Standing Code - Later Outcome',
+            'CO Term End Standing - Later Outcome',
+            'Report Row Count',
+        ])
         self.assertIn("CO Term", headings)
         self.assertIn("First Generation Admissions", headings)
         self.assertIn("First Generation FAFSA", headings)
@@ -394,10 +437,15 @@ class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
                         try:
                             headings = [cell.value for cell in book.active[1]]
                             self.assertNotIn("Report Row Count", headings)
+                            expected_headings = list(frame.columns[:-1])
+                            self.assertEqual(headings, expected_headings)
                             self.assertIn('First Generation Admissions', headings)
                             self.assertIn('First Generation FAFSA', headings)
                             if len(result_frame):
                                 self.assertEqual(book.active.cell(2, headings.index("CWID") + 1).value, "TEST-1")
+                                for column, expected in (("CO Term Start Date", "2099-08-20"),
+                                                         ("CO Term End Date", "2099-12-15")):
+                                    self.assertEqual(book.active.cell(2, headings.index(column) + 1).value, expected)
                                 self.assertEqual(book.active.cell(2, headings.index('First Generation Admissions') + 1).value,
                                                  'Yes')
                                 self.assertEqual(book.active.cell(2, headings.index('First Generation FAFSA') + 1).value,

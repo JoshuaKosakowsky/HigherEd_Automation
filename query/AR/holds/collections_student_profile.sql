@@ -168,45 +168,25 @@ prior_standing_candidates AS (
     WHERE h.term_match_count = 1
 )
 SELECT
-    p.report_date AS "Report Date",
-    h.pidm AS "Banner PIDM",
     i.spriden_id AS "CWID",
     i.spriden_last_name AS "Last Name",
     i.spriden_first_name AS "First Name",
-    CASE WHEN i.identity_count = 1 THEN 'OK' ELSE 'Review current identity' END AS "Identity Review",
-    h.co_hold_number AS "CO Hold Number",
     h.student_co_hold_count AS "Student CO Hold Count",
-    h.source_hold_rows AS "Source Hold Rows",
     h.from_date AS "CO From Date",
     h.to_date AS "CO To Date",
-    CASE WHEN h.from_date IS NULL OR h.to_date IS NULL OR h.to_date < h.from_date THEN 'Unknown'
-         WHEN h.from_date <= p.report_date AND h.to_date > p.report_date THEN 'Yes'
-         ELSE 'No' END AS "Active CO Hold",
     CASE WHEN h.from_date IS NULL OR h.to_date IS NULL OR h.to_date < h.from_date THEN 'Review dates'
          WHEN h.from_date > p.report_date THEN 'Scheduled'
          WHEN h.to_date <= p.report_date THEN 'Ended' ELSE 'Active' END AS "CO Hold Status",
     CASE WHEN b.spbpers_birth_date IS NOT NULL AND h.from_date >= CAST(b.spbpers_birth_date AS date)
          THEN CAST(EXTRACT(YEAR FROM AGE(h.from_date, CAST(b.spbpers_birth_date AS date))) AS integer)
     END AS "Age at CO Start",
-    b.spbpers_sex AS "Current Recorded Sex Code",
     CASE UPPER(TRIM(b.spbpers_sex)) WHEN 'M' THEN 'Male' WHEN 'F' THEN 'Female'
          WHEN 'N' THEN 'Not reported' ELSE b.spbpers_sex END AS "Current Recorded Sex",
-    b.spbpers_gndr_code AS "Current Gender Identity Code",
-    b.spbpers_ethn_cde AS "Current Ethnicity Code",
-    r.race_codes AS "Current Race Codes",
     r.race_descriptions AS "Current Races",
     COALESCE(r.race_count, 0) AS "Current Race Count",
     h.term_code AS "CO Term",
-    h.term_description AS "CO Term Description",
-    h.term_start_date AS "CO Term Start Date",
-    h.term_end_date AS "CO Term End Date",
-    h.term_match_count AS "Containing Term Count",
-    CASE WHEN h.from_date IS NULL THEN 'Missing CO start date'
-         WHEN h.term_match_count = 0 THEN 'No containing term'
-         WHEN h.term_match_count > 1 THEN 'Overlapping terms - review'
-         WHEN s.pidm IS NULL THEN 'No program effective by CO term' ELSE 'OK' END AS "Academic Context Review",
-    s.sgbstdn_term_code_eff AS "Program Effective Term",
-    s.sgbstdn_levl_code AS "CO Term Student Level Code",
+    TO_CHAR(h.term_start_date, 'YYYY-MM-DD') AS "CO Term Start Date",
+    TO_CHAR(h.term_end_date, 'YYYY-MM-DD') AS "CO Term End Date",
     l.stvlevl_desc AS "CO Term Student Level",
     s.sgbstdn_styp_code AS "CO Term Student Type Code",
     s.sgbstdn_stst_code AS "CO Term Student Status Code",
@@ -221,15 +201,9 @@ SELECT
          END AS "First Generation FAFSA",
     a.attribute_term AS "Attribute Effective Term",
     a.attribute_codes AS "CO Term Attribute Codes",
-    a.attribute_descriptions AS "CO Term Attributes",
     CASE WHEN h.term_code IS NOT NULL AND COALESCE(e.review_rows, 0) = 0
          THEN COALESCE(e.registered_credits, 0) END AS "CO Term Registered Credits",
     CASE WHEN h.term_code IS NOT NULL THEN COALESCE(e.counting_courses, 0) END AS "CO Term Counting Courses",
-    CASE WHEN h.term_code IS NULL THEN 'No unambiguous CO term'
-         WHEN e.pidm IS NULL THEN 'No retained registration rows'
-         WHEN e.review_rows > 0 THEN 'Unknown status or credits - review'
-         ELSE 'Current registration record; not a dated snapshot' END AS "Registration Review",
-    ph.through_term AS "Prior Academic History Through Term",
     CASE WHEN ph.gpa_review_rows = 0 AND ph.gpa_hours > 0
          THEN ROUND(1.0 * ph.quality_points / ph.gpa_hours, 3) END AS "Reconstructed Institution GPA Before CO",
     CASE WHEN ph.credit_review_rows = 0 THEN ph.earned_credits END AS "Reconstructed Earned Credits Before CO",
@@ -238,16 +212,11 @@ SELECT
          WHEN ph.earned_credits < 30 THEN 'Freshman'
          WHEN ph.earned_credits < 60 THEN 'Sophomore'
          WHEN ph.earned_credits < 90 THEN 'Junior' ELSE 'Senior' END AS "Reconstructed Class at CO Start",
-    CASE WHEN ph.pidm IS NULL THEN 'No prior level-specific term GPA history'
-         WHEN ph.gpa_review_rows > 0 OR ph.credit_review_rows > 0 THEN 'Missing or invalid history - review'
-         ELSE 'Term-history reconstruction; verify repeat and transfer treatment' END AS "Prior History Review",
-    ps.standing_term AS "Prior Academic Standing Term",
     ps.standing_code AS "Prior Academic Standing Code",
     ast.stvastd_desc AS "Prior Academic Standing",
     tg.shrtgpa_gpa AS "CO Term Institution GPA - Later Outcome",
     cs.shrttrm_astd_code_end_of_term AS "CO Term End Standing Code - Later Outcome",
     ast2.stvastd_desc AS "CO Term End Standing - Later Outcome",
-    'Current source records; not an immutable point-in-time snapshot' AS "Historical Data Limitation",
     COUNT(*) OVER () AS "Report Row Count"
 FROM hold_terms h
 CROSS JOIN params p

@@ -156,13 +156,24 @@ class CollectionsProfileValidationTests(CollectionsProfileSQLFixture):
         self.assertEqual(total["Mismatch Rows"], 0)
         self.assertEqual(total["Validation Status"], "OK")
 
+    def test_missing_public_identity_keeps_distinct_internal_students(self):
+        self.student(1)
+        self.student(2)
+        self.db.execute("DELETE FROM saturn.spriden")
+        total = self.validation_rows()[0]
+        self.assertEqual(total["CO Hold Rows"], 2)
+        self.assertEqual(total["Distinct Students"], 2)
+        self.assertEqual(total["Mismatch Rows"], 0)
+
     def test_embedded_sql_matches_the_authoritative_report(self):
         marker = "-- BEGIN COLLECTIONS PROFILE SQL\n"
         end = "\n-- END COLLECTIONS PROFILE SQL"
         self.assertEqual(self.validation_sql.count(marker), 1)
         self.assertEqual(self.validation_sql.count(end), 1)
         embedded = self.validation_sql.split(marker, 1)[1].split(end, 1)[0]
-        self.assertEqual(embedded, self.query.render_sql().strip().removesuffix(";"))
+        keys = '    h.pidm AS "Banner PIDM",\n    h.co_hold_number AS "CO Hold Number",\n'
+        self.assertEqual(embedded.count(keys), 1)
+        self.assertEqual(embedded.replace(keys, "", 1), self.query.render_sql().strip().removesuffix(";"))
 
 
 if __name__ == "__main__":

@@ -381,10 +381,12 @@ See [the report's rules and validation](../../query/AR/contact_information/refun
 
 In **0.25.0**, administrators can select **Holds — Collections demographic and
 academic profile**. It uses the same SQL that can be pasted into Insights and
-includes all historical CO hold date pairs, an active flag, age, current
-race/ethnicity/sex/gender codes, and academic context for the term containing
+includes all historical CO hold date pairs, hold status, age, current
+races/recorded sex, and academic context for the term containing
 each hold's start date. Majors/level, registered credits, prior GPA/standing and
-reconstructed class retain their source terms and review flags. From patch
+reconstructed class retain the existing calculation rules. Patch **0.25.4**
+removes redundant metadata, raw-code and review columns and formats the two
+CO term boundary dates as YYYY-MM-DD without times. From patch
 **0.25.2**, `First Generation Admissions` uses FGA and `First Generation FAFSA`
 uses FGF in the CO term's effective attribute set. Each returns Yes when present
 and Unknown otherwise; neither source determines the other. Update saved
