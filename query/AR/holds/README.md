@@ -14,6 +14,12 @@ labeled. Run `validate_collections_profile_schema.sql` and
 [field definitions, first-generation indicators and acceptance checks](collections_student_profile_README.md).
 App 0.25.0 exposes it through the administrator-only Connections report picker.
 
+From patch 0.25.3, `validate_collections_profile_indicators.sql` provides a
+standalone aggregate-only Insights check: a total plus the four FGA/FGF
+combinations, counts of indicator/effective-term mismatches, and counts of
+missing context. It returns no student identifiers. See the report guide for
+interpretation and refreshing the embedded report after source changes.
+
 ## W&F - Banner Recon (collections tracking)
 
 `collections_tracking.sql` supports analyst reconciliation of accounts formally

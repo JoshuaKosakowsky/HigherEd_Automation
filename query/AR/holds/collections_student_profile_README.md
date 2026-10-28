@@ -112,6 +112,57 @@ can overlap and do not establish the code's presence at CO start.
    term and indicators match Banner's term history. A later correction to a
    source record can still affect a rerun of historical data.
 
+### Aggregate FGA/FGF validation
+
+In patch **0.25.3**, paste the entire
+`validate_collections_profile_indicators.sql` into a new native Insights question
+and run it without parameters. It returns a **Total** row and the four normal
+Admissions/FAFSA combinations, including zero-count combinations. No CWID,
+name, PIDM, individual hold date, or student-level attribute list is returned.
+
+The query evaluates an exact embedded copy of the shared report. It separately
+reads `SGRSATT` to find the greatest effective attribute term on/before each
+reported CO term and uses independent existence checks for FGA/FGF. It compares
+those expected indicators and the expected attribute term to the report output.
+The checks can detect a wrong source mapping, Yes/Unknown default, invalid
+indicator value, or reported attribute effective term. This is a check of the
+embedded report SQL; it does not inspect another saved question or a prior
+spreadsheet export, and it does not independently validate the CO term's date
+mapping or prove the underlying Banner attributes are complete/correct.
+
+- `Admissions Mismatch Rows`, `FAFSA Mismatch Rows`, `Attribute Term Mismatch Rows`
+  and `Mismatch Rows` should all be **0** for the unchanged report. A nonzero
+  count sets `Validation Status = MISMATCH`. Unexpected values get an additional
+  combination row labeled `[INVALID]`, `[BLANK]`, or `[NULL]`. The query never
+  repeats unexpected source text, even if a wrong report projection places a
+  student identifier in an indicator field.
+- `Mismatch Rows` counts each affected report row once even if several checks
+  fail. Do not add the three mismatch columns to obtain an affected-row total.
+- `Rows Without CO Term` and `Rows With CO Term But No Attribute Set` expose
+  missing context. Correct Unknown values are valid and do not create a
+  mismatch. `OK` means these indicator/attribute-term checks agree, not that
+  missing context has been resolved. A zero-count combination is `NO ROWS`.
+- `CO Hold Rows` uses the report's hold-date-pair grain. `Distinct Students`
+  counts students within each combination. Students with different historical
+  holds can appear in more than one combination, so do not sum distinct-student
+  counts across combinations. Discovery-query "ever had this code" counts use
+  a different time basis and are not expected to equal these counts.
+
+The validator remains outside the app's report picker, like other diagnostic
+SQL files. Student-level lookups occur internally to evaluate the actual report;
+only the final aggregate summary is exposed.
+
+When the shared report changes, refresh the marked block rather than maintaining
+another report implementation:
+
+```powershell
+.\.venv\Scripts\python.exe query/AR/holds/refresh_collections_profile_validation.py --write
+```
+
+Run the same command without `--write` to check synchronization. Regression
+tests reject a stale embedded block and exercise deliberately corrupted report
+flags/effective terms to verify that the summary actually detects mismatches.
+
 ## Loading and acceptance checks
 
 Paste the **entire** main SQL into a native Insights question with no template

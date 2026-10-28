@@ -55,7 +55,7 @@ def age_years(end, birth):
     )
 
 
-class CollectionsStudentProfileTests(unittest.TestCase):
+class CollectionsProfileSQLFixture(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
@@ -123,6 +123,8 @@ class CollectionsStudentProfileTests(unittest.TestCase):
     def rows(self):
         return [dict(row) for row in self.db.execute(sqlite_sql(self.query.render_sql()))]
 
+
+class CollectionsStudentProfileTests(CollectionsProfileSQLFixture):
     def test_all_history_active_boundaries_duplicates_and_missing_identity(self):
         for pidm, start, end in (
             (1, "2098-09-01", "2099-10-01"),
