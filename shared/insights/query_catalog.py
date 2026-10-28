@@ -75,7 +75,8 @@ QUERIES: tuple[InsightsQuery, ...] = (
         "All historical CO holds with an active flag and academic context for the term "
         "containing each hold's start date. Includes age, current race/sex/gender codes, "
         "term-effective majors/level, credits, prior academic standing and reconstructed GPA/class. "
-        "First-generation mapping needs local verification; later term outcomes are labeled.",
+        "Separate Admissions (FGA) and FAFSA (FGF) first-generation indicators; "
+        "missing information stays Unknown. Later term outcomes are labeled.",
         administrator_only=True, result_count_column="Report Row Count",
     ),
     InsightsQuery(

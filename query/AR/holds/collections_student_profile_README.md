@@ -7,6 +7,10 @@ administrator restriction, explicit TEST/PROD selection, complete-result check
 and new-file Excel export apply. This is a new standalone report; the W&F
 reconciliation SQL and workbook contract are unchanged.
 
+Patch **0.25.2** replaces `First Generation` and `First Generation Source` with
+`First Generation Admissions` and `First Generation FAFSA`. Update saved
+Insights questions with the revised SQL to match the app's two separate indicators.
+
 ## Population and row meaning
 
 The owner selected **all historical CO holds with an active flag** and the
@@ -43,7 +47,7 @@ is made. The report uses the database's `CURRENT_DATE` for its report date.
 | Race and ethnicity | Current `GENERAL.GORPRAC`/`GORRACE` retain every distinct reported race in ordered lists. `SPBPERS_ETHN_CDE` is retained separately as a raw ethnicity code. No race or ethnicity is inferred from names. |
 | Containing term | Inclusive `STVTERM_START_DATE` through `STVTERM_END_DATE`, ignoring time of day. A gap or overlap supplies no term and no program/registration/later term outcomes. No nearest-term fallback. |
 | Level, status, degree, major | Latest `SGBSTDN_TERM_CODE_EFF` on/before the containing term. Codes and descriptions expose UG/GR and declared primary/secondary-curriculum majors. `_MAJR_CODE_2` is the secondary curriculum's major, not a second major within the primary curriculum. |
-| First generation | Verified local student-attribute mapping only; initially `Unknown` with `Local mapping pending`. Raw effective attribute codes/descriptions are included to support verification. |
+| First generation | Separate Admissions (`FGA`) and FAFSA (`FGF`) indicators. Each is `Yes` only when its code is in the CO term's effective attribute set; otherwise `Unknown`. Raw attribute codes/descriptions and their effective term remain visible. |
 | Credit load | `SFRSTCR_CREDIT_HR` summed only for statuses whose `STVRSTS_INCL_SECT_ENRL = Y`. Zero-credit counting courses remain counted. Unknown statuses or missing/negative counting credits make the credit total blank. No retained registration rows produce zero credits with an explicit review message. |
 | Prior GPA | Reconstructed institutional quality points divided by institutional GPA hours over terms ending strictly before CO began, at the CO-term student level. Zero GPA hours produce blank GPA. Transfer quality points never enter the institution GPA. |
 | Prior earned credits | Sum of institutional and transfer `SHRTGPA_HOURS_EARNED` at that same level, for terms ending before CO. Missing term dates or missing/negative earned credits make the reconstruction unknown. No history is not assumed zero. |
@@ -66,31 +70,47 @@ silently treated as information known before collections. A future prediction
 dataset also needs eligible students who did not enter collections and a defined
 observation date/outcome window; this CO-only report does not supply those.
 
-## First-generation verification
+## First-generation indicators
+
+The owner selected separate Admissions and FAFSA indicators after reviewing
+the Mines code-discovery export. There is no combined first-generation flag or
+source-precedence rule.
+
+| Output | Code in CO term's effective attribute set | Otherwise |
+| --- | --- | --- |
+| `First Generation Admissions` | `FGA` → `Yes` | `Unknown` |
+| `First Generation FAFSA` | `FGF` → `Yes` | `Unknown` |
+
+The existing attribute selection uses all attributes at the greatest
+`SGRSATT_TERM_CODE_EFF` on/before the containing CO term. It does not carry
+removed attributes forward forever or use future effective terms. Codes are
+trimmed and compared without case sensitivity. Missing dates, ambiguous terms,
+no retained attribute rows or an absent code all leave the applicable indicator
+`Unknown`. Missing program history does not suppress valid term attributes.
+
+Both codes may be present, producing two `Yes` values. One source's `Yes` does
+not establish the other source's status. Neither source returns `No`, because
+absence does not prove the student is not first generation. `BLSS` is a
+scholarship attribute and is not used for either indicator.
+
+Synthetic examples: FGA only → Yes/Unknown; FGF only → Unknown/Yes;
+both → Yes/Yes; neither, missing attributes or BLSS only → Unknown/Unknown.
+The order here is Admissions/FAFSA. Counts of students ever carrying FGA and FGF
+can overlap and do not establish the code's presence at CO start.
+
+## Local validation
 
 1. Run `validate_collections_profile_schema.sql` in the intended Insights
    database. Investigate every `MISSING` entry before running the main report.
    In particular confirm `SPBPERS_GNDR_CODE` is replicated and available.
-2. Run `inspect_collections_profile_codes.sql`. It lists attributes used by CO
-   students and description/code candidates for first generation, with distinct
-   student usage counts and no student-level output. A description match is
-   evidence to investigate, not a confirmed definition. Mines' actual source
-   could instead be an admissions/aid/custom field; absence of candidates does
-   not prove no first-generation students.
-3. Verify candidate meaning and positive/negative/unknown semantics with the
-   local data owner and representative authorized Banner records. Confirm
-   SGRSATT history uses effective attribute sets: this report takes all attributes
-   at the greatest effective term on/before the containing CO term, rather than
-   retaining a removed attribute forever.
-4. Once verified, replace the empty SELECT in `first_generation_codes` with
-   `VALUES ('verified_code', 'Yes')`, adding a verified `No` code only if one
-   exists. Apply the same reviewed source file to Insights and the application.
-   No matching code remains `Unknown`; contradictory mapped statuses remain
-   `Unknown` with `Conflicting mapped attributes`.
-
-The delivered mapping is intentionally empty because no Mines first-generation
-source/code has yet been confirmed. No institution's example FGEN code is
-preloaded as a Mines business rule.
+2. `inspect_collections_profile_codes.sql` remains a discovery query for the
+   attributes used by historical CO students and potential first-generation
+   sources. Its distinct-student usage counts are not a snapshot at CO start
+   and do not select or combine the report's two indicators.
+3. Compare representative authorized records for FGA-only, FGF-only, both,
+   neither, and changed effective sets. Confirm that the selected attribute
+   term and indicators match Banner's term history. A later correction to a
+   source record can still affect a rerun of historical data.
 
 ## Loading and acceptance checks
 
@@ -118,7 +138,9 @@ Synthetic acceptance examples in `test_collections_student_profile.py` cover:
   duplicate holds, repeated placements and missing identity retention.
 - Exact containing-term start/end boundaries, date gaps and overlaps; future
   program/attribute changes do not replace the CO-term context.
-- Birthdays, multiple races, unknown first generation and conflicting mappings.
+- Birthdays and multiple races; separate FGA/FGF indicators with either, both,
+  neither, duplicate/normalized codes and scholarship-only attributes; removed
+  or future attributes and missing/ambiguous terms remain visible as Unknown.
 - Weighted GPA (100 quality points / 30 hours = 3.333), distinct UG/GR history,
   transfer earned credits, null/zero/undated history and all class thresholds.
 - Dropped and zero-credit courses, unknown registration statuses and credits;

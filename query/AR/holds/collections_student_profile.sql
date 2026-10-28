@@ -13,12 +13,6 @@ WITH
 params AS (
     SELECT CURRENT_DATE AS report_date
 ),
-/* Populate ONLY after the owner verifies local SGRSATT codes and meaning.
-   Replace the empty SELECT with VALUES ('verified_code', 'Yes' or 'No').
-   No matching attribute means Unknown, never an inferred No. */
-first_generation_codes (attribute_code, first_generation_status) AS (
-    SELECT CAST(NULL AS varchar(8)), CAST(NULL AS varchar(3)) WHERE 1 = 0
-),
 hold_dates AS (
     SELECT h.sprhold_pidm AS pidm,
         CAST(h.sprhold_from_date AS date) AS from_date,
@@ -110,15 +104,17 @@ attribute_values AS (
         AND a.sgrsatt_term_code_eff = t.attribute_term
     LEFT JOIN saturn.stvatts d ON d.stvatts_code = a.sgrsatt_atts_code
 ),
+/* Owner-selected sources: FGA = Admissions, FGF = FAFSA. Keep independent
+   indicators within the CO term's effective attribute set. Absence is Unknown. */
 attributes AS (
     SELECT a.pidm, a.co_hold_number, MAX(a.attribute_term) AS attribute_term,
         STRING_AGG(a.attribute_code, '; ' ORDER BY a.attribute_code) AS attribute_codes,
         STRING_AGG(a.attribute_description, '; ' ORDER BY a.attribute_code) AS attribute_descriptions,
-        CASE WHEN COUNT(DISTINCT f.first_generation_status) = 1
-             THEN MIN(f.first_generation_status) ELSE 'Unknown' END AS first_generation,
-        COUNT(DISTINCT f.first_generation_status) AS first_generation_matches
+        MAX(CASE WHEN UPPER(TRIM(a.attribute_code)) = 'FGA'
+                 THEN 1 ELSE 0 END) AS first_generation_admissions,
+        MAX(CASE WHEN UPPER(TRIM(a.attribute_code)) = 'FGF'
+                 THEN 1 ELSE 0 END) AS first_generation_fafsa
     FROM attribute_values a
-    LEFT JOIN first_generation_codes f ON f.attribute_code = a.attribute_code
     GROUP BY a.pidm, a.co_hold_number
 ),
 registration AS (
@@ -219,11 +215,10 @@ SELECT
     m.stvmajr_desc AS "CO Term Primary Major",
     s.sgbstdn_majr_code_2 AS "CO Term Secondary Curriculum Major Code",
     m2.stvmajr_desc AS "CO Term Secondary Curriculum Major",
-    COALESCE(a.first_generation, 'Unknown') AS "First Generation",
-    CASE WHEN NOT EXISTS (SELECT 1 FROM first_generation_codes) THEN 'Local mapping pending'
-         WHEN a.first_generation_matches > 1 THEN 'Conflicting mapped attributes'
-         WHEN COALESCE(a.first_generation_matches, 0) = 0 THEN 'No verified attribute match'
-         ELSE 'Verified attribute mapping' END AS "First Generation Source",
+    CASE WHEN a.first_generation_admissions = 1 THEN 'Yes' ELSE 'Unknown'
+         END AS "First Generation Admissions",
+    CASE WHEN a.first_generation_fafsa = 1 THEN 'Yes' ELSE 'Unknown'
+         END AS "First Generation FAFSA",
     a.attribute_term AS "Attribute Effective Term",
     a.attribute_codes AS "CO Term Attribute Codes",
     a.attribute_descriptions AS "CO Term Attributes",

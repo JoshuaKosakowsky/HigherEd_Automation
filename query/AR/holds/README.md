@@ -6,10 +6,12 @@
 historical CO hold date pairs, with an active flag and academic context from
 the term containing each CO start date. It includes demographics, term-effective
 program/major/level, credit load, prior GPA/standing and reconstructed class.
-First-generation mapping needs local verification; later outcomes and current
-source records are labeled. Run `validate_collections_profile_schema.sql` and
+From patch 0.25.2, Admissions (FGA) and FAFSA (FGF) have separate first-generation
+indicators: each is Yes when its code is in the CO term's effective attribute
+set and Unknown otherwise. Later outcomes and current source records are
+labeled. Run `validate_collections_profile_schema.sql` and
 `inspect_collections_profile_codes.sql` before local acceptance. See
-[field definitions, first-generation discovery and acceptance checks](collections_student_profile_README.md).
+[field definitions, first-generation indicators and acceptance checks](collections_student_profile_README.md).
 App 0.25.0 exposes it through the administrator-only Connections report picker.
 
 ## W&F - Banner Recon (collections tracking)

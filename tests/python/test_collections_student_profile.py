@@ -19,9 +19,6 @@ from app.gui.services.insights import run_insights_connection
 from shared.insights.query_catalog import get_query
 
 
-EMPTY_FIRST_GEN = "SELECT CAST(NULL AS varchar(8)), CAST(NULL AS varchar(3)) WHERE 1 = 0"
-
-
 class OrderedStringAggregate:
     def __init__(self):
         self.values = []
@@ -105,8 +102,9 @@ class CollectionsStudentProfileTests(unittest.TestCase):
             INSERT INTO saturn.stvmajr VALUES ('MAJA', 'Synthetic Major A'), ('MAJB', 'Synthetic Major B');
             INSERT INTO saturn.stvrsts VALUES ('RE', 'Y'), ('DD', 'N'), ('ZZ', NULL);
             INSERT INTO saturn.stvastd VALUES ('GOOD', 'Good standing'), ('PROB', 'Probation');
-            INSERT INTO saturn.stvatts VALUES ('TESTFG', 'Synthetic First Generation'),
-                ('TESTNG', 'Synthetic Not First Generation'), ('OTHER', 'Synthetic Other Attribute');
+            INSERT INTO saturn.stvatts VALUES ('FGA', 'Synthetic First Generation Admissions'),
+                ('FGF', 'Synthetic First Generation FAFSA'),
+                ('BLSS', 'Synthetic 1st Gen Scholarship'), ('OTHER', 'Synthetic Other Attribute');
         """)
         self.query = get_query("collections_student_profile")
 
@@ -122,11 +120,8 @@ class CollectionsStudentProfileTests(unittest.TestCase):
     def gpa(self, pidm=1, term="209910", level="UG", kind="I", quality=45, hours=15, earned=15, gpa=3):
         self.insert("saturn.shrtgpa", pidm, term, level, kind, gpa, quality, hours, earned)
 
-    def rows(self, mapping=None):
-        sql = self.query.render_sql()
-        if mapping is not None:
-            sql = sql.replace(EMPTY_FIRST_GEN, mapping)
-        return [dict(row) for row in self.db.execute(sqlite_sql(sql))]
+    def rows(self):
+        return [dict(row) for row in self.db.execute(sqlite_sql(self.query.render_sql()))]
 
     def test_all_history_active_boundaries_duplicates_and_missing_identity(self):
         for pidm, start, end in (
@@ -198,23 +193,63 @@ class CollectionsStudentProfileTests(unittest.TestCase):
         self.db.execute("UPDATE saturn.spbpers SET spbpers_birth_date = '2100-01-01'")
         self.assertIsNone(self.rows()[0]["Age at CO Start"])
 
-    def test_first_gen_unknown_until_verified_and_latest_effective_attribute_set(self):
+    def test_first_gen_sources_are_independent_and_missing_is_unknown(self):
+        cases = (
+            (1, (), 'Unknown', 'Unknown'),
+            (2, ('FGA', 'FGA'), 'Yes', 'Unknown'),
+            (3, ('FGF',), 'Unknown', 'Yes'),
+            (4, ('FGA', 'FGF'), 'Yes', 'Yes'),
+            (5, ('BLSS',), 'Unknown', 'Unknown'),
+            (6, (' fga ', 'fgf'), 'Yes', 'Yes'),
+        )
+        for pidm, codes, _, _ in cases:
+            self.student(pidm)
+            for code in codes:
+                self.insert('saturn.sgrsatt', pidm, '209980', code)
+        rows = self.rows()
+        self.assertEqual(len(rows), len(cases))
+        for row, (pidm, _, admissions, fafsa) in zip(rows, cases):
+            with self.subTest(pidm=pidm):
+                self.assertEqual(row['First Generation Admissions'], admissions)
+                self.assertEqual(row['First Generation FAFSA'], fafsa)
+                self.assertEqual(row['Report Row Count'], len(cases))
+
+    def test_first_gen_uses_latest_effective_attribute_set_for_each_hold(self):
         self.student()
-        self.insert("saturn.sgrsatt", 1, "209810", "TESTFG")
+        self.insert("saturn.sprhold", 1, "CO", "2099-02-01", "2099-05-10")
+        self.insert("saturn.sgrsatt", 1, "209810", "FGA")
+        self.insert("saturn.sgrsatt", 1, "209910", "FGF")
         self.insert("saturn.sgrsatt", 1, "209980", "OTHER")
-        self.insert("saturn.sgrsatt", 1, "210010", "TESTFG")
-        row = self.rows()[0]
-        self.assertEqual(row["First Generation"], "Unknown")
-        self.assertEqual(row["First Generation Source"], "Local mapping pending")
-        self.assertEqual(row["CO Term Attribute Codes"], "OTHER")
-        mapping = "VALUES ('TESTFG', 'Yes'), ('TESTNG', 'No')"
-        self.assertEqual(self.rows(mapping)[0]["First Generation"], "Unknown")
-        self.insert("saturn.sgrsatt", 1, "209980", "TESTFG")
-        self.assertEqual(self.rows(mapping)[0]["First Generation"], "Yes")
-        self.insert("saturn.sgrsatt", 1, "209980", "TESTNG")
-        row = self.rows(mapping)[0]
-        self.assertEqual(row["First Generation"], "Unknown")
-        self.assertEqual(row["First Generation Source"], "Conflicting mapped attributes")
+        self.insert("saturn.sgrsatt", 1, "210010", "FGA")
+        self.insert("saturn.sgrsatt", 1, "210010", "FGF")
+        spring, fall = self.rows()
+        self.assertEqual(spring['Attribute Effective Term'], '209910')
+        self.assertEqual(spring['First Generation Admissions'], 'Unknown')
+        self.assertEqual(spring['First Generation FAFSA'], 'Yes')
+        self.assertEqual(fall['Attribute Effective Term'], '209980')
+        self.assertEqual(fall['CO Term Attribute Codes'], 'OTHER')
+        self.assertEqual(fall['First Generation Admissions'], 'Unknown')
+        self.assertEqual(fall['First Generation FAFSA'], 'Unknown')
+
+    def test_first_gen_future_only_or_ambiguous_term_is_unknown(self):
+        self.student(1)
+        self.insert('saturn.sgrsatt', 1, '210010', 'FGA')
+        self.insert('saturn.sgrsatt', 1, '210010', 'FGF')
+        self.student(2, start='2099-07-01')  # Between terms.
+        self.student(3, start=None)
+        for pidm in (2, 3):
+            self.insert('saturn.sgrsatt', pidm, '209810', 'FGA')
+            self.insert('saturn.sgrsatt', pidm, '209810', 'FGF')
+        for row in self.rows():
+            self.assertEqual(row['First Generation Admissions'], 'Unknown')
+            self.assertEqual(row['First Generation FAFSA'], 'Unknown')
+        self.insert('saturn.stvterm', '209981', 'Overlapping', '2099-08-01', '2099-12-31')
+        self.student(4)
+        self.insert('saturn.sgrsatt', 4, '209810', 'FGA')
+        self.insert('saturn.sgrsatt', 4, '209810', 'FGF')
+        for row in self.rows():
+            self.assertEqual(row['First Generation Admissions'], 'Unknown')
+            self.assertEqual(row['First Generation FAFSA'], 'Unknown')
 
     def test_weighted_prior_gpa_level_and_transfer_separation_and_later_outcomes(self):
         self.student()
@@ -279,9 +314,12 @@ class CollectionsStudentProfileTests(unittest.TestCase):
     def test_missing_program_does_not_use_future_program_or_drop_hold(self):
         self.student()
         self.db.execute("UPDATE saturn.sgbstdn SET sgbstdn_term_code_eff = '210010'")
+        self.insert('saturn.sgrsatt', 1, '209980', 'FGA')
         row = self.rows()[0]
         self.assertEqual(row["Academic Context Review"], "No program effective by CO term")
         self.assertIsNone(row["CO Term Student Level"])
+        self.assertEqual(row['First Generation Admissions'], 'Yes')
+        self.assertEqual(row['First Generation FAFSA'], 'Unknown')
         self.assertEqual(row["Report Row Count"], 1)
 
     def test_empty_result_retains_headers_and_one_authoritative_catalog_source(self):
@@ -290,7 +328,10 @@ class CollectionsStudentProfileTests(unittest.TestCase):
         headings = [column[0] for column in cursor.description]
         self.assertEqual(len(set(headings)), len(headings))
         self.assertIn("CO Term", headings)
-        self.assertIn("First Generation Source", headings)
+        self.assertIn("First Generation Admissions", headings)
+        self.assertIn("First Generation FAFSA", headings)
+        self.assertNotIn("First Generation", headings)
+        self.assertNotIn("First Generation Source", headings)
         self.assertEqual(headings[-1], "Report Row Count")
         self.assertTrue(self.query.administrator_only)
         self.assertIsNone(self.query.term_variable)
@@ -305,15 +346,16 @@ class CollectionsStudentProfileTests(unittest.TestCase):
                 for column in self.db.execute(f"PRAGMA {database}.table_info({table})"):
                     self.assertIn((database.upper(), table.upper(), column[1][len(table) + 1:].upper()), expected)
         self.student()
-        self.insert("saturn.sgrsatt", 1, "209980", "TESTFG")
+        self.insert("saturn.sgrsatt", 1, "209980", "FGA")
         discovery = self.query.sql_path.with_name("inspect_collections_profile_codes.sql").read_text(encoding="utf-8")
         rows = [dict(row) for row in self.db.execute(discovery)]
-        candidate = next(row for row in rows if row["Attribute Code"] == "TESTFG")
+        candidate = next(row for row in rows if row["Attribute Code"] == "FGA")
         self.assertEqual(candidate["Historical CO Students Ever With Attribute"], 1)
         self.assertIn("owner must verify", candidate["Mapping Review"])
 
     def test_app_export_access_complete_results_dates_and_existing_file(self):
         self.student()
+        self.insert('saturn.sgrsatt', 1, '209980', 'FGA')
         cursor = self.db.execute(sqlite_sql(self.query.render_sql()))
         frame = pd.DataFrame.from_records(cursor.fetchall(), columns=[c[0] for c in cursor.description])
         client = MagicMock()
@@ -350,8 +392,14 @@ class CollectionsStudentProfileTests(unittest.TestCase):
                         try:
                             headings = [cell.value for cell in book.active[1]]
                             self.assertNotIn("Report Row Count", headings)
+                            self.assertIn('First Generation Admissions', headings)
+                            self.assertIn('First Generation FAFSA', headings)
                             if len(result_frame):
                                 self.assertEqual(book.active.cell(2, headings.index("CWID") + 1).value, "TEST-1")
+                                self.assertEqual(book.active.cell(2, headings.index('First Generation Admissions') + 1).value,
+                                                 'Yes')
+                                self.assertEqual(book.active.cell(2, headings.index('First Generation FAFSA') + 1).value,
+                                                 'Unknown')
                                 self.assertEqual(book.active.cell(2, headings.index("CO To Date") + 1).value,
                                                  datetime(9999, 12, 31))
                         finally:

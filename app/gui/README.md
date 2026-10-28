@@ -384,11 +384,14 @@ academic profile**. It uses the same SQL that can be pasted into Insights and
 includes all historical CO hold date pairs, an active flag, age, current
 race/ethnicity/sex/gender codes, and academic context for the term containing
 each hold's start date. Majors/level, registered credits, prior GPA/standing and
-reconstructed class retain their source terms and review flags. First-generation
-status stays Unknown until a local mapping is verified. Later term outcomes are
-labeled separately. No parameters are needed; the existing TEST/PROD,
+reconstructed class retain their source terms and review flags. From patch
+**0.25.2**, `First Generation Admissions` uses FGA and `First Generation FAFSA`
+uses FGF in the CO term's effective attribute set. Each returns Yes when present
+and Unknown otherwise; neither source determines the other. Update saved
+Insights questions with the revised SQL to use the same two columns. Later term
+outcomes are labeled separately. No parameters are needed; the existing TEST/PROD,
 administrator, completeness and new-file export checks apply. See
-[profile fields and first-generation verification](../../query/AR/holds/collections_student_profile_README.md).
+[profile fields and first-generation indicators](../../query/AR/holds/collections_student_profile_README.md).
 
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
