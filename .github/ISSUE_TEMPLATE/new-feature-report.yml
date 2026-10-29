@@ -1,0 +1,138 @@
+name: New feature or report
+description: Plan a new query, report, feature, or workflow with clear inputs and expected results.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for anything from a standalone SQL query to a full workflow.
+        Every field is optional. Fill in what you know, skip anything that does
+        not apply, and list undecided details under Open questions.
+
+        Use made-up examples and sanitized screenshots. Leave out personal data,
+        credentials, and other sensitive information.
+
+  - type: dropdown
+    id: deliverable
+    attributes:
+      label: What would you like to add?
+      description: Choose the closest fit; the details can be worked out in the issue.
+      options:
+        - Standalone SQL query
+        - Report or file output
+        - Feature in an existing tool
+        - Full workflow
+        - Not sure yet
+    validations:
+      required: false
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose and intended users
+      description: What need should this address, who will use it, and what will they do with the result?
+      placeholder: |
+        Need or goal:
+        Intended users:
+        Decision or task this will support:
+    validations:
+      required: false
+
+  - type: textarea
+    id: inputs
+    attributes:
+      label: Inputs and sources
+      description: Identify source systems, files, tables, or existing reports where known. Describe any inputs the user should provide.
+      placeholder: |
+        Sources to use:
+        User selections or parameters:
+        Source details still to confirm:
+    validations:
+      required: false
+
+  - type: textarea
+    id: rules
+    attributes:
+      label: Business rules and selection criteria
+      description: Describe what to include, exclude, or calculate. Mark proposed rules and assumptions that still need confirmation.
+      placeholder: |
+        Include:
+        Exclude:
+        Date boundaries, calculations, or other rules:
+        Handling of duplicates, missing information, or exceptions:
+    validations:
+      required: false
+
+  - type: textarea
+    id: outputs
+    attributes:
+      label: Expected results and output
+      description: Describe what should be returned, displayed, or created. For tabular results, explain what one row represents.
+      placeholder: |
+        Expected result:
+        What one row or item represents:
+        Fields, labels, and order:
+        Format, sorting, totals, filename, or destination if relevant:
+    validations:
+      required: false
+
+  - type: textarea
+    id: usage
+    attributes:
+      label: How it will be used
+      description: Describe where and how someone will run or access it. For a workflow, include manual steps or external-system actions where relevant.
+      placeholder: |
+        Where it should be available:
+        When or how often it will be used:
+        Steps or actions involved:
+        Review, test mode, or manual fallback needs:
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and related work
+      description: Identify what belongs in this request, what should stay unchanged, and any existing query, report, or tool that may help.
+      placeholder: |
+        In scope:
+        Out of scope or behavior to preserve:
+        Related reports, tools, or documentation:
+    validations:
+      required: false
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples and expected results
+      description: Use made-up inputs to show the intended result. Add a missing-data, no-results, or exception case if helpful.
+      placeholder: |
+        Starting situation or input:
+        Expected result:
+        Special case and expected handling:
+    validations:
+      required: false
+
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions and references
+      description: List anything needing clarification and link supporting documentation or related issues. Distinguish agreed decisions from proposals.
+      placeholder: |
+        Agreed decisions and references:
+        Questions still to resolve:
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance-checks
+    attributes:
+      label: Acceptance checks
+      description: These track completion after the issue is created; they are not prerequisites for submitting it. Edit or remove them as needed.
+      value: |
+        - [ ] Scope, business rules, and expected results are agreed.
+        - [ ] Representative examples and relevant exception cases produce the expected results.
+        - [ ] Relevant checks pass; anything unverified is recorded.
+        - [ ] Documentation and any needed usage instructions are updated.
+        - [ ] Results or workflow behavior are reviewed before closure.
+    validations:
+      required: false
