@@ -1,0 +1,3 @@
+# Keep repository text consistent across Windows and macOS. Git still detects
+# binary files automatically; generated file formats are controlled by exporters.
+* text=auto eol=lf

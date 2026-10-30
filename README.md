@@ -308,3 +308,10 @@ it identifies the stage that failed without requiring another production run.
 
 The desktop application writes its technical log under `logs/gui`. Use **Open
 Log Folder** on a workflow page to locate it without opening PowerShell.
+
+## Repository line endings
+
+The root `.gitattributes` keeps repository text files in LF format on Windows
+and macOS, overriding machine-specific Git newline conversion. Keep source
+files as LF when editing. Git automatically detects binary files. Generated
+operational files continue to use the newline formats defined by their exporters.
