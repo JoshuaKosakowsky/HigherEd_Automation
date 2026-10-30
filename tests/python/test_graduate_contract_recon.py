@@ -137,6 +137,61 @@ class GraduateContractReconTests(unittest.TestCase):
         self.assertEqual([row[12] for row in result.documents], ["Missing Banner", "Missing Workday"])
         self.assertTrue(dict(result.verification)["Conclusion"].startswith("OPEN"))
 
+    def test_cwid_output_groups_students_with_alternating_fill_across_years_and_periods(self):
+        self.params = BannerActivityParameters.from_inputs("2025-07-01", "2027-04-30", "TPDT")
+        banner_rows = [
+            bn_row(20, day="2026-07-01", account="10000001"),
+            bn_row(0, day="2026-08-01", account="10000001"),
+            bn_row(100, day="2026-07-01", account="10000002"),
+            bn_row(500, day="2026-08-01", account="10000003"),
+            bn_row(0, day="2026-10-01", account="10000003"),
+            bn_row(9, day="2025-07-01", account="10000001"),
+            bn_row(11, day="2027-04-01", account="10000001"),
+        ]
+        workday_rows = [wd_row(0, amount, day=day, kind="Manual", cwid=cwid)
+                       for amount, day, cwid in [
+                           (15, "2026-07-01", "10000001"),
+                           (5, "2026-08-01", "10000001"),
+                           (100, "2026-07-01", "10000002"),
+                           (450, "2026-08-01", "10000003"),
+                           (50, "2026-10-01", "10000003"),
+                           (12, "2026-09-01", "10000002"),
+                       ]]
+        result = self.build(workday_rows, banner_rows)
+        original_students = [list(row) for row in result.students]
+        expected = [
+            ("FY2026", "P01", "10000001", 9, 0, 9),
+            ("FY2027", "P01", "10000001", 20, -15, 5),
+            ("FY2027", "P02", "10000001", 0, -5, -5),
+            ("FY2027", "P10", "10000001", 11, 0, 11),
+            ("FY2027", "P01", "10000002", 100, -100, 0),
+            ("FY2027", "P03", "10000002", 0, -12, -12),
+            ("FY2027", "P02", "10000003", 500, -450, 50),
+            ("FY2027", "P04", "10000003", 0, -50, -50),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                cwid = book["1305 CWID Recon"]
+                self.assertEqual([row[:6] for row in cwid.iter_rows(min_row=2, values_only=True)], expected)
+                self.assertEqual(cwid.auto_filter.ref, "A1:L9")
+                self.assertEqual(cwid.freeze_panes, "D2")
+                for row in cwid.iter_rows(min_row=2):
+                    for cell in row:
+                        if row[2].value == "10000002":
+                            self.assertEqual(cell.fill.patternType, "solid")
+                            self.assertEqual(cell.fill.fgColor.rgb, "FFEFEFEF")
+                        else:
+                            self.assertIsNone(cell.fill.patternType)
+                self.assertEqual([cell.value for cell in cwid[7]][-2:], ["Review", "Review"])
+                for row in cwid.iter_rows(min_row=2, min_col=8, max_col=10):
+                    self.assertTrue(all(cell.number_format == "@" for cell in row))
+            finally:
+                book.close()
+        self.assertEqual(result.students, original_students)
+
     def test_signed_review_sheets_keep_amounts_notes_and_requested_layout(self):
         result = self.build(
             [wd_row(60), wd_row(5, credit=2, memo="10000001 Manual", kind="Manual")],
@@ -279,13 +334,13 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertEqual(cwid["K2"].value, "1631e; 5893e; No Ledger Applicable; Review")
                 self.assertEqual(cwid["L2"].value, "6152; 6153; 7503; No Spend Applicable; Review")
                 # A Workday-only student's memo must not invent Banner coding.
-                self.assertEqual(cwid["C3"].value, "10000002")
-                self.assertEqual(cwid["K3"].value, "Review")
-                self.assertEqual(cwid["L3"].value, "Review")
+                self.assertEqual(cwid["C4"].value, "10000002")
+                self.assertEqual(cwid["K4"].value, "Review")
+                self.assertEqual(cwid["L4"].value, "Review")
                 self.assertEqual(cwid["D2"].value, 240)
-                self.assertEqual(cwid["B4"].value, "P04")
-                self.assertEqual(cwid["K4"].value, "1631e")
-                self.assertEqual(cwid["L4"].value, "6154")
+                self.assertEqual(cwid["B3"].value, "P04")
+                self.assertEqual(cwid["K3"].value, "1631e")
+                self.assertEqual(cwid["L3"].value, "6154")
                 self.assertEqual(book["Banner Data"].cell(2, 4).value, "Synthetic RA")
             finally:
                 book.close()

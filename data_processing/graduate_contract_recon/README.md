@@ -102,6 +102,17 @@ Combined omits Status, Source Row, Included in Activity, Quarter and Activity
 Debit/Credit. Use Period Totals for source comparisons: Combined is a filtered
 review view and displays both summaries and detail.
 
+From patch **0.26.1**, [issue #22](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/22)
+organizes **1305 CWID Recon** by CWID ascending, then fiscal year and period
+ascending within each student. Every student/fiscal-period row remains separate;
+amounts, notes, coding and worktags stay attached to that row. Student groups
+alternate between no fill and the same light grey (`FFEFEFEF`) as Combined,
+starting with no fill. All periods and fiscal years for one CWID share the same
+fill across the entire row. Other workbook tabs retain their existing output.
+For example, CWID `10000001` in P01/P02 appears together without fill, followed
+by CWID `10000002` in light grey and CWID `10000003` in P02/P04 without fill.
+The periods are not collapsed or netted across rows.
+
 | Sheet | Use |
 | --- | --- |
 | 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' Debit/Credit remain visible for comparison, including the TPS00080 correction; Period Totals keeps each source separate. |

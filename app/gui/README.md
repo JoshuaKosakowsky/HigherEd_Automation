@@ -314,6 +314,9 @@ From patch 0.25.1, Banner Data omits Source Row, Aid Year and Selection Status,
 and displays valid Feed Dates as yyyy-mm-dd without a time. All source rows remain.
 Document/CWID/period views use signed Debit minus Credit amounts. CWID Net Period
 Activity adds Banner and non-SIS Workday, so opposite signs wash to zero.
+From patch 0.26.1, CWID Recon sorts by CWID ascending, then fiscal year and period.
+Student groups alternate between no fill and Combined's light grey across all
+their period rows. Amounts remain separate for each student/fiscal period.
 Document Difference is Banner minus Workday. Period Totals compares Banner against all
 Workday (SIS plus Other) and keeps a blank **Notes** column for staff comments.
 See the [1305 technical guide](../../data_processing/graduate_contract_recon/README.md)

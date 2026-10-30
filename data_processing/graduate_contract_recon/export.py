@@ -122,7 +122,18 @@ def export_reconciliation(
                 row[10], row[14],
                 *[tags.get(kind, "") for kind in ("Project", "Grant", "Operating Account")],
                 row[15], row[16]])
-        sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS, students)
+        # Keep each student's periods together without combining their amounts.
+        students.sort(key=lambda row: (row[2], row[0], row[1]))
+        student_sheet = sheet("1305 CWID Recon", CWID_OUTPUT_HEADERS, students)
+        previous_cwid = None
+        shaded = True
+        for number, row in enumerate(students, 2):
+            if row[2] != previous_cwid:
+                shaded = not shaded
+                previous_cwid = row[2]
+            if shaded:
+                for cell in student_sheet[number]:
+                    cell.fill = grey
         for column in ("H", "I", "J"):
             for cell in book["1305 CWID Recon"][column][1:]:
                 cell.number_format = "@"
