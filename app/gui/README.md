@@ -395,6 +395,16 @@ outcomes are labeled separately. No parameters are needed; the existing TEST/PRO
 administrator, completeness and new-file export checks apply. See
 [profile fields and first-generation indicators](../../query/AR/holds/collections_student_profile_README.md).
 
+In **0.26.0**, administrators can choose **Holds — Term balances > 0 and no AU hold**.
+No term input is needed: it reports the current and two previous terms, with
+one row per student/positive term and no current AU (end date after today).
+The report retains each term's amount, repeats the all-term account balance,
+and marks cross-term credits for review with blank fee-inclusive projections.
+Other calculable rows show Amount × 1.015. PP accounts remain included and
+marked when active. Unknown data stays visible for review. Existing TEST/PROD,
+administrator, complete-result and non-overwrite export controls apply. See
+[rules and acceptance examples](../../query/AR/holds/term_balances_no_au_README.md).
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

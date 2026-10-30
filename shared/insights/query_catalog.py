@@ -70,6 +70,15 @@ class InsightsQuery:
 
 QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
+        "term_balances_no_au", "Holds", "Term balances > 0 and no AU hold",
+        "AR/holds/term_balances_no_au.sql",
+        "Current and two preceding terms; one row per student/term without an AU hold "
+        "ending after today. Term charges minus payments and all-term account balance. "
+        "Cross-term credits require review and leave the 1.5% late-fee projection blank; "
+        "PP accounts remain included. Unknown financial data stays visible for review.",
+        administrator_only=True, result_count_column="Report Row Count",
+    ),
+    InsightsQuery(
         "collections_student_profile", "Holds", "Collections demographic and academic profile",
         "AR/holds/collections_student_profile.sql",
         "All historical CO holds with status and academic context for the term "

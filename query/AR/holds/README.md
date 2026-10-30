@@ -1,5 +1,16 @@
 # Student account holds and delinquency reports
 
+## Term balances > 0 and no AU hold
+
+From **0.26.0**, `term_balances_no_au.sql` reports the current and two previous
+terms, one row per student/positive term, excluding AU holds ending after today.
+It retains term charges minus payments, shows the all-term account balance,
+and flags cross-term credits without allocating them. Review accounts have
+blank 1.5% fee-inclusive projections. PP accounts remain included; unknown
+financial data remains visible as review exceptions. The app uses the existing
+administrator Connections picker and complete-result workbook export.
+See [rules, synthetic examples and first-run checks](term_balances_no_au_README.md).
+
 ## Collections demographic and academic profile
 
 `collections_student_profile.sql` is the shared Insights/app report for all
