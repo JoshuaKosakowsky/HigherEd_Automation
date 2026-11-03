@@ -18,6 +18,7 @@ import pandas as pd
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
 from data_processing.refunds.export import (
     WORKBOOK_HEADERS, WORKBOOK_OMITTED_COLUMNS, WORKBOOK_COLUMNS,
+    WORKBOOK_PARENT_ONLY_COLUMNS,
 )
 from data_processing.refunds.extract import ExtractSettings, render_extract_sql
 from data_processing.refunds.pipeline import run_refund_download_pipeline
@@ -813,7 +814,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             for name, sheet in sheets.items():
                 expected_columns = (
                     [WORKBOOK_HEADERS.get(column, column) for column in WORKBOOK_COLUMNS
-                     if column not in WORKBOOK_OMITTED_COLUMNS]
+                     if column not in WORKBOOK_OMITTED_COLUMNS
+                     and (name == "Refund to Parent" or column not in WORKBOOK_PARENT_ONLY_COLUMNS)]
                 )
                 self.assertEqual(sheet.columns.tolist(), expected_columns)
             sheets = {name: sheet.rename(columns={

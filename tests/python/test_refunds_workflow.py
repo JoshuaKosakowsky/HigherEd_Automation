@@ -1291,12 +1291,22 @@ class RefundExtractTests(unittest.TestCase):
                     "full_account_balance": "Current_Total_Balance",
                     "total_refund_amount": "Total_Owed_to_Student",
                     "proposed_student_delivery": "Proposed_DetailCode&Amt",
+                    "raw_delinquency_code": "Active RH",
+                    "active_ed_ind": "Active ED",
+                    "ed_activity_date": "ED Start",
+                    "plus_to_student_status": "PPL to Student",
                 }
                 omitted = {
                     "original_payment_row_count", "deceased_ind", "deceased_date",
                     "confidential_ind", "ambiguous_source_pool_count",
                     "last_ar_activity_date", "account_control_activity_date",
+                    "refund_hold_ind", "fdpl_aidy_code",
                 }
+                if sheet.title != "Refund to Parent":
+                    omitted.update({
+                        "student_refund_amount", "proposed_parent_delivery", "parent_refund_amount",
+                        "plus_to_student_status",
+                    })
                 self.assertEqual(headers, [renamed.get(h, h) for h in WORKBOOK_COLUMNS
                                            if h not in omitted])
                 self.assertFalse(sheet.tables)
@@ -1311,6 +1321,7 @@ class RefundExtractTests(unittest.TestCase):
                        total_refund_amount=Decimal(str(student)) + Decimal(str(parent)),
                        proposed_student_delivery=delivery,
                        proposed_parent_delivery="RFDP" if parent else "NONE",
+                       plus_to_student_status="N" if parent else "NOT_APPLICABLE",
                        third_party_review_required_ind="N", review_status="READY_FOR_STAFF_REVIEW",
                        last_ar_activity_date=datetime(2099, 8, 31, 12, 30), fdpl_row_count=1)
             row.update(changes)
@@ -1320,6 +1331,7 @@ class RefundExtractTests(unittest.TestCase):
             account("TEST-MIX", 150, 75,
                     "AFRD (Transact) 20.00; CRVC (Transact) 30.00; RFND (CHECK) 100.00"),
             account("TEST-SYS", 90, delivery="ARFD (System)",
+                    active_ed_ind="Y", ed_activity_date=datetime(2099, 8, 31, 12, 30),
                     review_status="WAIT_CHECK_CLEARING",
                     review_reasons="CHCK_CLEARING_WAIT_UNTIL_09/17/2099_AMOUNT_40.00"),
             account("TEST-CHCK", 25, delivery="RFND (CHECK)",
@@ -1328,6 +1340,7 @@ class RefundExtractTests(unittest.TestCase):
             account("TEST-WAIT", 100, delivery="ACHK Clearing Wait until 09/16/2099 / 40.00; ARFD (System) 60.00"),
             account("TEST-HOLD", 45, 5, "Refund Hold - Student",
                     proposed_parent_delivery="Refund Hold - Parent", refund_hold_ind="Y",
+                    raw_delinquency_code="RH",
                     review_status="HOLD",
                     review_reasons=("REFUND_HOLD_RH; Mines Park Charge - Review; "
                                     "CHCK_CLEARING_WAIT_UNTIL_09/19/2099_AMOUNT_20.00")),
@@ -1389,15 +1402,40 @@ class RefundExtractTests(unittest.TestCase):
                 headers = [cell.value for cell in sheet[1]]
                 for header in ("Current_Total_Balance", "Total_Owed_to_Student"):
                     self.assertIn("$", sheet.cell(2, headers.index(header) + 1).number_format)
-                self.assertEqual(sheet.cell(2, headers.index("ed_activity_date") + 1).number_format,
+                self.assertEqual(sheet.cell(2, headers.index("ED Start") + 1).number_format,
                                  "mm/dd/yyyy h:mm AM/PM")
+                self.assertNotIn("refund_hold_ind", headers)
+                self.assertNotIn("fdpl_aidy_code", headers)
+                self.assertNotIn("plus_to_student_status", headers)
+                self.assertEqual("PPL to Student" in headers, sheet.title == "Refund to Parent")
+                for column in ("student_refund_amount", "proposed_parent_delivery", "parent_refund_amount"):
+                    self.assertEqual(column in headers, sheet.title == "Refund to Parent")
+                if sheet.title == "Refund to Parent":
+                    self.assertEqual(sheet.cell(2, headers.index("PPL to Student") + 1).value, "N")
+                    self.assertEqual(sheet.cell(2, headers.index("student_refund_amount") + 1).value, 150)
+                    self.assertEqual(sheet.cell(2, headers.index("proposed_parent_delivery") + 1).value, "RFDP")
+                    self.assertEqual(sheet.cell(2, headers.index("parent_refund_amount") + 1).value, 75)
+                    for column in ("student_refund_amount", "parent_refund_amount"):
+                        self.assertIn("$", sheet.cell(2, headers.index(column) + 1).number_format)
+                if sheet.title == "Refund Holds":
+                    self.assertEqual(sheet.cell(2, headers.index("Active RH") + 1).value, "RH")
                 if sheet.title == "Direct Deposit":
                     self.assertEqual(sheet.cell(2, headers.index("CWID") + 1).value, "TEST-SYS")
                     self.assertEqual(sheet.cell(2, headers.index("Detail_Code_Delivery") + 1).value,
-                                     "ARFD (System) 90.00")
+                                     "ARFD (Direct Deposit) 90.00")
                     self.assertEqual(sheet.cell(2, headers.index("Detail_Code_Refund_Amt") + 1).value, 90)
                     self.assertEqual(sheet.cell(2, headers.index("Proposed_DetailCode&Amt") + 1).value,
-                                     "ARFD (System)")
+                                     "ARFD (Direct Deposit)")
+                    self.assertEqual(sheet.cell(2, headers.index("Active ED") + 1).value, "Y")
+                    self.assertEqual(sheet.cell(2, headers.index("ED Start") + 1).value,
+                                     datetime(2099, 8, 31, 12, 30))
+                for column in ("Detail_Code_Delivery", "Proposed_DetailCode&Amt"):
+                    for cells in sheet.iter_cols(min_col=headers.index(column) + 1,
+                                                max_col=headers.index(column) + 1, min_row=2):
+                        self.assertTrue(all("(System)" not in str(cell.value) for cell in cells))
+            self.assertIn("ARFD (Direct Deposit) 60.00", sheets["ACH Clearing"].iloc[0]["Proposed_DetailCode&Amt"])
+            self.assertEqual(sheets["ACH or CC Refunds"].iloc[0].tab_delivery,
+                             "AFRD (Transact) 20.00; CRVC (Transact) 30.00")
             workbook.close()
         pd.testing.assert_frame_equal(report, original)
 

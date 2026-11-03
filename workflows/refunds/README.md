@@ -143,7 +143,7 @@ The workbook has these tabs, including headers when a category is empty:
 - **ACH or CC Refunds** (light yellow tab): available ACH and credit-card portions.
 - **Refund by Check** (light green tab): student `RFND (CHECK)` portions.
 - **Refund to Parent** (light orange tab): parent `RFDP` portions.
-- **Direct Deposit** (light blue tab): student `ARFD (System)` portions.
+- **Direct Deposit** (light blue tab): student `ARFD (Direct Deposit)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
 - **Refund Holds:** the entire account refund when RH is present, including any
   student and parent portions. No portion remains on a delivery or other review
@@ -168,8 +168,9 @@ tabs; account-level totals repeat as context. **Detail_Code_Note** explains
 account review placement. Retained report columns keep their values and relative
 order after these three fields, which follow the student's name.
 
-All tabs use the same columns and displayed headers, matching Direct Deposit:
-other retained columns keep their original order and names.
+All tabs use the following displayed-header mapping. Refund to Parent also
+retains the student/parent context fields listed below; other retained columns
+keep their original order and names.
 
 | Original field | Displayed header |
 | --- | --- |
@@ -182,12 +183,28 @@ other retained columns keep their original order and names.
 | `full_account_balance` | `Current_Total_Balance` |
 | `total_refund_amount` | `Total_Owed_to_Student` |
 | `proposed_student_delivery` | `Proposed_DetailCode&Amt` |
+| `raw_delinquency_code` | `Active RH` |
+| `active_ed_ind` | `Active ED` |
+| `ed_activity_date` | `ED Start` |
+| `plus_to_student_status` (Refund to Parent only) | `PPL to Student` |
 
 Every tab omits `original_payment_row_count`, `deceased_ind`, `deceased_date`,
 `confidential_ind`, `ambiguous_source_pool_count`, `last_ar_activity_date`, and
-`account_control_activity_date`. These fields remain available internally.
+`account_control_activity_date`, plus `refund_hold_ind` and `fdpl_aidy_code`.
+Only **Refund to Parent** retains `student_refund_amount`,
+`proposed_parent_delivery`, `parent_refund_amount`, and `plus_to_student_status`
+(displayed as **PPL to Student**). On that tab,
+`parent_refund_amount` repeats the parent portion in **Detail_Code_Refund_Amt**
+as account context. These omitted fields remain available internally.
 Sum **Detail_Code_Refund_Amt** when combining portions across tabs;
 **Total_Owed_to_Student** remains the account-level total.
+
+Both **Detail_Code_Delivery** and **Proposed_DetailCode&Amt** display the system
+route as `ARFD (Direct Deposit)`, including mixed-method values. The underlying
+detail code remains ARFD; the internal allocation report uses `ARFD (System)`.
+The renamed columns retain their existing values: **Active RH** is the raw
+delinquency code, **Active ED** is the ED indicator, and **ED Start** is the
+existing ED hold activity timestamp.
 
 The sheets use ordinary cells with formatted headers, currency/date formats,
 frozen headers, and regular column filters. They contain no Excel Table objects.

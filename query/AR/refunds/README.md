@@ -19,8 +19,14 @@ delivery calculations locally and creates an Excel workbook under
 they contain student-account data.
 
 The workbook separates refund methods and review queues into plain worksheets,
-without Excel tables. All tabs share the same headers and columns. For mixed
-refunds, use `Detail_Code_Refund_Amt` for each tab's portion; account totals
+without Excel tables. Tabs share header names; only Refund to Parent retains
+the student/parent amount and parent-delivery context columns, plus
+`plus_to_student_status` displayed as **PPL to Student**. All tabs omit
+`refund_hold_ind` and `fdpl_aidy_code`, and display `raw_delinquency_code`,
+`active_ed_ind`, and `ed_activity_date` as **Active RH**, **Active ED**, and
+**ED Start**. These are header changes; the underlying values are preserved.
+The workbook displays `ARFD (System)` as `ARFD (Direct Deposit)` in delivery
+cells. For mixed refunds, use `Detail_Code_Refund_Amt` for each tab's portion; account totals
 repeat as context. See the
 [workbook tab guide](../../../workflows/refunds/README.md#workbook-tabs).
 
