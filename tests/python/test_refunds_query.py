@@ -49,7 +49,7 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("FROM REPORT_SCOPE_PIDMS V", screening)
         self.assertIn("T.TBRACCD_PIDM = V.PIDM", screening)
         self.assertNotIn("TAISMGR.TBRACCD", self.query[self.query.index("account_balance_rollup AS"):].upper())
-        self.assertIn("FULL_ACCOUNT_BALANCE <= 0", self.normalized_query)
+        self.assertIn("FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
 
     def test_recursion_uses_per_account_vectors_without_pair_relation_rescans(self) -> None:
         allocation = self.section("allocation_final AS MATERIALIZED", "allocation_transfer_summary AS")
@@ -67,11 +67,15 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("RAW_TRANSACTION_BALANCE IS DISTINCT FROM 0", history)
         self.assertIn("CUMULATIVE_BALANCE = 0 AND UNRESOLVED_PREFIX = 0", history)
 
-    def test_zero_balance_requires_ordinary_unpaid_charges(self) -> None:
+    def test_refunds_require_net_credit_and_block_unreliable_ownership(self) -> None:
         self.assertIn(
-            "F.FULL_ACCOUNT_BALANCE <> 0 OR F.ORDINARY_UNPAID_CHARGE_AMOUNT > 0",
+            "GREATEST(-B.FULL_ACCOUNT_BALANCE, 0) AS TOTAL_REFUND_AMOUNT",
             self.normalized_query,
         )
+        self.assertIn("AND F.FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
+        split = self.section("joined AS", "parent_plus_calculation AS")
+        self.assertIn("COALESCE(SC.APPLIED_AID_REOPENED_COUNT, 0) > 0", split)
+        self.assertIn("<> GREATEST(-B.FULL_ACCOUNT_BALANCE, 0)", split)
 
     def test_schema_inventory_requires_new_metadata(self) -> None:
         schema_query = REFUNDS_QUERY.with_name("validate_refund_schema.sql").read_text(
@@ -263,6 +267,13 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         self.assertEqual(row["total_unused_payment_amount"], row["total_refund_amount"])
         self.assertEqual(row["refund_split_status"], "CALCULATED_SUBJECT_TO_REVIEW")
 
+    def assert_unassigned_credit(self, row: dict, credit: int | str) -> None:
+        self.assertEqual(row["total_refund_amount"], Decimal(str(credit)))
+        self.assertIsNone(row["student_refund_amount"])
+        self.assertIsNone(row["parent_refund_amount"])
+        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+        self.assertEqual(row["proposed_student_delivery"], "NONE")
+
     def assert_matches_python(self, actual: dict, expected: dict, label: str = "") -> None:
         for column in REPORT_COLUMNS:
             a, e = actual[column], expected[column]
@@ -323,7 +334,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("TIVA", "P", "000", 1200, balance=-1000,
                               category="CSH", title_iv="Y"),
         ])
-        self.assert_split(row, 0, 1000)
+        self.assert_unassigned_credit(row, 200)
+        self.assertEqual(row["total_unused_payment_amount"], 1000)
         self.assertEqual(row["full_account_balance"], -200)
         self.assertEqual(row["unpaid_charge_amount"], 800)
         self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 200)
@@ -403,7 +415,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                               term="209955", aid_year="9899", category="FA", title_iv="Y"),
             RefundTransaction("CURR", "C", "700", 1000, balance=800),
         ])
-        self.assert_split(title_iv, 0, 1000)
+        self.assert_unassigned_credit(title_iv, 200)
+        self.assertEqual(title_iv["total_unused_payment_amount"], 1000)
         self.assertEqual(title_iv["full_account_balance"], -200)
         self.assertEqual(title_iv["unpaid_charge_amount"], 800)
 
@@ -437,7 +450,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("TIVA", "P", "000", 500, balance=-300,
                               category="FA", title_iv="Y"),
         ])
-        self.assert_split(row, 0, 300)
+        self.assert_unassigned_credit(row, 200)
+        self.assertEqual(row["total_unused_payment_amount"], 300)
         self.assertEqual(row["unpaid_charge_amount"], 100)
         self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], 200)
 
@@ -449,7 +463,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("TIVB", "P", "000", 300, balance=-300,
                               category="FA", title_iv="Y"),
         ])
-        self.assert_split(row, 0, 400)
+        self.assert_unassigned_credit(row, 100)
+        self.assertEqual(row["total_unused_payment_amount"], 400)
         self.assertEqual(row["unpaid_charge_amount"], 300)
 
     def test_800a_sources_apply_before_regular_800(self) -> None:
@@ -560,13 +575,13 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("HIWR", "C", "879", "-1600", tran_number=24),
             RefundTransaction("FDPL", "P", "800", "12000", tran_number=25,
                               category="PPL", title_iv="Y"),
-            RefundTransaction("FDSL", "P", "800", "1500", tran_number=26,
+            RefundTransaction("FDSL", "P", "800", "1500", balance="-300", tran_number=26,
                               category="FAL", title_iv="Y"),
-            RefundTransaction("FDUL", "P", "800", "500", tran_number=27,
+            RefundTransaction("FDUL", "P", "800", "500", balance="-500", tran_number=27,
                               category="FAL", title_iv="Y"),
-            RefundTransaction("PELL", "P", "800", "1500", tran_number=28,
+            RefundTransaction("PELL", "P", "800", "1500", balance="-1500", tran_number=28,
                               category="FAG", title_iv="Y"),
-            RefundTransaction("SCHP", "P", "000", "6000", tran_number=29,
+            RefundTransaction("SCHP", "P", "000", "6000", balance="-1449.75", tran_number=29,
                               category="FAS", title_iv="N"),
         ], target_term="209980", run_date="2099-08-31")
         self.assert_split(row, 0, "3749.75")
@@ -694,7 +709,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
     def test_manual_and_api_exports_select_same_candidates_with_full_history(self) -> None:
         transactions = [
-            # Target activity, net zero, but incompatible priorities leave a refund.
+            # Target activity selects this zero-net account; allocation excludes it.
             RefundTransaction("CHG9", "C", "899", 100, pidm=1),
             RefundTransaction("PAY7", "P", "897", 100, balance=-100, pidm=1),
             # Negative stored payment at the two-year boundary; history is not cut.
@@ -776,7 +791,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 output_file=work / "refunds.xlsx",
             )
             expected_refunds = {
-                "TEST-1": 100, "TEST-2": 20, "TEST-4": 10, "TEST-10": 10,
+                "TEST-2": 20, "TEST-4": 10, "TEST-10": 10,
                 "TEST-12": 50, "TEST-14": 50,
             }
             self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), expected_refunds)

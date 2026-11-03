@@ -139,6 +139,13 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertEqual(row["student_refund_amount"], Decimal(student))
         self.assertEqual(row["total_refund_amount"], Decimal(parent) + Decimal(student))
 
+    def assert_unassigned_credit(self, row: dict[str, object], credit: str) -> None:
+        self.assertEqual(row["total_refund_amount"], Decimal(credit))
+        self.assertIsNone(row["student_refund_amount"])
+        self.assertIsNone(row["parent_refund_amount"])
+        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+        self.assertEqual(row["proposed_student_delivery"], "NONE")
+
     def test_worked_example_and_output_contract(self) -> None:
         row = self.report(self.worked_example())
         self.assert_split(row, "500.00", "1500.00")
@@ -163,7 +170,7 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("OLD2", "C", "899", 150, term="209880"),
             Transaction("TIVA", "P", "000", 500, -300, category="FA", title_iv="Y"),
         ])
-        self.assert_split(row, "0.00", "300.00")
+        self.assert_unassigned_credit(row, "200.00")
         self.assertEqual(row["total_unused_payment_amount"], Decimal("300.00"))
         self.assertEqual(row["unpaid_charge_amount"], Decimal("100.00"))
         self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], Decimal("200.00"))
@@ -174,7 +181,7 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("TIVA", "P", "000", 300, -100, term="209880", aid_year="9899", category="FA", title_iv="Y"),
             Transaction("TIVB", "P", "000", 300, -300, category="FA", title_iv="Y"),
         ])
-        self.assert_split(destination, "0.00", "400.00")
+        self.assert_unassigned_credit(destination, "100.00")
         self.assertEqual(destination["total_unused_payment_amount"], Decimal("400.00"))
         self.assertEqual(destination["unpaid_charge_amount"], Decimal("300.00"))
 
@@ -275,10 +282,10 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("HLTH", "C", "879", "1600", tran_number=23),
             Transaction("HIWR", "C", "879", "-1600", tran_number=24),
             Transaction("FDPL", "P", "800", "12000", tran_number=25, category="PPL", title_iv="Y"),
-            Transaction("FDSL", "P", "800", "1500", tran_number=26, category="FAL", title_iv="Y"),
-            Transaction("FDUL", "P", "800", "500", tran_number=27, category="FAL", title_iv="Y"),
-            Transaction("PELL", "P", "800", "1500", tran_number=28, category="FAG", title_iv="Y"),
-            Transaction("SCHP", "P", "000", "6000", tran_number=29, category="FAS"),
+            Transaction("FDSL", "P", "800", "1500", "-300", tran_number=26, category="FAL", title_iv="Y"),
+            Transaction("FDUL", "P", "800", "500", "-500", tran_number=27, category="FAL", title_iv="Y"),
+            Transaction("PELL", "P", "800", "1500", "-1500", tran_number=28, category="FAG", title_iv="Y"),
+            Transaction("SCHP", "P", "000", "6000", "-1449.75", tran_number=29, category="FAS"),
         ])
         self.assert_split(row, "0.00", "3749.75")
         self.assertEqual(row["unpaid_charge_amount"], Decimal("0.00"))
@@ -301,25 +308,14 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("TIVA", "P", "000", 1200, -1000, category="FA", title_iv="Y"),
         ], expected_rows=0)
 
-    def test_zero_balance_restricted_parent_plus_keeps_split_and_review(self) -> None:
-        row = self.report([
+    def test_zero_balance_restricted_parent_plus_is_excluded(self) -> None:
+        self.report([
             Transaction("OLD7", "C", "700", "4375.00", term="209880"),
             Transaction(
                 "FDPL", "P", "800", "4375.00", "-4375.00",
                 category="FA", title_iv="Y",
             ),
-        ])
-        self.assertEqual(row["full_account_balance"], Decimal("0.00"))
-        self.assert_split(row, "4375.00", "0.00")
-        self.assertEqual(row["unused_fdpl_amount"], Decimal("4375.00"))
-        self.assertEqual(row["unpaid_charge_amount"], Decimal("4375.00"))
-        self.assertEqual(row["proposed_parent_delivery"], "RFDP")
-        self.assertEqual(row["refund_split_status"], "CALCULATED_SUBJECT_TO_REVIEW")
-        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
-        self.assertIn(
-            "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT",
-            str(row["review_reasons"]),
-        )
+        ], expected_rows=0)
 
     def test_settled_old_term_is_not_reopened_by_current_priorities(self) -> None:
         row = self.report([
@@ -331,20 +327,99 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertIn("P000", str(row["balance_sources"]))
         self.assertNotIn("P899", str(row["balance_sources"]))
 
-    def test_exact_priority_refund_on_zero_account_in_current_or_open_old_term(self) -> None:
+    def test_exact_priority_offsets_on_zero_account_are_excluded(self) -> None:
         for term in ("209980", "209880"):
             with self.subTest(term=term):
-                row = self.report([
+                self.report([
                     Transaction("TUIN", "C", "899", 10000, 500, term=term),
                     Transaction("FEE", "C", "897", 1000, 0, term=term),
                     Transaction("P899", "P", "899", 9500, 0, term=term),
                     Transaction("P897", "P", "897", 1500, -500, term=term),
+                ], expected_rows=0)
+
+    def test_cross_term_zero_account_does_not_reopen_applied_aid(self) -> None:
+        self.report([
+            Transaction("TUIN", "C", "899", 1000, term="209955", tran_number=1),
+            Transaction("LOAN", "P", "800", 1500, term="209955", tran_number=2,
+                        category="FA", title_iv="Y"),
+            Transaction("ARFD", "C", "800", 200, term="209955", tran_number=3),
+            Transaction("TUIN", "C", "899", 1500, tran_number=4),
+            Transaction("SCHL", "P", "890", 600, tran_number=5, category="FA"),
+            Transaction("CASH", "P", "000", 600, tran_number=6),
+        ], expected_rows=0)
+        # A credit in Fall does not become a refund while it offsets Summer debt.
+        self.report([
+            Transaction("OLD", "C", "899", 5000, term="209955"),
+            Transaction("AID", "P", "800", 5000, -5000, category="FA", title_iv="Y"),
+        ], expected_rows=0)
+
+    def test_earlier_aid_applies_before_later_higher_priority_scholarship(self) -> None:
+        row = self.report([
+            Transaction("OLD", "C", "899", 1000, term="209955", tran_number=1),
+            Transaction("LOAN", "P", "800", 1200, term="209955", tran_number=2,
+                        category="FA", title_iv="Y"),
+            Transaction("CURR", "C", "899", 500, tran_number=3),
+            Transaction("SCHL", "P", "890", 600, -300, tran_number=4, category="FA"),
+        ])
+        self.assert_split(row, "0.00", "300.00")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal("0.00"))
+        self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], Decimal("0.00"))
+        self.assertIn("SCHL", row["balance_sources"])
+        self.assertNotIn("LOAN", row["balance_sources"])
+        self.assertNotIn("APPLIED_AID_REOPENED", row["review_reasons"] or "")
+        self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+
+    def test_cash_still_covers_other_terms_before_refunding_the_net_credit(self) -> None:
+        for charge_term, payment_term in (("209955", "209980"), ("209980", "209955")):
+            with self.subTest(charge_term=charge_term):
+                row = self.report([
+                    Transaction("TUIN", "C", "899", 5000, term=charge_term),
+                    Transaction("CASH", "P", "000", 5500, -500, term=payment_term),
                 ])
                 self.assert_split(row, "0.00", "500.00")
-                self.assertEqual(row["full_account_balance"], Decimal("0.00"))
-                self.assertEqual(row["unpaid_charge_amount"], Decimal("500.00"))
-                self.assertEqual(row["proposed_student_delivery"], "ARFD (System)")
-                self.assertIn("RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE", row["review_reasons"])
+                self.assertEqual(row["unpaid_charge_amount"], Decimal("0.00"))
+
+    def test_applied_or_unknown_aid_cannot_be_assigned_as_a_refund(self) -> None:
+        for title_iv in ("Y", "N"):
+            for stored in (0, None, "-99.99"):
+                with self.subTest(title_iv=title_iv, stored=stored):
+                    row = self.report([
+                        Transaction("CHG7", "C", "700", 100),
+                        Transaction("AID", "P", "800", 100, stored,
+                                    category="FA", title_iv=title_iv),
+                        Transaction("CASH", "P", "000", 100, -100),
+                    ])
+                    self.assert_unassigned_credit(row, "100.00")
+                    self.assertIn("APPLIED_AID_REOPENED_BY_RECONSTRUCTION", row["review_reasons"])
+
+    def test_reconstructed_excess_goes_to_manual_review_at_net_credit_only(self) -> None:
+        row = self.report([
+            Transaction("OLD", "C", "899", 1000, 800, term="209955"),
+            Transaction("AID", "P", "800", 1200, -1000, category="FA", title_iv="Y"),
+        ])
+        self.assert_unassigned_credit(row, "200.00")
+        self.assertEqual(row["total_unused_payment_amount"], Decimal("1000.00"))
+        with TemporaryDirectory() as directory:
+            output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+            sheets = pd.read_excel(output, sheet_name=None)
+            self.assertEqual(sheets["Manual Reviews"].Detail_Code_Refund_Amt.sum(), 200)
+            self.assertTrue(sheets["Direct Deposit"].empty)
+            self.assertTrue(sheets["Refund to Parent"].empty)
+
+    def test_parent_source_cannot_exceed_net_credit(self) -> None:
+        row = self.report([
+            Transaction("CHG7", "C", "700", 500, 500),
+            Transaction("FDPL", "P", "800", 600, -600, category="FA", title_iv="Y"),
+        ])
+        self.assert_unassigned_credit(row, "100.00")
+        self.assertEqual(row["total_unused_payment_amount"], Decimal("600.00"))
+        self.assertEqual(row["proposed_parent_delivery"], "NONE")
+
+    def test_credit_without_reconstructed_payment_source_requires_review(self) -> None:
+        row = self.report([Transaction("ADJ", "C", "899", -100, -100)])
+        self.assert_unassigned_credit(row, "100.00")
+        self.assertEqual(row["total_unused_payment_amount"], Decimal("0.00"))
+        self.assertIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"])
 
     def test_exact_match_remainders_and_cross_term_title_iv_limits(self) -> None:
         for priority in ("899", "869"):
@@ -364,7 +439,11 @@ class RefundAllocationTests(unittest.TestCase):
                     Transaction("PAYX", "P", "869", 1000, -200, term=target,
                                 title_iv=title_iv, category="FA"),
                 ], target_term=target)
-                self.assert_split(row, "0.00", expected)
+                if Decimal(unpaid):
+                    self.assert_unassigned_credit(row, "200.00")
+                    self.assertEqual(row["total_unused_payment_amount"], Decimal(expected))
+                else:
+                    self.assert_split(row, "0.00", expected)
                 self.assertEqual(row["unpaid_charge_amount"], Decimal(unpaid))
 
     def test_card_and_ach_remainders_route_only_their_own_funds(self) -> None:
@@ -593,10 +672,10 @@ class RefundAllocationTests(unittest.TestCase):
 
     def test_parent_refund_remains_an_ordinary_charge(self) -> None:
         parent_refund = self.report([
-            Transaction("R879", "P", "879", 2500, -2500, tran_number=10),
+            Transaction("R879", "P", "879", 2600, -2600, tran_number=10),
             Transaction("RFDP", "C", "800", 2500, 2500, tran_number=20),
         ])
-        self.assert_split(parent_refund, "0.00", "2500.00")
+        self.assert_unassigned_credit(parent_refund, "100.00")
         self.assertEqual(parent_refund["unpaid_charge_amount"], Decimal("2500.00"))
         self.assertNotIn(
             "POSTED_STUDENT_REFUND_RECONCILED",

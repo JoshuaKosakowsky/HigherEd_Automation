@@ -392,7 +392,14 @@ def _posted_student_refunds(
 
 def _payment_sort_key(source: dict[str, Any]) -> tuple[object, ...]:
     priority = source["payment_priority_sort"]
-    return (-(priority if priority is not None else -1), source["tran_number"], source["term_sort"], source["detail_code"])
+    # A later term's high-priority scholarship must not displace earlier aid.
+    # Priority bands and transaction-number ties still apply within each term.
+    return (
+        source["term_sort"],
+        -(priority if priority is not None else -1),
+        source["tran_number"],
+        source["detail_code"],
+    )
 
 
 def _charge_sort_key(charge: dict[str, Any]) -> tuple[object, ...]:
@@ -720,9 +727,9 @@ def _allocate_account(
         return None
 
     full_balance = _money(sum((row["accounting_amount"] or ZERO for row in transactions), ZERO))
-    # Zero-net accounts may contain restricted refunds and offsetting debt.
-    # Positive-net accounts are explicitly outside the daily report for now.
-    if full_balance > ZERO:
+    # Offset credits and charges across the complete account before proposing
+    # money to return. Reallocation cannot create a refund on a zero-net account.
+    if full_balance >= ZERO:
         return None
 
     invalid_priority_count = sum(
@@ -796,16 +803,19 @@ def _allocate_account(
             selected_sources.append({**source, "source_credit_amount": remaining})
     ordinary_unpaid_charges = _money(sum(charge_remaining, ZERO))
     unpaid_charges = _money(ordinary_unpaid_charges + unmatched_posted_refunds)
-    # A prior posted refund is not an unpaid charge that justifies another
-    # refund on a zero-balance account. Preserve genuine restricted-payment
-    # cases only when ordinary charges remain unpaid.
-    if full_balance == ZERO and ordinary_unpaid_charges == ZERO:
-        return None
     policy_unused_total = _money(sum((source["source_credit_amount"] for source in selected_sources), ZERO))
     unused_fdpl = _money(sum((source["source_credit_amount"] for source in selected_sources if source["detail_code"] == "FDPL"), ZERO))
     unused_non_fdpl = policy_unused_total - unused_fdpl
     account_credit = _money(max(-full_balance, ZERO))
     policy_credit_mismatch = policy_unused_total != account_credit
+    # Reallocation may change cash applications, but must not present aid that
+    # Banner already consumed as a newly available refund source.
+    applied_aid_reopened = any(
+        source["fund_type"] in {"TITLE_IV", "NON_TITLE_IV_FA"}
+        and (source["stored_balance"] is None
+             or source["source_credit_amount"] > source["stored_unused_amount"])
+        for source in selected_sources
+    )
 
     eligible_balance = _money(sum((row["accounting_amount"] or ZERO for row in allocation_transactions), ZERO))
     reconstructed_balance = _money(unpaid_charges - policy_unused_total)
@@ -914,6 +924,8 @@ def _allocate_account(
         missing_auth_count,
         conflicting_auth_count,
         ledger_residual != ZERO,
+        policy_credit_mismatch,
+        applied_aid_reopened,
     ))
     if split_blocked:
         parent_amount = None
@@ -990,12 +1002,12 @@ def _allocate_account(
         "MISSING_TRANSACTION_AMOUNT" if missing_amount_count else None,
         "MISSING_TRANSACTION_BALANCE" if missing_balance_count else None,
         "STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION" if stored_difference_count else None,
+        "APPLIED_AID_REOPENED_BY_RECONSTRUCTION" if applied_aid_reopened else None,
         "UNRECOGNIZED_TERM_CODE" if invalid_term_count else None,
         "FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION" if future_term_count else None,
         "ARTIFICIAL_PRIORITY_DETAIL_CODE_HAS_UNEXPECTED_BASE_PRIORITY" if special_priority_mismatch_count else None,
         "NEGATIVE_NET_SOURCE_REQUIRES_REVIEW" if negative_net_source_count else None,
         "UNPAID_CHARGES_AFTER_POLICY_ALLOCATION" if unpaid_charges > 0 else None,
-        "RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE" if unpaid_charges > ZERO and not split_blocked else None,
         "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT" if policy_credit_mismatch else None,
         "ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS" if ledger_residual != ZERO else None,
         "REFUND_HOLD_RH" if refund_hold else None,
@@ -1049,7 +1061,7 @@ def _allocate_account(
         "last_name": account["last_name"],
         "first_name": account["first_name"],
         "full_account_balance": full_balance,
-        "total_refund_amount": policy_unused_total,
+        "total_refund_amount": account_credit,
         "proposed_student_delivery": student_delivery,
         "student_refund_amount": student_amount,
         "proposed_parent_delivery": parent_delivery,
@@ -1095,8 +1107,6 @@ def _allocate_account(
         "ed_activity_date": account["ed_activity_date"],
         "plus_auth_activity_date": plus_auth_activity,
     }
-    if policy_unused_total <= ZERO:
-        return None
     return result
 
 

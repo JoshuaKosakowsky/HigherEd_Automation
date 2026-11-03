@@ -48,29 +48,54 @@ lookback starts with the whole term containing `run_date - 2 years` (September
 accounts retain their full history. There is no five-year history cutoff. A CWID
 filter selects that account directly.
 
-The SQL excludes known positive full-account balances. Python also excludes
-positive balances and accounts with no reconstructed unused payments. A zero
-balance is eligible when restricted payments leave a refund and offsetting
-ordinary unpaid charges. An earlier posted ARFD/RFND alone does not qualify as
-an unpaid charge for this purpose. For example, $10,000 of `899` charges plus
-$1,000 of `897` charges, paid by $9,500 at `899` and $1,500 at `897`, produces
-a $500 student refund and $500 unpaid tuition, despite a zero net balance.
+The flat exports may include zero-balance accounts. The Python allocator and
+standalone report exclude every account whose full-account balance is zero or
+positive, including accounts with offsetting restricted credits and charges.
+An amount owed in Summer and an equal credit in Fall produce no refund proposal.
 
-`full_account_balance` remains charges minus payments across all history.
-`total_refund_amount` is now the reconstructed unused payment total, split by
-ownership; it is not capped at the net account credit. Restricted refunds with
-unpaid charges show amounts and delivery methods but require manual review with
-`RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE`. Missing or inconsistent allocation
-inputs still suppress an unreliable recipient split. The former
-`REAPPLICATION_REQUIRED` gate no longer hides a valid restricted refund.
+`full_account_balance` remains charges minus payments across all history,
+including refunds already posted. For a negative balance, `total_refund_amount`
+is its absolute value: the account's net credit. Reallocation cannot increase
+this amount. `total_unused_payment_amount`, `balance_sources`, and unused-source
+subtotals describe the reconstruction and can differ from that net credit.
+Such a difference blocks the recipient split and delivery; the account's net
+credit remains visible for manual review, without choosing which source to trim.
+
+Reconstructed unused Title IV or non-Title-IV `FA%` aid must not exceed the
+surviving source's stored unapplied credit. A missing aid balance or an excess
+adds `APPLIED_AID_REOPENED_BY_RECONSTRUCTION` and blocks the recipient split and
+delivery. This prevents money Banner shows as used from becoming a proposed aid
+refund. Cash may still be reallocated across terms; cash stored-balance
+differences retain their existing review flag. Other input and ownership checks
+continue to block unreliable splits. These rules replace the former behavior
+that proposed restricted refunds alongside offsetting unpaid charges.
+
+`HIWR` (Health Insurance Waiver/Offset) directly reduces `HLTH` (Health Insurance)
+within the same term and charge-priority pool (`879` for both in the supplied
+configuration), before aid or cash is allocated. The posted negative HIWR amount
+is a charge adjustment. An equal HLTH/HIWR pair leaves zero insurance charges
+and consumes no payment; HIWR is not a separate refundable payment source.
+
+Synthetic acceptance examples:
+
+| Account activity | Expected result |
+| --- | --- |
+| Summer debt $5,000; Fall credit $5,000 | $0 refund; absent from refund tabs. |
+| Summer charges $5,000; Fall unrestricted cash $5,500 | $500 refund after cash covers Summer. |
+| Summer cash $5,500; Fall charges $5,000 | $500 refund after cash covers Fall. |
+| Same-term HLTH $1,000 and HIWR -$1,000 at priority 879; unapplied cash $100 | Insurance nets to $0 before allocation; the $100 cash credit remains available. |
+| Summer tuition $1,000 and applied Title IV aid $1,200; Fall tuition $500 and scholarship $600 with $300 unapplied | Earlier aid applies first; $300 of Fall scholarship remains, without reopening Summer aid. |
+| Old-FY charges $1,000; newer Title IV payment $1,200, of which the configured cap applies $200 | Net credit $200 goes to manual review with no recipient/delivery; reconstructed unused $1,000 is diagnostic only. |
 
 ### Priorities, delivery, and review
 
 Priorities without a zero, such as `899` and `869`, match only that exact charge
 priority. Existing zero wildcard rules and Title IV fiscal-year limits also
-apply across terms. Payments use descending priority and then earliest
-transaction number. ACH and cards have no special last-payment band: at `000`
-they follow COFP (`000A`), then compete with other `000` payments by transaction
+apply across terms. Payments use oldest term first, then descending priority
+and earliest transaction number within that term. A later scholarship's higher
+priority cannot put it ahead of earlier-term aid. ACH and cards have no special
+last-payment band: at `000` they follow COFP (`000A`), then compete with other
+`000` payments by transaction
 number. FDPL likewise uses the existing chronological tie rule.
 
 After all ordinary charges are allocated oldest-term first, posted student
@@ -265,12 +290,16 @@ date, set `-RunDate YYYY-MM-DD` to the original date. The cache manifest also
 records the extraction policy version; caches from before this population
 change must be extracted again.
 
-Re-download **both** manual exports after this update. Older downloads do not
-necessarily contain the newly eligible accounts. Use identical SQL settings
+Re-download **both** manual exports after an extraction population update.
+Older downloads may omit newly eligible accounts. Use identical SQL settings
 and pass the matching `-TargetTerm` and `-RunDate` to Python.
 
 The later workbook-tab-only change does not require new SQL downloads; existing
 compatible extracts can be recalculated to produce the new layout.
+
+The net-credit and payment-order correction also uses the existing extract
+columns and candidate scope. Recalculate matching complete downloads to compare
+the same snapshot, then obtain fresh paired downloads for the next live review.
 
 ## Validation expectation
 

@@ -58,12 +58,15 @@ qualifying HOMP charges, qualifying TPPY payments, or a negative stored payment
 balance within two years of terms. Known positive full-account balances are
 excluded. Selected accounts retain all transaction history; the two-year
 condition is not a replay cutoff.
-Python can report zero-net accounts with restricted refunds and offsetting
-unpaid charges. See [the workflow rules](../../../workflows/refunds/README.md)
-for current delivery, ownership, housing, and third-party review behavior.
+Python excludes zero-net accounts, including offsetting credits and unpaid
+charges. A refund proposal cannot exceed the full-account net credit.
+See [the workflow rules and synthetic acceptance examples](../../../workflows/refunds/README.md#population-and-refund-amounts)
+for netting, applied-aid protection, ownership, and review behavior. This
+calculation correction uses existing extract columns; matching complete
+downloads can be replayed without changing the SQL downloads.
 
-Re-download both exports after this change. To maintain the standalone manual
-SQL, edit the extract templates or shared scope, then regenerate from the
+Re-download both exports when extract columns or candidate scope change. To
+maintain the standalone manual SQL, edit the extract templates or shared scope, then regenerate from the
 repository root:
 
 ```python
@@ -147,21 +150,21 @@ TPPY payment, or a negative stored payment balance within the last two years of
 whole terms through the target term. The two-year condition selects accounts;
 their complete history is retained. There is no five-year history cutoff. A
 CWID or last-name validation filter bypasses the activity conditions but still
-excludes positive balances. Do not commit identifying filters.
+excludes zero and positive balances. Do not commit identifying filters.
 
-Positive full-account balances are excluded. Zero-balance accounts can contain
-restricted refunds and offsetting ordinary unpaid charges. An unmatched earlier
-posted refund alone does not qualify as an unpaid charge for this exception.
-Final output requires a positive reconstructed refund. `total_refund_amount` is
-unused payment principal and may exceed the net account credit.
+Zero and positive full-account balances are excluded, regardless of offsetting
+restricted credits or unpaid charges. `total_refund_amount` is the absolute
+negative full-account balance, including refunds already posted. A $5,000 Summer
+debt offset by a $5,000 Fall credit produces no refund proposal. A $5,500 cash
+payment covering $5,000 of charges in another term leaves a $500 net credit.
 
 The latest completed historical prefix is excluded from replay only if its
 cumulative raw balance is zero and every stored transaction balance in that
 prefix is known zero. A zero account total with unresolved row balances does
 not count as settlement. All remaining historical charges retain their actual
 term and priority; no fiscal-year deficit becomes an unrestricted synthetic
-charge. Stored balances provide settlement evidence and diagnostics, while
-reconstructed allocation determines refund ownership.
+charge. Stored balances provide settlement evidence and diagnostics. They also
+limit which reconstructed aid sources can support a refund recipient split.
 
 ### Classification and priority
 
@@ -177,7 +180,9 @@ are positional wildcards: `899` matches only `899`, `890` matches `89x`,
 `800` matches `8xx`, and `000` matches any charge. Strict priorities retain
 this restriction when crossing terms and fiscal years.
 
-Payments apply by descending priority, then earliest transaction number:
+Payments apply oldest term first, then by descending priority and earliest
+transaction number within that term. Later-term aid cannot jump ahead of
+earlier-term payments because of its higher priority. Within a term, bands are:
 `999..801`, `800A` (TPDT/TPPY), regular `800`, `799..001`, `000A` (COFP),
 and regular `000`. ACH/cards use their configured numeric priority like ordinary
 payments; the former `000Z` band is removed. Artificial suffixes change order
@@ -188,6 +193,11 @@ Reversals reduce newest positive payments within term/aid year/detail, and
 charges within term/priority. Charge pooling permits paired detail codes, such
 as a charge and waiver at the same priority, to offset. Negative net source
 groups still require review.
+
+In particular, same-term `HIWR` directly offsets `HLTH` in their shared `879`
+charge-priority pool before any aid or cash is used. Equal positive HLTH and
+negative HIWR amounts cancel the insurance charge. HIWR remains a charge
+adjustment, not a payment or an additional refund source.
 
 Posted `ARFD` and `RFND` student refunds are reconciled after ordinary charges,
 so the normal oldest-term-first charge allocation remains intact. Each surviving
@@ -232,10 +242,19 @@ term, or effective 0–32 days ago in any term, adds `Mines Park Charge - Review
 without hiding amounts or delivery. Paid HOMP charges qualify; fully reversed
 charges do not.
 
-Restricted refunds with unpaid charges retain their recipient amounts and add
-`RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE`. Allocation metadata problems,
-negative source groups, authorization problems, or a ledger mismatch block an
-unreliable split. Existing account controls and review columns are preserved.
+If reconstructed unused principal differs from the account's net credit,
+recipient amounts and delivery are blocked; the net credit remains available
+for manual review. No source is arbitrarily reduced to make ownership fit.
+`total_unused_payment_amount`, unused-source subtotals, and `balance_sources`
+remain reconstruction diagnostics, not additional amounts to refund.
+
+For Title IV and non-Title-IV `FA%` aid, reconstructed unused principal cannot
+exceed the surviving source's stored unapplied credit. An excess or missing
+aid balance adds `APPLIED_AID_REOPENED_BY_RECONSTRUCTION` and blocks the split
+and delivery. Cash can still cross terms with the existing priority matching;
+cash stored-balance differences retain their review flag. Allocation metadata
+problems, negative source groups, authorization problems, and ledger mismatches
+also block unreliable splits. Existing account controls and columns are preserved.
 The full rules and workbook presentation are also described in the
 [workflow guide](../../../workflows/refunds/README.md).
 

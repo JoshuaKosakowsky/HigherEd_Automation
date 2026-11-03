@@ -9,12 +9,16 @@ CURRENT POLICY
 - Candidates: target-term activity OR HOMP/TPPY effective in the past 32 days OR a
   stored payment credit from the whole term containing run_date minus two years
   through the target term. Validation CWID/name filters bypass activity criteria.
-- Full-account positive balances are excluded. Zero balances can have restricted
-  refunds with equal unpaid charges. Final rows require unused payment principal.
+- Zero and positive full-account balances are excluded. The proposal equals the
+  account's net credit; offsetting term credits/debts cannot create a refund.
+  Reconstructed unused principal differing from net credit blocks ownership.
+  Unused aid exceeding Banner's unapplied source credit also blocks ownership;
+  already-applied aid cannot become a proposed recipient's refund.
 - Keep every term and charge priority. Oldest charge terms apply first, then
   descending charge priority. Payment zero digits are positional wildcards;
-  899/869 only pay their exact priorities in any term. Payments apply by descending
-  priority, then earliest transaction number. TPDT/TPPY retain 800A; COFP retains
+  899/869 only pay their exact priorities in any term. Payments apply by oldest
+  term, then descending priority and earliest transaction number. TPDT/TPPY
+  retain 800A; COFP retains
   000A. ACH/cards use their normal stored priority; there is no 000Z.
 - After normal charges are allocated oldest-term first, posted ARFD/RFND student
   refunds consume remaining payment sources with lower transaction numbers
@@ -291,7 +295,7 @@ account_balance_rollup AS (
 account_balances AS MATERIALIZED (
     SELECT pidm, full_account_balance, last_ar_activity_date
     FROM account_balance_rollup
-    WHERE NOT has_unclassified_detail_type AND full_account_balance <= 0
+    WHERE NOT has_unclassified_detail_type AND full_account_balance < 0
 ),
 
 /*
@@ -544,6 +548,7 @@ payment_sources AS (
         ), 2) AS source_amount,
         ROUND(GREATEST(-COALESCE(r.raw_transaction_balance, 0), 0), 2)
             AS stored_unused_amount,
+        r.raw_transaction_balance IS NULL AS stored_balance_missing,
         r.effective_date,
         r.activity_date
     FROM payment_rows r
@@ -701,12 +706,12 @@ retain their eligibility; no synthetic unrestricted fiscal-year deficit exists.
 numbered_payment_sources AS MATERIALIZED (
     SELECT s.*, s.source_amount AS stage_source_amount,
         CAST(ROW_NUMBER() OVER (
-            PARTITION BY s.pidm ORDER BY s.payment_priority_sort DESC NULLS LAST,
-                s.tran_number, s.term_sort, s.detail_code
+            PARTITION BY s.pidm ORDER BY s.term_sort,
+                s.payment_priority_sort DESC NULLS LAST, s.tran_number, s.detail_code
         ) AS integer) AS payment_sequence,
         CONCAT('P', ROW_NUMBER() OVER (
-            PARTITION BY s.pidm ORDER BY s.payment_priority_sort DESC NULLS LAST,
-                s.tran_number, s.term_sort, s.detail_code
+            PARTITION BY s.pidm ORDER BY s.term_sort,
+                s.payment_priority_sort DESC NULLS LAST, s.tran_number, s.detail_code
         )) AS payment_key
     FROM payment_sources s
 ),
@@ -982,7 +987,13 @@ stored_balance_comparison AS MATERIALIZED (
             WHERE ABS(
                 COALESCE(r.source_credit_amount, 0) - s.stored_unused_amount
             ) > 0.01
-        ) AS stored_balance_difference_count
+        ) AS stored_balance_difference_count,
+        COUNT(s.payment_key) FILTER (
+            WHERE s.fund_type IN ('TITLE_IV', 'NON_TITLE_IV_FA')
+              AND COALESCE(r.source_credit_amount, 0) > 0
+              AND (s.stored_balance_missing
+                   OR r.source_credit_amount > s.stored_unused_amount)
+        ) AS applied_aid_reopened_count
     FROM account_balances b
     LEFT JOIN numbered_payment_sources s ON s.pidm = b.pidm
     LEFT JOIN selected_balance_sources r
@@ -1275,7 +1286,7 @@ joined AS (
             - (COALESCE(uc.unpaid_charge_amount, 0) - COALESCE(bs.balance_source_credit_total, 0))
             AS ledger_residual,
         b.full_account_balance,
-        COALESCE(bs.balance_source_credit_total, 0) AS total_refund_amount,
+        GREATEST(-b.full_account_balance, 0) AS total_refund_amount,
         bs.balance_sources,
         COALESCE(bs.balance_source_group_count, 0) AS balance_source_group_count,
         COALESCE(bs.balance_source_credit_total, 0) AS balance_source_credit_total,
@@ -1291,6 +1302,7 @@ joined AS (
         COALESCE(n.negative_net_source_count, 0) AS negative_net_source_count,
         COALESCE(sc.stored_balance_difference_count, 0)
             AS stored_balance_difference_count,
+        COALESCE(sc.applied_aid_reopened_count, 0) AS applied_aid_reopened_count,
         COALESCE(uc.unpaid_charge_amount, 0) AS unpaid_charge_amount,
         COALESCE(uc.ordinary_unpaid_charge_amount, 0) AS ordinary_unpaid_charge_amount,
         COALESCE(bs.ambiguous_source_pool_count, 0) AS ambiguous_source_pool_count,
@@ -1309,6 +1321,9 @@ joined AS (
                OR COALESCE(n.negative_net_source_count, 0) > 0
                OR COALESCE(fr.missing_fdpl_auth_count, 0) > 0
                OR COALESCE(fr.conflicting_fdpl_auth_count, 0) > 0
+               OR COALESCE(sc.applied_aid_reopened_count, 0) > 0
+               OR COALESCE(bs.balance_source_credit_total, 0)
+                    <> GREATEST(-b.full_account_balance, 0)
                OR COALESCE(al.included_balance, 0)
                     <> COALESCE(uc.unpaid_charge_amount, 0) - COALESCE(bs.balance_source_credit_total, 0)
             THEN 'Y' ELSE 'N' END AS refund_split_blocked_ind,
@@ -1409,7 +1424,7 @@ joined AS (
 parent_plus_calculation AS (
     SELECT
         j.*,
-        /* Stored balances are diagnostic; reconstructed allocation controls ownership. */
+        /* Applied aid and a source total exceeding account credit block ownership. */
         CASE WHEN j.refund_split_blocked_ind = 'Y'
                OR j.missing_transaction_balance_count > 0
                OR j.stored_balance_difference_count > 0
@@ -1570,6 +1585,8 @@ final_review AS (
                 THEN 'MISSING_TRANSACTION_BALANCE' END,
             CASE WHEN d.stored_balance_difference_count > 0
                 THEN 'STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION' END,
+            CASE WHEN d.applied_aid_reopened_count > 0
+                THEN 'APPLIED_AID_REOPENED_BY_RECONSTRUCTION' END,
             CASE WHEN d.invalid_term_count > 0
                 THEN 'UNRECOGNIZED_TERM_CODE' END,
             CASE WHEN d.future_term_count > 0
@@ -1580,8 +1597,6 @@ final_review AS (
                 THEN 'NEGATIVE_NET_SOURCE_REQUIRES_REVIEW' END,
             CASE WHEN d.unpaid_charge_amount > 0
                 THEN 'UNPAID_CHARGES_AFTER_POLICY_ALLOCATION' END,
-            CASE WHEN d.unpaid_charge_amount > 0 AND d.refund_split_blocked_ind = 'N'
-                THEN 'RESTRICTED_PAYMENT_REFUND_WITH_UNPAID_CHARGE' END,
             CASE WHEN d.ledger_residual <> 0
                 THEN 'ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS' END,
             CASE WHEN d.balance_source_credit_total
@@ -1704,8 +1719,7 @@ WHERE (p.cwid_filter IS NULL OR f.cwid = TRIM(p.cwid_filter))
   AND (p.last_name_filter IS NULL
        OR UPPER(f.last_name) LIKE UPPER(p.last_name_filter))
   AND f.total_refund_amount > 0
-  /* An unmatched prior refund alone cannot support a new zero-balance refund. */
-  AND (f.full_account_balance <> 0 OR f.ordinary_unpaid_charge_amount > 0)
+  AND f.full_account_balance < 0
 ORDER BY
     f.last_name,
     f.first_name,

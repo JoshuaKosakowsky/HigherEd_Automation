@@ -121,6 +121,11 @@ The integrated workflows are:
   and format the review in Python; neither approves or issues refunds, and
   existing output workbooks are never overwritten. Resuming batches and
   single-account API validation remain available through the PowerShell launcher.
+  Zero or positive full-account balances produce no refund proposal. Cash may
+  still cover other terms; proposals use only the net account credit. Applied
+  aid reopened by reconstruction or source totals differing from that credit
+  block recipient/delivery assignment and require manual review. See the
+  [refund rules and acceptance examples](../../workflows/refunds/README.md#population-and-refund-amounts).
 - **Textbook Brokers**, using the existing PowerShell and WinSCP integration to
   download pending `finaid_*.csv` / `ia_*.csv` sources from the configured SFTP
   server and transform them into TSPLOAD. The GUI accepts the Banner term and
