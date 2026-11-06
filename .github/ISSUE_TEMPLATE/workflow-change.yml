@@ -1,62 +1,56 @@
-name: General issue
-description: Report a problem, suggest an improvement, or request a change.
+name: "Bug / correction"
+description: "Describe an observed problem and the expected correction."
 body:
   - type: markdown
     attributes:
-      value: |
-        Use this optional form to describe a problem, improvement, or proposed
-        change. Every field is optional, and you can also choose a blank issue.
-        Fill in what you know; list anything undecided under Open questions.
-
-        Use made-up examples and sanitized screenshots. Leave out personal data,
-        credentials, and other sensitive information.
-
-  - type: input
-    id: affected-area
-    attributes:
-      label: Affected area and version
-      description: Identify the relevant feature, process, document, or component. Include a version if useful.
-      placeholder: Area or item involved; version or environment if relevant.
-    validations:
-      required: false
+      value: "Every field is optional. Create a placeholder with what you know and fill it out later. Mark unknowns explicitly. Use made-up examples and sanitized screenshots; omit student records, credentials, and other sensitive information."
 
   - type: textarea
-    id: goal
+    id: area
     attributes:
-      label: Goal
-      description: What problem should this address, or what outcome would you like?
-      placeholder: Describe the outcome and why it matters.
-    validations:
-      required: false
-
-  - type: textarea
-    id: current-behavior
-    attributes:
-      label: Current behavior
-      description: Describe what happens today. For something new, explain the current limitation or need.
-      placeholder: Describe the situation and any steps needed to reproduce it.
-    validations:
-      required: false
-
-  - type: textarea
-    id: expected-behavior
-    attributes:
-      label: Expected behavior
-      description: Describe the intended result. Include specific names, rules, or calculations where they matter.
+      label: "Affected area and version"
       placeholder: |
-        Desired result:
-        Relevant details or conditions:
-        Exceptions or special cases:
+        Workflow or component:
+        App version, environment, or input type if known:
     validations:
       required: false
 
   - type: textarea
-    id: examples
+    id: parent
     attributes:
-      label: Examples
-      description: Give a made-up example or a short before-and-after comparison if helpful.
+      label: "Parent and related work"
       placeholder: |
-        Starting situation or input:
+        Parent issue URL or number, if applicable:
+        Related issues or documentation:
+    validations:
+      required: false
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: "Observed behavior"
+      placeholder: |
+        What happens today?
+        Error text or sanitized screenshot if useful:
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected behavior"
+      placeholder: |
+        Expected result:
+        Confirmed business rule or reference:
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "Steps or example"
+      placeholder: |
+        Steps to reproduce, or synthetic input:
         Current result:
         Expected result:
     validations:
@@ -65,36 +59,23 @@ body:
   - type: textarea
     id: scope
     attributes:
-      label: Scope and behavior to preserve
-      description: Identify what should change and what should stay the same.
+      label: "Scope and unresolved questions"
       placeholder: |
-        Change:
-        Preserve:
-        Outside this issue:
+        What should remain unchanged?
+        Unknowns and evidence still needed:
+        Who can supply or confirm it?
     validations:
       required: false
 
   - type: textarea
-    id: open-questions
+    id: verification
     attributes:
-      label: Open questions and references
-      description: List anything needing clarification and link related issues, changes, or documentation. Distinguish agreed decisions from proposals.
-      placeholder: |
-        Agreed decisions and references:
-        Questions still to resolve:
-    validations:
-      required: false
-
-  - type: textarea
-    id: acceptance-checks
-    attributes:
-      label: Acceptance checks
-      description: These track completion after the issue is created; they are not prerequisites for submitting it. Edit or remove them as needed.
+      label: "Verification and acceptance"
       value: |
-        - [ ] Expected results and open questions are agreed.
-        - [ ] Relevant examples have been checked.
-        - [ ] Relevant checks pass; anything unverified is recorded.
+        - [ ] The reported problem is reproduced or supported by evidence.
+        - [ ] The correction produces the expected result.
+        - [ ] Relevant regression checks pass; limitations are recorded.
         - [ ] Documentation is updated where needed.
-        - [ ] Results are reviewed before closure.
+        - [ ] Result is reviewed before closure.
     validations:
       required: false

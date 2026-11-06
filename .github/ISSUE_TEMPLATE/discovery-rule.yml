@@ -1,0 +1,80 @@
+name: "Discovery / business-rule decision"
+description: "Resolve an unknown rule, source, mapping, or operational decision."
+body:
+  - type: markdown
+    attributes:
+      value: "Every field is optional. Create a placeholder with what you know and fill it out later. Mark unknowns explicitly. Use made-up examples and sanitized screenshots; omit student records, credentials, and other sensitive information."
+
+  - type: textarea
+    id: question
+    attributes:
+      label: "Question and purpose"
+      placeholder: |
+        Decision needed:
+        Why it matters and who is affected:
+    validations:
+      required: false
+
+  - type: textarea
+    id: parent
+    attributes:
+      label: "Parent and related work"
+      placeholder: |
+        Parent issue URL or number:
+        Related rules, documentation, and dependencies:
+    validations:
+      required: false
+
+  - type: textarea
+    id: baseline
+    attributes:
+      label: "Current confirmed behavior"
+      placeholder: |
+        What happens today? Link code, documentation, or confirmed evidence where known.
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "Proposed rule and alternatives"
+      placeholder: |
+        Proposal (not yet agreed):
+        Alternatives:
+        Include/exclude, amounts, date boundaries, and exceptions to resolve:
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "Evidence and decision owner"
+      placeholder: |
+        Evidence still needed and who can supply it:
+        Who needs to confirm the decision?
+        Confirmed decision and reference (only after confirmation):
+    validations:
+      required: false
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: "Examples and expected results"
+      placeholder: |
+        Synthetic ordinary case:
+        Boundary, missing-data, or exception case:
+        Expected result, or mark unresolved:
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "Acceptance checks"
+      value: |
+        - [ ] Open questions have a recorded decision or explicit deferral.
+        - [ ] Relevant examples have been reviewed.
+        - [ ] Confirmed rules and reasoning are recorded in the relevant workflow README.
+        - [ ] Any implementation follow-ups are linked.
+    validations:
+      required: false

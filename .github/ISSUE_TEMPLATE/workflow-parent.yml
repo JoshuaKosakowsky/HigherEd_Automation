@@ -1,0 +1,69 @@
+name: "Workflow / parent"
+description: "Track a workflow or milestone and its focused sub-issues."
+body:
+  - type: markdown
+    attributes:
+      value: "Every field is optional. Create a placeholder with what you know and fill it out later. Mark unknowns explicitly. Use made-up examples and sanitized screenshots; omit student records, credentials, and other sensitive information. Keep detailed decisions and deliverables in child issues; use this parent to track the overall scope."
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: "Purpose and intended users"
+      placeholder: |
+        What outcome matters, who uses it, and why?
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: "Scope and current baseline"
+      placeholder: |
+        In scope:
+        Outside this milestone:
+        Existing workflow, rules, and documentation to preserve:
+    validations:
+      required: false
+
+  - type: textarea
+    id: children
+    attributes:
+      label: "Work breakdown and related issues"
+      placeholder: |
+        Existing or proposed child tasks:
+        Dependencies and related work:
+        After creation, use GitHub sub-issue relationships; listing a link here alone does not create one.
+    validations:
+      required: false
+
+  - type: textarea
+    id: milestone
+    attributes:
+      label: "Milestone and completion"
+      placeholder: |
+        Finite milestone or ongoing workflow umbrella:
+        What will count as complete for this milestone?
+    validations:
+      required: false
+
+  - type: textarea
+    id: unknowns
+    attributes:
+      label: "Open questions and next evidence"
+      placeholder: |
+        Unknowns:
+        Evidence still needed:
+        Who can supply or confirm it?
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "Acceptance checks"
+      value: |
+        - [ ] Milestone scope is agreed.
+        - [ ] Relevant child tasks are linked and reviewed.
+        - [ ] Required validation and documentation are complete; limitations are recorded.
+    validations:
+      required: false
