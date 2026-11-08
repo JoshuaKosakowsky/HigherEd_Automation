@@ -1300,13 +1300,7 @@ class RefundExtractTests(unittest.TestCase):
                     "original_payment_row_count", "deceased_ind", "deceased_date",
                     "confidential_ind", "ambiguous_source_pool_count",
                     "last_ar_activity_date", "account_control_activity_date",
-                    "refund_hold_ind", "fdpl_aidy_code",
                 }
-                if sheet.title != "Refund to Parent":
-                    omitted.update({
-                        "student_refund_amount", "proposed_parent_delivery", "parent_refund_amount",
-                        "plus_to_student_status",
-                    })
                 self.assertEqual(headers, [renamed.get(h, h) for h in WORKBOOK_COLUMNS
                                            if h not in omitted])
                 self.assertFalse(sheet.tables)
@@ -1322,6 +1316,7 @@ class RefundExtractTests(unittest.TestCase):
                        proposed_student_delivery=delivery,
                        proposed_parent_delivery="RFDP" if parent else "NONE",
                        plus_to_student_status="N" if parent else "NOT_APPLICABLE",
+                       refund_hold_ind="N", fdpl_aidy_code="9900",
                        third_party_review_required_ind="N", review_status="READY_FOR_STAFF_REVIEW",
                        last_ar_activity_date=datetime(2099, 8, 31, 12, 30), fdpl_row_count=1)
             row.update(changes)
@@ -1404,19 +1399,29 @@ class RefundExtractTests(unittest.TestCase):
                     self.assertIn("$", sheet.cell(2, headers.index(header) + 1).number_format)
                 self.assertEqual(sheet.cell(2, headers.index("ED Start") + 1).number_format,
                                  "mm/dd/yyyy h:mm AM/PM")
-                self.assertNotIn("refund_hold_ind", headers)
-                self.assertNotIn("fdpl_aidy_code", headers)
+                self.assertIn("refund_hold_ind", headers)
+                self.assertIn("fdpl_aidy_code", headers)
                 self.assertNotIn("plus_to_student_status", headers)
-                self.assertEqual("PPL to Student" in headers, sheet.title == "Refund to Parent")
+                self.assertIn("PPL to Student", headers)
                 for column in ("student_refund_amount", "proposed_parent_delivery", "parent_refund_amount"):
-                    self.assertEqual(column in headers, sheet.title == "Refund to Parent")
+                    self.assertIn(column, headers)
+                source_rows = {row["cwid"]: row for row in rows}
+                for values in sheet.iter_rows(min_row=2, values_only=True):
+                    source = source_rows[values[headers.index("CWID")]]
+                    for column in (
+                        "student_refund_amount", "proposed_parent_delivery", "parent_refund_amount",
+                        "plus_to_student_status", "refund_hold_ind", "fdpl_aidy_code",
+                    ):
+                        header = "PPL to Student" if column == "plus_to_student_status" else column
+                        self.assertEqual(values[headers.index(header)], source[column],
+                                         (sheet.title, source["cwid"], column))
+                for column in ("student_refund_amount", "parent_refund_amount"):
+                    self.assertIn("$", sheet.cell(2, headers.index(column) + 1).number_format)
                 if sheet.title == "Refund to Parent":
                     self.assertEqual(sheet.cell(2, headers.index("PPL to Student") + 1).value, "N")
                     self.assertEqual(sheet.cell(2, headers.index("student_refund_amount") + 1).value, 150)
                     self.assertEqual(sheet.cell(2, headers.index("proposed_parent_delivery") + 1).value, "RFDP")
                     self.assertEqual(sheet.cell(2, headers.index("parent_refund_amount") + 1).value, 75)
-                    for column in ("student_refund_amount", "parent_refund_amount"):
-                        self.assertIn("$", sheet.cell(2, headers.index(column) + 1).number_format)
                 if sheet.title == "Refund Holds":
                     self.assertEqual(sheet.cell(2, headers.index("Active RH") + 1).value, "RH")
                 if sheet.title == "Direct Deposit":

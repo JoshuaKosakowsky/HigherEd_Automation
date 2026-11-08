@@ -168,9 +168,9 @@ tabs; account-level totals repeat as context. **Detail_Code_Note** explains
 account review placement. Retained report columns keep their values and relative
 order after these three fields, which follow the student's name.
 
-All tabs use the following displayed-header mapping. Refund to Parent also
-retains the student/parent context fields listed below; other retained columns
-keep their original order and names.
+All tabs use the following displayed-header mapping and retain the student/parent
+context fields listed below. Other retained columns keep their original order
+and names.
 
 | Original field | Displayed header |
 | --- | --- |
@@ -186,16 +186,17 @@ keep their original order and names.
 | `raw_delinquency_code` | `Active RH` |
 | `active_ed_ind` | `Active ED` |
 | `ed_activity_date` | `ED Start` |
-| `plus_to_student_status` (Refund to Parent only) | `PPL to Student` |
+| `plus_to_student_status` | `PPL to Student` |
 
 Every tab omits `original_payment_row_count`, `deceased_ind`, `deceased_date`,
 `confidential_ind`, `ambiguous_source_pool_count`, `last_ar_activity_date`, and
-`account_control_activity_date`, plus `refund_hold_ind` and `fdpl_aidy_code`.
-Only **Refund to Parent** retains `student_refund_amount`,
-`proposed_parent_delivery`, `parent_refund_amount`, and `plus_to_student_status`
-(displayed as **PPL to Student**). On that tab,
-`parent_refund_amount` repeats the parent portion in **Detail_Code_Refund_Amt**
-as account context. These omitted fields remain available internally.
+`account_control_activity_date`. These omitted fields remain available internally.
+Every tab includes `student_refund_amount`, `proposed_parent_delivery`,
+`parent_refund_amount`, `plus_to_student_status` (displayed as **PPL to Student**),
+`refund_hold_ind`, and `fdpl_aidy_code` as account context. These fields repeat
+when an account appears on multiple tabs; they are not the tab's refund portion.
+On **Refund to Parent**, `parent_refund_amount` repeats the parent portion in
+**Detail_Code_Refund_Amt**.
 Sum **Detail_Code_Refund_Amt** when combining portions across tabs;
 **Total_Owed_to_Student** remains the account-level total.
 

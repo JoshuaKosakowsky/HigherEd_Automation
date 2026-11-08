@@ -19,10 +19,10 @@ delivery calculations locally and creates an Excel workbook under
 they contain student-account data.
 
 The workbook separates refund methods and review queues into plain worksheets,
-without Excel tables. Tabs share header names; only Refund to Parent retains
-the student/parent amount and parent-delivery context columns, plus
-`plus_to_student_status` displayed as **PPL to Student**. All tabs omit
-`refund_hold_ind` and `fdpl_aidy_code`, and display `raw_delinquency_code`,
+without Excel tables. All tabs retain the student/parent amount and parent-delivery
+context columns, `plus_to_student_status` displayed as **PPL to Student**,
+`refund_hold_ind`, and `fdpl_aidy_code`. These account-level fields repeat across
+tabs when a refund is split. All tabs display `raw_delinquency_code`,
 `active_ed_ind`, and `ed_activity_date` as **Active RH**, **Active ED**, and
 **ED Start**. These are header changes; the underlying values are preserved.
 The workbook displays `ARFD (System)` as `ARFD (Direct Deposit)` in delivery

@@ -35,7 +35,7 @@ REFUND_TAB_COLORS = {
 WORKBOOK_COLUMNS = REPORT_COLUMNS[:3] + [
     "tab_delivery", "tab_refund_amount", "tab_review_note",
 ] + REPORT_COLUMNS[3:]
-# Display changes and tab-specific omissions leave allocation fields intact.
+# Display changes leave allocation fields intact.
 WORKBOOK_HEADERS = {
     "cwid": "CWID",
     "last_name": "Last_Name",
@@ -55,11 +55,6 @@ WORKBOOK_OMITTED_COLUMNS = {
     "original_payment_row_count", "deceased_ind", "deceased_date",
     "confidential_ind", "ambiguous_source_pool_count", "last_ar_activity_date",
     "account_control_activity_date",
-    "refund_hold_ind", "fdpl_aidy_code",
-}
-WORKBOOK_PARENT_ONLY_COLUMNS = {
-    "student_refund_amount", "proposed_parent_delivery", "parent_refund_amount",
-    "plus_to_student_status",
 }
 DELIVERY_SHEETS = {
     "AFRD (Transact)": "ACH or CC Refunds",
@@ -246,7 +241,6 @@ def export_refund_report(
         columns = [
             column for column in WORKBOOK_COLUMNS
             if column not in WORKBOOK_OMITTED_COLUMNS
-            and (sheet == "Refund to Parent" or column not in WORKBOOK_PARENT_ONLY_COLUMNS)
         ]
         header_names = WORKBOOK_HEADERS
         headers = [header_names.get(column, column) for column in columns]
