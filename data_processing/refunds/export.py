@@ -50,11 +50,22 @@ WORKBOOK_HEADERS = {
     "active_ed_ind": "Active ED",
     "ed_activity_date": "ED Start",
     "plus_to_student_status": "PPL to Student",
+    "sponsor_names": "Sponsor(s)",
+    "sponsor_ids": "Sponsor ID(s)",
+    "contract_numbers": "Contract Number(s)",
+    "third_party_current_term": "Current Term",
+    "current_term_tppy_total": "TPPY Current Term Total",
+    "current_term_z0le_total": "Z0LE Current Term Total",
+    "z0le_activity_last_7_days": "Z0LE Activity_Last 7 Days",
 }
 WORKBOOK_OMITTED_COLUMNS = {
     "original_payment_row_count", "deceased_ind", "deceased_date",
     "confidential_ind", "ambiguous_source_pool_count", "last_ar_activity_date",
     "account_control_activity_date",
+}
+THIRD_PARTY_COLUMNS = {
+    "sponsor_names", "sponsor_ids", "contract_numbers", "third_party_current_term",
+    "current_term_tppy_total", "current_term_z0le_total", "z0le_activity_last_7_days",
 }
 DELIVERY_SHEETS = {
     "AFRD (Transact)": "ACH or CC Refunds",
@@ -92,6 +103,8 @@ def _amount(value: object) -> Decimal | None:
 def _workbook_value(column: str, value: object) -> object:
     if pd.isna(value):
         return None
+    if column == "z0le_activity_last_7_days":
+        return {"Y": "Yes", "N": "No"}.get(value, value)
     if column in {"tab_delivery", "proposed_student_delivery"} and isinstance(value, str):
         return value.replace("ARFD (System)", "ARFD (Direct Deposit)")
     return value
@@ -186,6 +199,8 @@ CURRENCY_COLUMNS = {
     "total_refund_amount",
     "student_refund_amount",
     "parent_refund_amount",
+    "current_term_tppy_total",
+    "current_term_z0le_total",
     "target_term_fdpl_amount",
     "unused_fdpl_amount",
     "unused_non_fdpl_amount",
@@ -241,6 +256,7 @@ def export_refund_report(
         columns = [
             column for column in WORKBOOK_COLUMNS
             if column not in WORKBOOK_OMITTED_COLUMNS
+            and (sheet == "Third Party Reviews" or column not in THIRD_PARTY_COLUMNS)
         ]
         header_names = WORKBOOK_HEADERS
         headers = [header_names.get(column, column) for column in columns]

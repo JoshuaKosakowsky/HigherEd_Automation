@@ -6,7 +6,7 @@ Parent PLUS ownership by aid year, and source-specific delivery. No database
 functions, temp tables, schema changes, or Python execution are required.
 
 CURRENT POLICY
-- Candidates: target-term activity OR HOMP/TPPY effective in the past 32 days OR a
+- Candidates: target-term activity OR any TPPY history OR HOMP effective in the past 32 days OR a
   stored payment credit from the whole term containing run_date minus two years
   through the target term. Validation CWID/name filters bypass activity criteria.
 - Zero and positive full-account balances are excluded. The proposal equals the
@@ -44,6 +44,7 @@ CURRENT POLICY
   workbook review route. Other review reasons remain visible for later handling.
 - Unused target-term C529/Z0LE sources and surviving TPPY payments in the target
   term or past 32 days flag Possible Third Party refund,
+  plus any TPPY activity in a credit term, even fully reversed,
   along with existing TPS/legacy account controls. Third-party delivery is blocked.
 - Surviving HOMP charges in the target term OR effective 0..32 days ago trigger
   Mines Park Charge - Review, including paid charges in settled history.
@@ -165,7 +166,7 @@ legacy_third_party_cwids AS (
 
 /*
 Select the daily population before loading history: target-term activity, recent
-HOMP/TPPY activity, or a stored payment credit in the last two years of whole terms.
+HOMP activity, any TPPY history, or a stored payment credit in the last two years of whole terms.
 The lookback selects accounts, never cuts their history. Validation filters
 override activity requirements, but known positive account balances stay out.
 */
@@ -203,14 +204,9 @@ report_scope_pidms AS MATERIALIZED (
 
     SELECT t.tbraccd_pidm
     FROM taismgr.tbraccd t
-    JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
     CROSS JOIN params p
     WHERE p.cwid_filter IS NULL AND p.last_name_filter IS NULL
       AND t.tbraccd_detail_code = 'TPPY'
-      AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-      AND t.tbraccd_amount > 0
-      AND t.tbraccd_effective_date >= p.run_date - INTERVAL '32 days'
-      AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
 
     UNION
 
@@ -450,6 +446,16 @@ recent_tppy_review AS MATERIALIZED (
     WHERE LEAST(x.raw_amount, GREATEST(x.group_net - x.prior_positive, 0)) > 0
       AND (x.term_code = p.target_term OR p.run_date - x.effective_date BETWEEN 0 AND 32)
     GROUP BY x.pidm
+),
+
+/* Any TPPY history with a same-term credit is reviewed, even fully reversed. */
+tppy_credit_term_review AS MATERIALIZED (
+    SELECT pidm
+    FROM candidate_transactions
+    GROUP BY pidm, term_code
+    HAVING BOOL_OR(detail_code = 'TPPY')
+       AND (ROUND(SUM(accounting_amount), 2) < 0
+            OR BOOL_OR(amount_missing_ind = 1 OR accounting_amount IS NULL))
 ),
 
 /* Account-level summaries are materialized once for the same join-plan reason. */
@@ -1165,6 +1171,11 @@ third_party_source_codes AS (
 
     SELECT r.pidm, 'TPPY' AS detail_code
     FROM recent_tppy_review r
+
+    UNION
+
+    SELECT r.pidm, 'TPPY' AS detail_code
+    FROM tppy_credit_term_review r
 ),
 third_party_sources AS MATERIALIZED (
     SELECT pidm, STRING_AGG(DISTINCT detail_code, ', ' ORDER BY detail_code) AS detail_codes

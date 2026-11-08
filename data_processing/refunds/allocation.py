@@ -9,7 +9,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-from .terms import RefundParameters, fiscal_year_start
+from .terms import RefundParameters, derive_target_term, fiscal_year_start
 from shared.cancellation import CancellationToken
 from shared.progress import ProgressReporter
 
@@ -32,6 +32,7 @@ TRANSACTION_COLUMNS = {
     "stored_balance",
     "effective_date",
     "activity_date",
+    "feed_date",
     "detail_desc",
     "type_ind",
     "priority",
@@ -58,6 +59,9 @@ CONTEXT_COLUMNS = {
     "plus_auth_aidy_code",
     "plus_to_student",
     "plus_auth_activity_date",
+    "sponsor_names",
+    "sponsor_ids",
+    "contract_numbers",
 }
 
 REPORT_COLUMNS = [
@@ -110,6 +114,13 @@ REPORT_COLUMNS = [
     "account_control_activity_date",
     "ed_activity_date",
     "plus_auth_activity_date",
+    "sponsor_names",
+    "sponsor_ids",
+    "contract_numbers",
+    "third_party_current_term",
+    "current_term_tppy_total",
+    "current_term_z0le_total",
+    "z0le_activity_last_7_days",
 ]
 
 
@@ -237,7 +248,10 @@ def _normalize_columns(frame: pd.DataFrame) -> pd.DataFrame:
 def _validate_columns(frame: pd.DataFrame, required: set[str], label: str) -> None:
     missing = sorted(required - set(frame.columns))
     if missing:
-        raise ValueError(f"{label} extract is missing columns: {', '.join(missing)}")
+        raise ValueError(
+            f"{label} extract is missing columns (rerun the current refund export SQL): "
+            f"{', '.join(missing)}"
+        )
 
 
 def _normalize_transaction(row: dict[str, Any], source_id: int) -> dict[str, Any]:
@@ -262,6 +276,7 @@ def _normalize_transaction(row: dict[str, Any], source_id: int) -> dict[str, Any
         "stored_balance": _decimal(row["stored_balance"], missing_as_zero=False),
         "effective_date": _date(row["effective_date"]),
         "activity_date": _datetime(row["activity_date"]),
+        "feed_date": _date(row["feed_date"]),
         "detail_desc": _text(row["detail_desc"]) or "[Description unavailable]",
         "type_ind": type_ind,
         "priority_code": priority,
@@ -587,6 +602,49 @@ def _mines_park_review(transactions: list[dict[str, Any]], parameters: RefundPar
             ):
                 return True
     return False
+
+
+def _tppy_credit_term_review(transactions: list[dict[str, Any]]) -> bool:
+    """Any TPPY history requires review when that same term has a net credit.
+
+    A reversal does not remove the need to review sponsor ownership. Use full
+    history, not allocation remnants or the selected term's payment sources.
+    """
+    tppy_terms = {row["term_code"] for row in transactions if row["detail_code"] == "TPPY"}
+    balances: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    unknown_terms: set[str] = set()
+    for row in transactions:
+        if row["accounting_amount"] is None or row["amount_missing"]:
+            unknown_terms.add(row["term_code"])
+        else:
+            balances[row["term_code"]] += row["accounting_amount"]
+    return any(term in unknown_terms or _money(balances[term]) < ZERO for term in tppy_terms)
+
+
+def _third_party_details(
+    transactions: list[dict[str, Any]], context_rows: list[dict[str, Any]],
+    parameters: RefundParameters,
+) -> dict[str, object]:
+    current_term = derive_target_term(parameters.run_date)
+    current_rows = [row for row in transactions if row["term_code"] == current_term]
+    first = context_rows[0] if context_rows else {}
+    totals: dict[str, Decimal | None] = {}
+    for code in ("TPPY", "Z0LE"):
+        rows = [row for row in current_rows if row["detail_code"] == code]
+        totals[code] = None if any(row["amount_missing"] for row in rows) else _money(
+            sum((row["raw_amount"] for row in rows), ZERO))
+    return {
+        **{column: _text(first.get(column)) for column in
+           ("sponsor_names", "sponsor_ids", "contract_numbers")},
+        "third_party_current_term": current_term,
+        "current_term_tppy_total": totals["TPPY"],
+        "current_term_z0le_total": totals["Z0LE"],
+        "z0le_activity_last_7_days": "Y" if any(
+            row["detail_code"] == "Z0LE" and row["feed_date"] is not None
+            and 0 <= (parameters.run_date - row["feed_date"]).days <= 6
+            for row in transactions
+        ) else "N",
+    }
 
 
 def _recent_tppy_review(
@@ -946,7 +1004,7 @@ def _allocate_account(
         and source["detail_code"] in THIRD_PARTY_PAYMENT_CODES
     })
     recent_tppy_review = _recent_tppy_review(transactions, parameters)
-    if recent_tppy_review and "TPPY" not in third_party_codes:
+    if (recent_tppy_review or _tppy_credit_term_review(transactions)) and "TPPY" not in third_party_codes:
         third_party_codes.append("TPPY")
     third_party_matches.extend(third_party_codes)
     third_party = bool(third_party_matches)
@@ -1057,6 +1115,7 @@ def _allocate_account(
         review_status = "READY_FOR_STAFF_REVIEW"
 
     result = {
+        **_third_party_details(transactions, context_rows, parameters),
         "cwid": account["cwid"],
         "last_name": account["last_name"],
         "first_name": account["first_name"],

@@ -30,6 +30,23 @@ cells. For mixed refunds, use `Detail_Code_Refund_Amt` for each tab's portion; a
 repeat as context. See the
 [workbook tab guide](../../../workflows/refunds/README.md#workbook-tabs).
 
+Starting with 0.27.0, the flat transaction extract includes TBRACCD_FEED_DATE;
+the context extract aggregates TBBCSTU sponsor attachments and current SPRIDEN
+identity before joining PLUS authorizations. **Regenerate both manual downloads**
+after upgrading. Old downloads and format-version-4 API caches cannot supply the
+new report context and must be refreshed. API caches now use format version 5.
+
+Only Third Party Reviews adds sponsor names, IDs and contract numbers, the
+calendar-derived current term, signed TPPY/Z0LE current-term transaction totals,
+and the inclusive seven-calendar-day Z0LE Feed Date flag. Totals include reversals
+and are not unapplied balances. Sponsor context includes current-term attachments
+and attachments in terms with third-party activity. Lists preserve name/ID/contract
+correspondence without multiplying financial rows. See the
+[third-party rules and synthetic cases](../../../workflows/refunds/README.md#third-party-review-details-0270)
+and [owner's requested change](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6691269422).
+The standalone `Refunds.sql` shares review routing but keeps its existing output;
+use the Python workflow for these additional workbook columns.
+
 Rename the files `refund_transactions.xlsx` and `refund_context.xlsx`, then put
 them in `data\refunds\input`. From the repository root on the work laptop, run:
 
@@ -60,7 +77,7 @@ target term and total expected row count; Python rejects mismatched terms or a
 truncated download.
 
 Candidate selection is shared in `refund_scope.sql`: target-term activity,
-qualifying HOMP charges, qualifying TPPY payments, or a negative stored payment
+qualifying HOMP charges, any TPPY history, or a negative stored payment
 balance within two years of terms. Known positive full-account balances are
 excluded. Selected accounts retain all transaction history; the two-year
 condition is not a replay cutoff.
@@ -151,8 +168,8 @@ A fiscal year starts with Fall and ends with Summer: FY2026 contains `202680`,
 Internal allocation keeps every term and charge priority separate and processes
 the oldest charges first.
 
-Candidates have target-term activity, a qualifying HOMP charge, a qualifying
-TPPY payment, or a negative stored payment balance within the last two years of
+Candidates have target-term activity, a qualifying HOMP charge, any
+TPPY history, or a negative stored payment balance within the last two years of
 whole terms through the target term. The two-year condition selects accounts;
 their complete history is retained. There is no five-year history cutoff. A
 CWID or last-name validation filter bypasses the activity conditions but still
@@ -241,7 +258,9 @@ CHCK clearing information.
 Unused target-term C529/Z0LE sources add `Possible Third Party refund`. A
 surviving TPPY payment adds the same review when it is in the target term or was
 effective 0–32 days ago in any term, including when the TPPY payment has already
-been applied to charges. Fully reversed TPPY payments do not qualify. These
+been applied to charges. Any TPPY activity in a term with a net credit also
+requires review, including fully reversed activity and historical terms; unknown
+financial data in a TPPY term requires review rather than assuming no credit. These
 conditions suppress delivery with `THIRD_PARTY_REVIEW`; existing TPS-prefix and
 legacy account flags remain effective. A surviving HOMP charge in the target
 term, or effective 0–32 days ago in any term, adds `Mines Park Charge - Review`

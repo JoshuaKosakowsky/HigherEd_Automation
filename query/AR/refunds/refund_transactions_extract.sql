@@ -20,6 +20,7 @@ SELECT
     t.tbraccd_balance AS stored_balance,
     t.tbraccd_effective_date AS effective_date,
     t.tbraccd_activity_date AS activity_date,
+    t.tbraccd_feed_date AS feed_date,
     COALESCE(d.tbbdetc_desc, '[Description unavailable]') AS detail_desc,
     UPPER(TRIM(d.tbbdetc_type_ind)) AS type_ind,
     TRIM(CAST(d.tbbdetc_priority AS text)) AS priority,
