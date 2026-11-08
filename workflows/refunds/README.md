@@ -41,7 +41,7 @@ Financial calculations use `Decimal` cents rather than binary floating point.
 ### Population and refund amounts
 
 The two exports share one candidate definition: target-term activity, a
-qualifying HOMP charge, a qualifying TPPY payment, **or** a negative stored
+qualifying HOMP charge, any TPPY history, **or** a negative stored
 payment balance in the last two years of terms through the target term. The
 lookback starts with the whole term containing `run_date - 2 years` (September
 7, 2026 starts at `202480`). It selects accounts, not transactions: selected
@@ -124,8 +124,10 @@ account to Refund Holds and retains the CHCK clearing note.
 - Surviving target-term refund sources `C529` or `Z0LE` add `Possible Third Party
   refund`. A surviving TPPY payment adds the same review when it is in the target
   term or effective 0–32 days ago in any term. TPPY still qualifies after it has
-  been applied to charges, but not after it is fully reversed. The matched code
-  remains visible in `third_party_match_source`, and automatic delivery is
+  been applied to charges. Independently, **any TPPY activity in a term with a
+  net credit requires review, even if fully reversed**, regardless of transaction
+  age or selected target term. Unknown financial data in a TPPY term also requires
+  review. The matched code remains visible in `third_party_match_source`, and automatic delivery is
   suppressed with `THIRD_PARTY_REVIEW`. Existing third-party account flags remain
   effective.
 - A surviving positive HOMP charge in the target term, or effective 0–32 days
@@ -135,6 +137,63 @@ account to Refund Holds and retains the CHCK clearing note.
 
 These implement the institution's supplied allocation policies; the workbook
 remains a review proposal, not approval to disburse funds.
+
+### Third-party review details (0.27.0)
+
+The confirmed review rule and requested context are tracked in
+[issue #29, sponsor review comment](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6691269422).
+This extends review routing; it does not change payment allocation or authorize
+returning sponsor funds to the student.
+
+Only **Third Party Reviews** adds these columns:
+
+| Header | Meaning |
+| --- | --- |
+| Sponsor(s) | Sponsor name from current SPRIDEN identity |
+| Sponsor ID(s) | Sponsor ID from current SPRIDEN identity |
+| Contract Number(s) | TBBCSTU contract number, retained as text |
+| Current Term | Calendar-derived term using the run date and existing Mines term boundaries |
+| TPPY Current Term Total | Signed TBRACCD amounts for TPPY in that current term, including reversals |
+| Z0LE Current Term Total | Signed TBRACCD amounts for Z0LE in that current term, including reversals |
+| Z0LE Activity_Last 7 Days | Yes for any Z0LE activity whose Feed Date is today or one of the preceding six calendar days; otherwise No |
+
+Totals are transaction totals, not remaining unapplied balances. The seven-day
+flag checks all extracted terms and includes reversal activity; it does not use
+Effective Date or Activity Date. Missing amounts leave the affected total blank
+and retain existing data-quality review reasons.
+
+Sponsor attachments cover the calendar-derived current term and terms with
+TPPY, Z0LE, or C529 activity. Lists are aligned by sponsor ID, sponsor PIDM and
+contract number; a sponsor repeats when it has multiple contracts. Duplicate
+attachments are removed before aggregation and PLUS authorization joins, without
+multiplying transactions. Missing sponsor identity is labeled unavailable;
+missing attachments remain blank. Attachment deletion/authorization flags are
+not inferred as ownership decisions: this is context for manual review.
+
+Synthetic acceptance cases:
+
+- TPPY +100 and -100, plus a separate 50 payment in the same term: review the
+  50 account credit even though TPPY nets to zero, including historical terms.
+- Fully reversed TPPY in a zero-balance old term, with credit only in another
+  term: the new same-term rule does not trigger; existing review rules still apply.
+- Current-term TPPY +100/-20 and Z0LE +50/-10: show 80 and 40, regardless of
+  an overridden target term. Duplicate PLUS rows do not change either total.
+- Z0LE Feed Date six days before the run: Yes; seven days before or tomorrow: No.
+- RH plus a third-party review condition: the entire refund remains on Refund
+  Holds, preserving the third-party reason. Third Party Reviews stays empty.
+
+**Refresh both manual downloads or start a new API extraction after upgrading.**
+Old downloads lack Feed Date and sponsor columns and are rejected with a request
+to rerun the current export SQL. Old format-version-4 caches cannot resume as
+format version 5. Run `validate_refund_schema.sql` to confirm TBBCSTU fields and
+TBRACCD_FEED_DATE in the actual Insights schema, then compare representative
+sponsors/contracts against TSACONT before operational use. Candidate selection
+now includes historical TPPY accounts; production-size extraction timing needs
+local verification.
+
+The standalone `Refunds.sql` retains its existing output columns and shares the
+new TPPY review condition. The sponsor-detail columns are produced by the Python
+workflow from the flat extracts, not by that standalone allocation report.
 
 ### Workbook tabs
 

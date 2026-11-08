@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import json
 import sqlite3
 from unittest.mock import patch
 
@@ -33,7 +34,7 @@ from data_processing.refunds.terms import derive_target_term, fiscal_year_start,
 TRANSACTION_COLUMNS = [
     "pidm", "term_code", "aidy_code", "tran_number", "detail_code", "amount",
     "stored_balance", "effective_date", "activity_date", "detail_desc", "type_ind",
-    "priority", "category_code", "title_iv_ind",
+    "priority", "category_code", "title_iv_ind", "feed_date",
 ]
 CONTEXT_COLUMNS = [
     "pidm", "cwid", "last_name", "first_name", "deceased_ind", "deceased_date",
@@ -41,6 +42,7 @@ CONTEXT_COLUMNS = [
     "raw_delinquency_code", "raw_refund_account_ind", "account_control_activity_date",
     "active_ed_row_count", "ed_activity_date", "plus_auth_row_ind", "plus_auth_aidy_code",
     "plus_to_student", "plus_auth_activity_date",
+    "sponsor_names", "sponsor_ids", "contract_numbers",
 ]
 
 
@@ -58,6 +60,7 @@ class Transaction:
     category: str = "CSH"
     title_iv: str = "N"
     tran_number: int | None = None
+    feed_date: str | None = None
 
 
 class RefundAllocationTests(unittest.TestCase):
@@ -71,6 +74,7 @@ class RefundAllocationTests(unittest.TestCase):
         target_term: str = "209980",
         previous_term_override: str | None = None,
         run_date: date = date(2099, 8, 31),
+        sponsor_context: dict[str, str] | None = None,
         expected_rows: int = 1,
         progress_reporter: ProgressReporter | None = None,
     ) -> dict[str, object]:
@@ -90,7 +94,7 @@ class RefundAllocationTests(unittest.TestCase):
                 transaction.detail_code, transaction.amount, transaction.stored_balance,
                 transaction.effective_date, transaction.activity_date, "Synthetic source",
                 transaction.type_ind, transaction.priority, transaction.category,
-                transaction.title_iv,
+                transaction.title_iv, transaction.feed_date,
             ])
 
         authorization_values = {"9900": "N"} if authorizations is None else authorizations
@@ -111,9 +115,13 @@ class RefundAllocationTests(unittest.TestCase):
                 "2099-08-31", 1 if active_ed else 0,
                 "2099-08-31" if active_ed else None, 0, None, None, None,
             ])
+        context_rows = [row + [None, None, None] for row in context_rows]
+        context_frame = pd.DataFrame(context_rows, columns=CONTEXT_COLUMNS)
+        for key, value in (sponsor_context or {}).items():
+            context_frame[key] = value
         result = allocate_refunds(
             pd.DataFrame(transaction_rows, columns=TRANSACTION_COLUMNS),
-            pd.DataFrame(context_rows, columns=CONTEXT_COLUMNS),
+            context_frame,
             RefundParameters(target_term, run_date, previous_term_override),
             progress_reporter=progress_reporter,
         )
@@ -496,6 +504,95 @@ class RefundAllocationTests(unittest.TestCase):
                         self.assertEqual(row["review_status"], "MANUAL_REVIEW")
                         self.assertIsNotNone(row["student_refund_amount"])
 
+    def test_tppy_review_includes_reversals_any_type_and_historical_credit_terms(self) -> None:
+        for term in ("209980", "208080"):
+            for type_ind, first, reversal in (("P", 100, -100), ("C", 100, -100), ("P", 0, 0)):
+                with self.subTest(term=term, type_ind=type_ind, first=first):
+                    row = self.report([
+                        Transaction("TPPY", type_ind, "800", first, term=term,
+                                    effective_date="2080-08-01"),
+                        Transaction("TPPY", type_ind, "800", reversal, term=term),
+                        Transaction("FREE", "P", "000", 50, -50, term=term),
+                    ])
+                    self.assertEqual(row["third_party_review_required_ind"], "Y")
+                    self.assertEqual(row["proposed_student_delivery"], "THIRD_PARTY_REVIEW")
+                    self.assertEqual(row["total_refund_amount"], Decimal("50.00"))
+
+    def test_reversed_tppy_without_same_term_credit_does_not_trigger_new_rule(self) -> None:
+        row = self.report([
+            Transaction("TPPY", "P", "800", 100, term="208080"),
+            Transaction("TPPY", "P", "800", -100, term="208080"),
+            Transaction("FREE", "P", "000", 50, -50),
+        ])
+        self.assertEqual(row["third_party_review_required_ind"], "N")
+
+    def test_third_party_details_use_calendar_term_totals_and_preserve_sponsor_context(self) -> None:
+        row = self.report([
+            Transaction("TPPY", "P", "800", 100, -100),
+            Transaction("TPPY", "P", "800", -20, 20),
+            Transaction("Z0LE", "P", "000", 50, -50),
+            Transaction("Z0LE", "P", "000", -10, 10),
+            Transaction("TPPY", "P", "800", 999, -999, term="209910"),
+        ], target_term="209910", authorizations={"9900": ["N", "N"]}, sponsor_context={
+            "sponsor_names": "Synthetic One | Synthetic Two",
+            "sponsor_ids": "TPS-TEST-1 | TPS-TEST-2", "contract_numbers": "0001 | 0002",
+        })
+        self.assertEqual(row["third_party_current_term"], "209980")
+        self.assertEqual(row["current_term_tppy_total"], Decimal("80.00"))
+        self.assertEqual(row["current_term_z0le_total"], Decimal("40.00"))
+        self.assertEqual(row["sponsor_ids"], "TPS-TEST-1 | TPS-TEST-2")
+        self.assertEqual(row["contract_numbers"], "0001 | 0002")
+
+    def test_missing_current_term_amount_leaves_total_unknown(self) -> None:
+        row = self.report([
+            Transaction("TPPY", "P", "800", None, None),
+            Transaction("FREE", "P", "000", 50, -50),
+        ])
+        self.assertIsNone(row["current_term_tppy_total"])
+        self.assertEqual(row["third_party_review_required_ind"], "Y")
+        self.assertIn("MISSING_TRANSACTION_AMOUNT", row["review_reasons"])
+
+    def test_z0le_recent_activity_uses_feed_date_including_reversals(self) -> None:
+        run_date = date(2099, 8, 31)
+        for age, expected in ((0, "Y"), (6, "Y"), (7, "N"), (-1, "N"), (None, "N")):
+            with self.subTest(age=age):
+                feed = (run_date - timedelta(days=age)).isoformat() if age is not None else None
+                row = self.report([
+                    Transaction("Z0LE", "P", "000", 25, term="209910"),
+                    Transaction("Z0LE", "P", "000", -25, term="209910",
+                                feed_date=feed, effective_date="2080-01-01"),
+                    Transaction("FREE", "P", "000", 50, -50),
+                ], run_date=run_date)
+                self.assertEqual(row["z0le_activity_last_7_days"], expected)
+
+    def test_third_party_workbook_details_and_hold_precedence(self) -> None:
+        for held in (False, True):
+            row = self.report([
+                Transaction("TPPY", "P", "800", 100, -100, feed_date="2099-08-31"),
+                Transaction("Z0LE", "P", "000", 25, -25, feed_date="2099-08-25"),
+            ], refund_hold=held, sponsor_context={
+                "sponsor_names": "Synthetic Sponsor", "sponsor_ids": "TPS-TEST", "contract_numbers": "0001",
+            })
+            with self.subTest(held=held), TemporaryDirectory() as directory:
+                output = Path(directory) / "refunds.xlsx"
+                export_refund_report(pd.DataFrame([row], columns=REPORT_COLUMNS), output)
+                workbook = load_workbook(output)
+                third = workbook["Third Party Reviews"]
+                headers = [cell.value for cell in third[1]]
+                self.assertEqual(third.max_row, 1 if held else 2)
+                self.assertEqual(workbook["Refund Holds"].max_row, 2 if held else 1)
+                for sheet in workbook:
+                    self.assertEqual("Sponsor(s)" in [cell.value for cell in sheet[1]],
+                                     sheet.title == "Third Party Reviews")
+                if not held:
+                    self.assertEqual(third.cell(2, headers.index("Sponsor ID(s)") + 1).value, "TPS-TEST")
+                    self.assertEqual(third.cell(2, headers.index("Contract Number(s)") + 1).value, "0001")
+                    self.assertEqual(third.cell(2, headers.index("Z0LE Activity_Last 7 Days") + 1).value, "Yes")
+                    self.assertEqual(third.cell(2, headers.index("TPPY Current Term Total") + 1).value, 100)
+                    for name in ("TPPY Current Term Total", "Z0LE Current Term Total"):
+                        self.assertIn("$", third.cell(2, headers.index(name) + 1).number_format)
+                workbook.close()
+
     def test_tppy_review_uses_surviving_payment_age_even_when_applied(self) -> None:
         run_date = date(2099, 8, 31)
         for term, age, reversal, flag in (
@@ -506,7 +603,7 @@ class RefundAllocationTests(unittest.TestCase):
             ("209955", -1, 0, False),
             ("209955", None, 0, False),
             ("209980", None, 0, True),
-            ("209980", 0, -100, False),
+            ("209980", 0, -100, True),
             ("209955", 32, -50, True),
         ):
             with self.subTest(term=term, age=age, reversal=reversal):
@@ -1151,6 +1248,36 @@ class RefundCancellationTests(unittest.TestCase):
 
 
 class RefundExtractTests(unittest.TestCase):
+    def test_older_download_schema_requires_refresh(self) -> None:
+        transactions = pd.DataFrame(columns=TRANSACTION_COLUMNS)
+        context = pd.DataFrame(columns=CONTEXT_COLUMNS)
+        parameters = RefundParameters("209980", date(2099, 8, 31))
+        with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*feed_date"):
+            allocate_refunds(transactions.drop(columns="feed_date"), context, parameters)
+        with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*sponsor_ids"):
+            allocate_refunds(transactions, context.drop(columns="sponsor_ids"), parameters)
+
+    def test_old_cache_format_cannot_resume_without_new_source_fields(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = ExtractSettings("209980", 1, root, run_date=date(2099, 8, 31), resume=True)
+            (root / "extract_manifest.json").write_text(json.dumps({
+                "format_version": 4, "target_term": "209980", "batch_count": 1,
+                "cwid": None, "run_date": "2099-08-31",
+            }))
+            with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                read_refund_extracts(settings)
+
+    def test_cached_sponsor_identifiers_preserve_leading_zeroes(self) -> None:
+        from data_processing.refunds.extract import _read_cached
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "context.csv"
+            path.write_text("sponsor_names,sponsor_ids,contract_numbers\nSynthetic,00123,0001\n")
+            row = _read_cached(path).iloc[0]
+            self.assertEqual(row.sponsor_ids, "00123")
+            self.assertEqual(row.contract_numbers, "0001")
+
     def test_ed_hold_end_date_cutoff_matches_all_sql_paths(self) -> None:
         root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
         predicate = "CAST(h.sprhold_to_date AS date) >= DATE '2099-12-31'"
@@ -1301,6 +1428,16 @@ class RefundExtractTests(unittest.TestCase):
                     "confidential_ind", "ambiguous_source_pool_count",
                     "last_ar_activity_date", "account_control_activity_date",
                 }
+                third_party_headers = {
+                    "sponsor_names": "Sponsor(s)", "sponsor_ids": "Sponsor ID(s)",
+                    "contract_numbers": "Contract Number(s)", "third_party_current_term": "Current Term",
+                    "current_term_tppy_total": "TPPY Current Term Total",
+                    "current_term_z0le_total": "Z0LE Current Term Total",
+                    "z0le_activity_last_7_days": "Z0LE Activity_Last 7 Days",
+                }
+                renamed.update(third_party_headers)
+                if sheet.title != "Third Party Reviews":
+                    omitted.update(third_party_headers)
                 self.assertEqual(headers, [renamed.get(h, h) for h in WORKBOOK_COLUMNS
                                            if h not in omitted])
                 self.assertFalse(sheet.tables)

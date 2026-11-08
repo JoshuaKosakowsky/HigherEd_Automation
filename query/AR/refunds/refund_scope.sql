@@ -10,17 +10,22 @@ scope_dates AS (
     SELECT *, CAST(run_date - INTERVAL '2 years' AS date) AS lookback_date
     FROM run_settings
 ),
-params AS (
-    SELECT
-        run_date,
-        CAST(COALESCE(target_term_override, CONCAT(
+current_terms AS (
+    SELECT *, CAST(CONCAT(
             CAST(EXTRACT(YEAR FROM run_date) AS integer),
             CASE
                 WHEN run_date <= MAKE_DATE(CAST(EXTRACT(YEAR FROM run_date) AS integer), 5, 15) THEN '10'
                 WHEN run_date <= MAKE_DATE(CAST(EXTRACT(YEAR FROM run_date) AS integer), 7, 15) THEN '55'
                 ELSE '80'
             END
-        )) AS varchar(6)) AS target_term,
+        ) AS varchar(6)) AS current_term
+    FROM scope_dates
+),
+params AS (
+    SELECT
+        run_date,
+        current_term,
+        CAST(COALESCE(target_term_override, current_term) AS varchar(6)) AS target_term,
         CAST(CONCAT(
             CAST(EXTRACT(YEAR FROM lookback_date) AS integer),
             CASE
@@ -30,7 +35,7 @@ params AS (
             END
         ) AS varchar(6)) AS lookback_term,
         cwid_filter
-    FROM scope_dates
+    FROM current_terms
 ),
 candidate_pidms AS MATERIALIZED (
     SELECT t.tbraccd_pidm AS pidm
@@ -61,19 +66,12 @@ candidate_pidms AS MATERIALIZED (
 
     UNION
 
-    /* Conservative TPPY check; Python nets reversals and decides review. */
+    /* Any TPPY history may require same-term credit review, including reversals. */
     SELECT t.tbraccd_pidm AS pidm
     FROM taismgr.tbraccd t
-    INNER JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
     CROSS JOIN params p
     WHERE p.cwid_filter IS NULL
       AND t.tbraccd_detail_code = 'TPPY'
-      AND UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
-      AND t.tbraccd_amount > 0
-      AND (t.tbraccd_term_code = p.target_term OR (
-          t.tbraccd_effective_date >= p.run_date - INTERVAL '32 days'
-          AND t.tbraccd_effective_date < p.run_date + INTERVAL '1 day'
-      ))
       AND MOD(ABS(t.tbraccd_pidm), __BATCH_COUNT__) = __BATCH_INDEX__
       AND __PIDM_FILTER__
 
@@ -120,7 +118,8 @@ account_balances AS MATERIALIZED (
     LEFT JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
     GROUP BY c.pidm
 )
-SELECT a.pidm, p.target_term
+SELECT a.pidm, p.target_term,
+    p.current_term
 FROM account_balances a
 CROSS JOIN params p
 WHERE ROUND(a.full_account_balance, 2) <= 0 OR a.invalid_rows > 0

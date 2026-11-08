@@ -158,6 +158,9 @@ def _read_cached(path: Path) -> pd.DataFrame:
             "cwid": "string",
             "plus_auth_aidy_code": "string",
             "plus_to_student": "string",
+            "sponsor_names": "string",
+            "sponsor_ids": "string",
+            "contract_numbers": "string",
         },
     )
 
@@ -335,7 +338,7 @@ def _complete_partition(
 
 def _manifest_values(settings: ExtractSettings) -> dict[str, object]:
     return {
-        "format_version": 4,
+        "format_version": 5,
         "target_term": settings.target_term,
         "batch_count": settings.batch_count,
         "cwid": settings.cwid,

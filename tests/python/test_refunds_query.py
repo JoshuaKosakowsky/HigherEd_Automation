@@ -5,6 +5,7 @@ import os
 import random
 import re
 import shutil
+import sqlite3
 import subprocess
 import unittest
 from dataclasses import dataclass, replace
@@ -17,7 +18,7 @@ import pandas as pd
 
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
 from data_processing.refunds.export import (
-    WORKBOOK_HEADERS, WORKBOOK_OMITTED_COLUMNS, WORKBOOK_COLUMNS,
+    WORKBOOK_HEADERS, WORKBOOK_OMITTED_COLUMNS, WORKBOOK_COLUMNS, THIRD_PARTY_COLUMNS,
 )
 from data_processing.refunds.extract import ExtractSettings, render_extract_sql
 from data_processing.refunds.pipeline import run_refund_download_pipeline
@@ -86,6 +87,139 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
 
 
+class RefundExtractSqlTests(unittest.TestCase):
+    """Execute production extract SQL with only PostgreSQL dialect adapted.
+
+    SQLite fixtures verify population, joins and financial row counts locally;
+    the optional PostgreSQL suite remains the native dialect check.
+    """
+
+    def setUp(self) -> None:
+        self.database = sqlite3.connect(":memory:")
+        self.database.row_factory = sqlite3.Row
+        for schema in ("taismgr", "saturn", "faismgr"):
+            self.database.execute(f"ATTACH DATABASE ':memory:' AS {schema}")
+        self.database.create_function("CONCAT", -1, lambda *args: "".join(str(v) for v in args if v is not None))
+        self.database.create_function("CONCAT_WS", -1, lambda sep, *args: sep.join(str(v) for v in args if v is not None))
+        self.database.create_function("MAKE_DATE", 3, lambda y, m, d: date(int(y), int(m), int(d)).isoformat())
+
+        class DelimitedValues:
+            def __init__(self):
+                self.values = []
+
+            def step(self, value, sponsor_id, sponsor_pidm, contract_number):
+                key = (sponsor_id is None, sponsor_id or "", sponsor_pidm,
+                       contract_number is None, contract_number or "")
+                self.values.append((key, value))
+
+            def finalize(self):
+                return " | ".join(value for _, value in sorted(self.values))
+
+        self.database.create_aggregate("delimited_values", 4, DelimitedValues)
+        schemas = {
+            "taismgr.tbraccd": "pidm int, term_code text, aidy_code text, tran_number int, detail_code text, amount numeric, balance numeric, effective_date text, activity_date text, feed_date text",
+            "taismgr.tbbdetc": "detail_code text, desc text, type_ind text, priority text, dcat_code text, tiv_ind text",
+            "taismgr.tbbcstu": "stu_pidm int, contract_pidm int, contract_number text, term_code text",
+            "taismgr.tbbacct": "pidm int, deli_code text, refund_ind text, activity_date text",
+            "saturn.spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
+            "saturn.spbpers": "pidm int, dead_ind text, dead_date text, confid_ind text",
+            "saturn.sprhold": "pidm int, hldd_code text, to_date text, activity_date text",
+            "faismgr.rlrpapp": "pidm int, aidy_code text, plus_to_student text, activity_date text",
+        }
+        for table, columns in schemas.items():
+            prefix = table.split(".")[1]
+            prefixed = ", ".join(f"{prefix}_{column}" for column in columns.split(", "))
+            self.database.execute(f"CREATE TABLE {table} ({prefixed})")
+        for code, kind, priority in (("TPPY", "P", "800"), ("Z0LE", "P", "000"), ("FREE", "P", "000"), ("CHG", "C", "899")):
+            self.database.execute("INSERT INTO taismgr.tbbdetc VALUES (?, ?, ?, ?, 'CSH', 'N')", (code, "Synthetic", kind, priority))
+        for pidm in (1, 2, 3, 4):
+            term = "209980" if pidm == 1 else "208080"
+            rows = [(pidm, term, "9900", 3, "FREE", 50, -50, "2080-08-01", "2080-08-01", None)]
+            if pidm != 3:
+                rows += [(pidm, term, "9900", n, "TPPY", amount, 0, "2080-08-01", "2080-08-01", None)
+                         for n, amount in ((1, 100), (2, -100))]
+            if pidm == 4:
+                rows += [(pidm, term, "9900", 4, "CHG", 100, 100, "2080-08-01", "2080-08-01", None)]
+            self.database.executemany("INSERT INTO taismgr.tbraccd VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            self.database.execute("INSERT INTO saturn.spriden VALUES (?, ?, 'Synthetic', 'Student', NULL)", (pidm, f"TEST-{pidm}"))
+            self.database.execute("INSERT INTO taismgr.tbbacct VALUES (?, NULL, 'N', '2099-08-31')", (pidm,))
+        self.database.executemany("INSERT INTO saturn.spriden VALUES (?, ?, ?, NULL, NULL)",
+                                  [(101, "TPS-TEST-1", "Sponsor One"), (102, "TPS-TEST-2", "Sponsor Two")])
+        self.database.executemany("INSERT INTO taismgr.tbbcstu VALUES (?, ?, ?, ?)", [
+            (1, 101, "0001", "209980"), (1, 101, "0001", "209980"),
+            (1, 102, "0002", "209980"), (1, 101, "OLD", "209910"),
+        ])
+        self.database.executemany("INSERT INTO faismgr.rlrpapp VALUES (1, ?, 'N', '2099-08-31')", [("9900",), ("9899",)])
+
+    def tearDown(self) -> None:
+        self.database.close()
+
+    def extract(self, name: str, run_date: date = date(2099, 8, 31)) -> pd.DataFrame:
+        template = REFUNDS_QUERY.with_name(f"refund_{name}_extract.sql").read_text()
+        query = render_extract_sql(template, ExtractSettings("209910", 1, Path("unused"), run_date=run_date), 0)
+        query = query.replace("CAST(run_date - INTERVAL '2 years' AS date)", "date(run_date, '-2 years')")
+        query = query.replace("p.run_date - INTERVAL '32 days'", "date(p.run_date, '-32 days')")
+        query = query.replace("p.run_date + INTERVAL '1 day'", "date(p.run_date, '+1 day')")
+        query = re.sub(r"EXTRACT\(YEAR FROM (\w+)\)", r"SUBSTR(\1, 1, 4)", query)
+        query = re.sub(r"DATE '([0-9-]+)'", r"'\1'", query)
+        query = query.replace("CAST(h.sprhold_to_date AS date)", "h.sprhold_to_date")
+        for column, fallback in (("sponsor_name", "Name"), ("sponsor_id", "ID"), ("contract_number", "Number")):
+            expression = f"COALESCE({column}, '[{fallback} unavailable]')"
+            query = query.replace(f"STRING_AGG({expression}, ' | '\n            ORDER BY sponsor_id NULLS LAST, sponsor_pidm, contract_number NULLS LAST)",
+                                  f"delimited_values({expression}, sponsor_id, sponsor_pidm, contract_number)")
+        cursor = self.database.execute(query)
+        return pd.DataFrame.from_records([dict(row) for row in cursor.fetchall()],
+                                         columns=[column[0] for column in cursor.description])
+
+    def test_context_aggregates_sponsors_without_multiplying_authorizations_or_transactions(self) -> None:
+        context = self.extract("context")
+        student = context[context.pidm == 1]
+        self.assertEqual(len(student), 2)  # Two PLUS authorizations, not four sponsor combinations.
+        self.assertEqual(set(student.sponsor_names), {"Sponsor One | Sponsor Two"})
+        self.assertEqual(set(student.sponsor_ids), {"TPS-TEST-1 | TPS-TEST-2"})
+        self.assertEqual(set(student.contract_numbers), {"0001 | 0002"})
+        self.assertEqual(set(context.extract_row_count), {3})
+        self.assertTrue(context[context.pidm == 2].sponsor_names.isna().all())
+        transactions = self.extract("transactions")
+        self.assertEqual(set(transactions.pidm), {1, 2})  # Old reversed TPPY retained; positive account excluded.
+        self.assertEqual(len(transactions), 6)
+        self.assertEqual(set(transactions.extract_row_count), {6})
+        self.assertIn("feed_date", transactions)
+        report = allocate_refunds(transactions, context, RefundParameters("209910", date(2099, 8, 31)))
+        self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), {"TEST-1": 50, "TEST-2": 50})
+        self.assertEqual(set(report.third_party_review_required_ind), {"Y"})
+
+    def test_historical_tppy_credit_retains_historical_sponsor_attachment(self) -> None:
+        self.database.execute("INSERT INTO taismgr.tbbcstu VALUES (2, 101, 'OLD-2', '208080')")
+        row = self.extract("context").query("pidm == 2").iloc[0]
+        self.assertEqual(row.sponsor_ids, "TPS-TEST-1")
+        self.assertEqual(row.contract_numbers, "OLD-2")
+
+    def test_sponsor_lists_keep_names_ids_and_contracts_aligned(self) -> None:
+        self.database.execute("UPDATE saturn.spriden SET spriden_last_name = 'Zeta' WHERE spriden_pidm = 101")
+        self.database.execute("UPDATE saturn.spriden SET spriden_last_name = 'Alpha' WHERE spriden_pidm = 102")
+        self.database.execute("INSERT INTO taismgr.tbbcstu VALUES (1, 101, '0003', '209980')")
+        row = self.extract("context").query("pidm == 1").iloc[0]
+        self.assertEqual(row.sponsor_names, "Zeta | Zeta | Alpha")
+        self.assertEqual(row.sponsor_ids, "TPS-TEST-1 | TPS-TEST-1 | TPS-TEST-2")
+        self.assertEqual(row.contract_numbers, "0001 | 0003 | 0002")
+
+    def test_missing_sponsor_identity_retains_contract_for_review(self) -> None:
+        self.database.execute("DELETE FROM saturn.spriden WHERE spriden_pidm = 102")
+        student = self.extract("context").query("pidm == 1")
+        self.assertIn("[Name unavailable]", student.iloc[0].sponsor_names)
+        self.assertIn("[ID unavailable]", student.iloc[0].sponsor_ids)
+        self.assertEqual(student.iloc[0].contract_numbers, "0001 | 0002")
+
+    def test_sponsor_term_follows_calendar_boundaries_not_selected_term(self) -> None:
+        for run_date, term in ((date(2099, 5, 15), "209910"), (date(2099, 5, 16), "209955"),
+                               (date(2099, 7, 15), "209955"), (date(2099, 7, 16), "209980")):
+            with self.subTest(run_date=run_date):
+                frame = self.extract("context", run_date)
+                contracts = frame.query("pidm == 1").iloc[0].contract_numbers
+                self.assertEqual(contracts, "0001 | OLD | 0002" if term == "209910" else "0001 | 0002")
+
+
 @dataclass(frozen=True)
 class RefundTransaction:
     detail_code: str
@@ -101,6 +235,7 @@ class RefundTransaction:
     category: str = "CSH"
     title_iv: str = "N"
     tran_number: int | None = None
+    feed_date: str | None = None
 
 
 class RefundsPostgresPolicyTests(unittest.TestCase):
@@ -163,7 +298,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         schemas = {
             "tbraccd": "pidm int, term_code text, aidy_code text, tran_number int, "
                 "detail_code text, amount numeric, balance numeric, "
-                "effective_date date, activity_date timestamp",
+                "effective_date date, activity_date timestamp, feed_date date",
             "tbbdetc": "detail_code text, desc text, type_ind text, priority text, "
                 "dcat_code text, tiv_ind text",
             "spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
@@ -171,6 +306,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             "tbbacct": "pidm int, deli_code text, refund_ind text, activity_date date",
             "sprhold": "pidm int, hldd_code text, to_date date, activity_date date",
             "rlrpapp": "pidm int, aidy_code text, plus_to_student text, activity_date date",
+            "tbbcstu": "stu_pidm int, contract_pidm int, contract_number text, term_code text",
         }
         sql = ["BEGIN; SET LOCAL statement_timeout = '20s';"]
         for table, columns in schemas.items():
@@ -213,7 +349,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             insert("tbraccd", (
                 transaction.pidm, transaction.term, transaction.aid_year, number,
                 transaction.detail_code, transaction.amount, transaction.balance,
-                transaction.effective_date, transaction.activity_date,
+                transaction.effective_date, transaction.activity_date, transaction.feed_date,
             ))
 
         authorization_rows = {"9900": "N"} if authorizations is None else authorizations
@@ -276,6 +412,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
     def assert_matches_python(self, actual: dict, expected: dict, label: str = "") -> None:
         for column in REPORT_COLUMNS:
+            if column in THIRD_PARTY_COLUMNS:
+                continue  # Sponsor enrichment is provided by the Python workflow.
             a, e = actual[column], expected[column]
             a = None if pd.isna(a) else a
             e = None if pd.isna(e) else e
@@ -808,12 +946,13 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 if row["cwid"] == "TEST-12":
                     self.assertIn("Possible Third Party refund", row["review_reasons"])
                 if row["cwid"] == "TEST-14":
-                    self.assertNotIn("Possible Third Party refund", row["review_reasons"] or "")
+                    self.assertIn("Possible Third Party refund", row["review_reasons"] or "")
             sheets = pd.read_excel(output, sheet_name=None)
             for name, sheet in sheets.items():
                 expected_columns = (
                     [WORKBOOK_HEADERS.get(column, column) for column in WORKBOOK_COLUMNS
-                     if column not in WORKBOOK_OMITTED_COLUMNS]
+                     if column not in WORKBOOK_OMITTED_COLUMNS
+                     and (name == "Third Party Reviews" or column not in THIRD_PARTY_COLUMNS)]
                 )
                 self.assertEqual(sheet.columns.tolist(), expected_columns)
             sheets = {name: sheet.rename(columns={
@@ -825,7 +964,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ], ignore_index=True)
             self.assertEqual(dict(zip(workbook.cwid, workbook.tab_refund_amount)), expected_refunds)
             self.assertEqual(set(sheets["Mines Park Reviews"].cwid), {"TEST-4", "TEST-10"})
-            self.assertEqual(set(sheets["Third Party Reviews"].cwid), {"TEST-12"})
+            self.assertEqual(set(sheets["Third Party Reviews"].cwid), {"TEST-12", "TEST-14"})
 
     def test_sql_matches_current_python_allocation_scenarios(self) -> None:
         sql_case = self
@@ -844,7 +983,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                     activity_date=t.activity_date, category=t.category,
                     title_iv=t.title_iv, tran_number=t.tran_number,
                 ) for t in transactions]
-                arguments = {key: value for key, value in kwargs.items() if key != "expected_rows"}
+                arguments = {key: value for key, value in kwargs.items() if key not in {"expected_rows", "sponsor_context", "progress_reporter"}}
                 if "run_date" in arguments:
                     arguments["run_date"] = arguments["run_date"].isoformat()
                 actual = sql_case.run_report(converted, query=filtered,
