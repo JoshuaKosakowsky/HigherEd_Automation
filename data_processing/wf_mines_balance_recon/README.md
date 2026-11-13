@@ -100,9 +100,15 @@ fields must be nonblank. Invalid identities stop the run rather than create a
 false match. W&F names are retained on agency tabs; unmatched agency records
 have blank Banner First Name/Last Name.
 
-Every CWID from Banner or W&F Collections appears once. Multiple W&F account
-principals for a CWID are summed without deduplicating source records. An unknown
-principal makes that CWID's aggregate unknown. Banner Total Balance is copied
+Every CWID from Banner or W&F Collections appears once. In Reconciliation,
+W&F Principal Amount uses each account's Curr. Balance. For `Fees` rows, divide
+by 1 + Submission Percentage and round to cents per account using half-up
+rounding. For `No Fees` and `unspecified`, use Curr. Balance as reported.
+Sum the resulting amounts by CWID without deduplicating source records. An
+unreadable or missing current balance makes that CWID's aggregate unknown.
+The W&F Collections Principal Amount still shows principal at placement.
+See [issue #30](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/30#issuecomment-6843110200).
+Banner Total Balance is copied
 from Banner; `Difference = Banner Total Balance - W&F Principal Amount` only
 when both amounts are known. An absent source stays blank, including Difference.
 From patch 0.23.6, reconciliation money columns display known zero as `$0.00`.
@@ -122,8 +128,9 @@ Reconciliation follows Banner's displayed order, then W&F-only CWIDs in upload o
   A TO-only or WOFF/BDRC-only account without qualifying CO is not selected.
 - Fees balance 125 at 0.25 gives principal 100; No Fees/unspecified balance 125
   remains 125. A signed Fees reversal -125 gives -100.
-- Two Fees accounts 125 and 62.50 for one CWID give aggregate principal 150;
-  Banner Total Balance 150 gives Difference 0. A Returned match sets 1.
+- A Fees account with Orig. Balance 250 and Curr. Balance 125 shows placement
+  principal 200 in W&F Collections and current principal 100 in Reconciliation
+  at 25%. Banner Total Balance 100 gives Difference 0. A Returned match sets 1.
 - Banner-only and W&F-only accounts remain visible with the absent amount and
   Difference blank. `0000123` and `123` remain distinct identities.
 

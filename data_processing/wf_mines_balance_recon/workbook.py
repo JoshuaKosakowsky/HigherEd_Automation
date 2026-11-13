@@ -298,7 +298,10 @@ def create_review_workbook(
                 _write_frame(book, name, frame, cancellation, index=position)
                 position += 1
         returned = pd.concat(grouped['W&F Returned'], ignore_index=True) if 'W&F Returned' in grouped else pd.DataFrame()
-        _write_frame(book, 'Reconciliation', reconcile_accounts(students, collections, returned), cancellation, index=0)
+        reconciliation = reconcile_accounts(
+            students, collections, returned, submission_percentage=submission_percentage,
+        )
+        _write_frame(book, 'Reconciliation', reconciliation, cancellation, index=0)
         book.properties.title = 'W&F - Banner Recon'
         book.properties.description = f'App {app_version}. Submission Percentage: {submission_percentage}. Account totals for review.'
         save_new_workbook(book, output, cancellation=cancellation)

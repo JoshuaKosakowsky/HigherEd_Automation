@@ -287,8 +287,10 @@ commission is maintained by administrators in
 `config/institutions/mines/wf_reconciliation.json` (0.25 = 25%), outside the
 workflow form. Tab order is Reconciliation, Students in Collections, W&F Collections,
 then W&F Returned. Students in Collections uses the updated 11-column Banner
-layout with CO From Date / CO To Date and no Latest Feed Date. Fees principal divides Orig. Balance by 1 + fraction;
-other types retain Orig. Balance. Unisa filenames containing 12007, 12009, 12559
+layout with CO From Date / CO To Date and no Latest Feed Date. W&F Collections
+shows placement principal from Orig. Balance. From **0.27.2**, Reconciliation
+sums current principal from Curr. Balance by CWID. Both calculations divide
+only Fees rows by 1 + Submission Percentage. Unisa filenames containing 12007, 12009, 12559
 or 12561 are omitted. Reconciliation includes CWIDs from Banner or W&F Collections,
 sums multiple W&F accounts and shows Difference and a 1/0 Returned flag. Unknown
 or absent amounts remain blank. Patch 0.23.6 removes explicit Total Accounts

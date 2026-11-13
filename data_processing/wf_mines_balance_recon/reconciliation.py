@@ -40,17 +40,21 @@ def load_submission_percentage(path: Path = COMMISSION_CONFIG) -> Decimal:
     return submission_fraction(settings['submission_percentage'])
 
 
+def _principal(balance: object, fee_type: object, fraction: Decimal) -> Decimal | None:
+    amount = _amount(balance)
+    if amount is not None and fee_type == 'Fees':
+        return (amount / (1 + fraction)).quantize(_CENT, rounding=ROUND_HALF_UP)
+    return amount
+
+
 def add_principal_amount(collections: pd.DataFrame, percentage: object) -> pd.DataFrame:
     """Keep original balances; round fee-adjusted principals to cents, half up."""
     fraction = submission_fraction(percentage)
     result = collections.copy()
-    principals = []
-    for row in collections.to_dict('records'):
-        amount = _amount(row['Orig. Balance'])
-        if amount is not None and row['Type'] == 'Fees':
-            amount = (amount / (1 + fraction)).quantize(_CENT, rounding=ROUND_HALF_UP)
-        principals.append(amount)
-    result['Principal Amount'] = principals
+    result['Principal Amount'] = [
+        _principal(row['Orig. Balance'], row['Type'], fraction)
+        for row in collections.to_dict('records')
+    ]
     if 'Orig. Balance' in result:
         columns = list(result.columns)
         columns.remove('Principal Amount')
@@ -73,13 +77,15 @@ def _account_key(value: object) -> str:
 
 def reconcile_accounts(
     students: pd.DataFrame, collections: pd.DataFrame, returned: pd.DataFrame,
+    *, submission_percentage: object,
 ) -> pd.DataFrame:
     """Outer match by CWID; missing/unknown amounts never become a false zero.
 
-    Multiple agency accounts sum their per-account rounded principals. A single
+    Multiple agency accounts sum current principals calculated from Curr. Balance. A single
     unknown principal makes that CWID's aggregate unknown. Banner is already
     one row per CWID; duplicates indicate a bad combined export, not amounts to sum.
     """
+    fraction = submission_fraction(submission_percentage)
     banner = {}
     for row in students.to_dict('records'):
         key = _account_key(row['CWID'])
@@ -89,7 +95,7 @@ def reconcile_accounts(
     agency: dict[str, Decimal | None] = {}
     for row in collections.to_dict('records'):
         key = _account_key(row['Your Accnt #'])
-        amount = _amount(row['Principal Amount'])
+        amount = _principal(row['Curr. Balance'], row['Type'], fraction)
         previous = agency.get(key, Decimal(0))
         agency[key] = previous + amount if previous is not None and amount is not None else None
     returned_keys = {_account_key(value) for value in returned.get('Your Accnt #', [])}

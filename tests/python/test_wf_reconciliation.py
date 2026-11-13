@@ -44,13 +44,16 @@ class ReconciliationRulesTests(unittest.TestCase):
             ['B-only', 'Banner', 'Only', 20],
         ], columns=['CWID', 'First Name', 'Last Name', 'Total Balance'])
         collections = pd.DataFrame([
-            ['0000123', 100], ['0000123', 50], ['W-only', -10], ['123', 5],
-        ], columns=['Your Accnt #', 'Principal Amount'])
+            ['0000123', 130, 'Fees'], ['0000123', 50, 'No Fees'],
+            ['W-only', -13, 'Fees'], ['123', 5, 'unspecified'],
+        ], columns=['Your Accnt #', 'Curr. Balance', 'Type'])
         returned = pd.DataFrame({'Your Accnt #': ['0000123', '0000123', 'W-only', 'returned-only']})
-        result = reconcile_accounts(students, collections, returned).set_index('CWID')
+        result = reconcile_accounts(students, collections, returned, submission_percentage=0.30).set_index('CWID')
         self.assertEqual(list(result.index), ['0000123', 'B-only', 'W-only', '123'])
         self.assertEqual(result.loc['0000123', 'W&F Principal Amount'], 150)
         self.assertEqual(result.loc['0000123', 'Difference'], 25)
+        self.assertEqual(result.loc['W-only', 'W&F Principal Amount'], -10)
+        self.assertEqual(result.loc['123', 'W&F Principal Amount'], 5)
         self.assertEqual(result['W&F Returned'].tolist(), [1, 0, 1, 0])
         self.assertIsNone(result.loc['B-only', 'W&F Principal Amount'])
         self.assertIsNone(result.loc['W-only', 'Banner Total Balance'])
@@ -59,18 +62,22 @@ class ReconciliationRulesTests(unittest.TestCase):
 
     def test_unknown_amounts_poison_aggregate_and_duplicates_or_missing_ids_fail(self):
         students = pd.DataFrame({'CWID': ['S'], 'Total Balance': [100]})
-        collections = pd.DataFrame({'Your Accnt #': ['S', 'S'], 'Principal Amount': [50, None]})
-        row = reconcile_accounts(students, collections, pd.DataFrame()).iloc[0]
+        collections = pd.DataFrame({
+            'Your Accnt #': ['S', 'S'], 'Curr. Balance': [50, 'unknown'], 'Type': ['Fees', 'Fees'],
+            'Principal Amount': [80, 60],
+        })
+        row = reconcile_accounts(students, collections, pd.DataFrame(), submission_percentage=0.25).iloc[0]
         self.assertIsNone(row['W&F Principal Amount'])
         self.assertIsNone(row['Difference'])
         with self.assertRaisesRegex(ValueError, 'duplicate CWIDs'):
-            reconcile_accounts(pd.concat([students, students]), collections, pd.DataFrame())
+            reconcile_accounts(pd.concat([students, students]), collections, pd.DataFrame(), submission_percentage=0.25)
         for source in ('students', 'collections', 'returned'):
             with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'missing or invalid'):
                 reconcile_accounts(
                     pd.DataFrame({'CWID': [None]}) if source == 'students' else students,
-                    pd.DataFrame({'Your Accnt #': [''], 'Principal Amount': [5]}) if source == 'collections' else collections,
+                    collections.assign(**{'Your Accnt #': ['', 'S']}) if source == 'collections' else collections,
                     pd.DataFrame({'Your Accnt #': [None]}) if source == 'returned' else pd.DataFrame(),
+                    submission_percentage=0.25,
                 )
 
 
@@ -142,7 +149,7 @@ class ReconciliationWorkbookTests(unittest.TestCase):
     def test_real_workbook_matches_fee_principals_returned_and_excludes_entire_unisa_files(self):
         students = holds_frame()
         students['CWID'] = ['0000123']
-        students['Total Balance'] = [150]
+        students['Total Balance'] = [120]
         write_frame(self.holds, students)
         collections = agency_file(self.root, rows=[
             ['0000123', 'Synthetic', None, 125, 100, 25, None],
@@ -162,9 +169,10 @@ class ReconciliationWorkbookTests(unittest.TestCase):
         try:
             self.assertEqual(book.sheetnames, ['Reconciliation', 'Students in Collections', 'W&F Collections', 'W&F Returned'])
             rows = list(book['Reconciliation'].values)
-            self.assertEqual(rows[1], ('0000123', 'Synthetic', 'Student', 150, 150, 0, 1))
+            self.assertEqual(rows[1], ('0000123', 'Synthetic', 'Student', 120, 120, 0, 1))
             self.assertEqual(rows[2], ('W-only', None, None, None, 20, None, 0))
             self.assertEqual(book['W&F Collections']['E2'].value, 100)
+            self.assertEqual(book['W&F Collections']['F2'].value, 100)
             self.assertIn('0.25', book.properties.description)
             self.assertIn('$#,##0.00', book['Reconciliation']['F2'].number_format)
         finally:
@@ -189,14 +197,14 @@ class ReconciliationWorkbookTests(unittest.TestCase):
             self.assertEqual([row[0] for row in rows[1:]], ['0000123'] * 4)
             recon = {row[0]: row for row in list(book['Reconciliation'].values)[1:]}
             self.assertEqual(set(recon), {'TEST-1', '0000123'})
-            self.assertEqual(recon['0000123'][4], 320)
+            self.assertEqual(recon['0000123'][4], 240)
         finally:
             book.close()
 
     def test_zero_difference_is_numeric_and_missing_difference_has_review_note(self):
         students = holds_frame()
         students['CWID'] = ['0000123']
-        students['Total Balance'] = [80]
+        students['Total Balance'] = [60]
         write_frame(self.holds, students)
         self.params['wf_files'] = (agency_file(self.root, rows=[
             ['0000123', 'Synthetic', None, 100, 75, 25, None],
