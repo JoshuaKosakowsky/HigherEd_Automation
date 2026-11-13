@@ -20,6 +20,7 @@ from shared.insights.banner_activity import BannerActivityParameters
 
 ZERO = Decimal("0.00")
 CENT = Decimal("0.01")
+STUDENT_PATTERN = re.compile(r"(?<!\d)10\d{6}(?!\d)")
 ALIASES = {
     "date": ("Accounting Date",), "kind": ("Journal Source", "Source"),
     "debit": ("Debit Amount", "Workday Debit Amount", "Ledger Debit Amount", "Workday Debit"),

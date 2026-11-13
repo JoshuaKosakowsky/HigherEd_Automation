@@ -5,12 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .sources import SourceData, text
+from .sources import SourceData, STUDENT_PATTERN, text
 
 
 WORKTAG_HEADERS = ["CWID", "Term Code", "Term Description", "Worktag Type", "Worktag Number"]
 TERM_NAMES = {"SU": "Summer", "FA": "Fall", "SP": "Spring", "WI": "Winter"}
-STUDENT_PATTERN = re.compile(r"(?<!\d)10\d{6}(?!\d)")
 TERM_PATTERN = re.compile(r"\b(SU|FA|SP|WI)(\d{2})\b", re.IGNORECASE)
 WORKTAG_PATTERN = re.compile(
     r"\b(Grant|Project|Operating\s+Account)\s*:?\s*([0-9]{6})(?![0-9])", re.IGNORECASE)

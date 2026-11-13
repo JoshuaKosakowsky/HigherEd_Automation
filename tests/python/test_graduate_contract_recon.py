@@ -13,7 +13,7 @@ from zipfile import ZipFile
 import pandas as pd
 from openpyxl import Workbook, load_workbook
 
-from data_processing.graduate_contract_recon.export import export_reconciliation
+from data_processing.graduate_contract_recon.export import _rolling_total_rows, export_reconciliation
 from data_processing.graduate_contract_recon.reconciliation import banner_workday_classification, reconcile
 from data_processing.graduate_contract_recon.sources import (
     SourceData, banner_from_frame, fiscal_scope, money, read_source, uploaded_scope,
@@ -341,7 +341,7 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertEqual(cwid["B3"].value, "P04")
                 self.assertEqual(cwid["K3"].value, "1631e")
                 self.assertEqual(cwid["L3"].value, "6154")
-                self.assertEqual(book["Banner Data"].cell(2, 4).value, "Synthetic RA")
+                self.assertEqual(book["Banner Data"]["E2"].value, "Synthetic RA")
             finally:
                 book.close()
 
@@ -406,7 +406,7 @@ class GraduateContractReconTests(unittest.TestCase):
             try:
                 banner = book["Banner Data"]
                 headers = [cell.value for cell in banner[1]]
-                self.assertEqual(headers, [header for header in BN_HEADERS if header != "'Aid Year'"])
+                self.assertEqual(headers, ["'ID'", "CWID", *[header for header in BN_HEADERS[1:] if header != "'Aid Year'"]])
                 self.assertEqual(banner.max_row, len(dates) + 1)
                 date_column = headers.index("'Feed Date'") + 1
                 for row in range(2, 8):
@@ -418,8 +418,8 @@ class GraduateContractReconTests(unittest.TestCase):
                 self.assertEqual(banner.cell(10, date_column).value, "=TEST_FORMULA")
                 self.assertEqual(banner.cell(10, date_column).data_type, "s")
                 self.assertEqual(banner["A2"].value, "10000001")
-                self.assertEqual(banner["E2"].value, 60)
-                self.assertEqual(banner.auto_filter.ref, "A1:K10")
+                self.assertEqual(banner["F2"].value, 60)
+                self.assertEqual(banner.auto_filter.ref, "A1:L10")
                 self.assertEqual([cell.value for cell in book["Workday Data"][1]],
                                  ["Source Row", *WD_HEADERS, "Selection Status"])
             finally:
@@ -442,15 +442,71 @@ class GraduateContractReconTests(unittest.TestCase):
             book = load_workbook(output)
             try:
                 banner = book["Banner Data"]
-                self.assertEqual([cell.value for cell in banner[1]], headers[1:])
-                self.assertEqual(banner["A2"].value, datetime(2026, 9, 30))
-                self.assertEqual(banner["A2"].number_format, "yyyy-mm-dd")
-                self.assertEqual(banner["C2"].value, "=TEST_FORMULA")
-                self.assertEqual(banner["C2"].data_type, "s")
-                self.assertEqual(list(banner.values)[2], ("invalid", None, None, None, None, None))
+                self.assertEqual([cell.value for cell in banner[1]],
+                                 ["ID", "CWID", "Feed Date", "Amount", "Description", "Feed Document", "Detail Code"])
+                self.assertEqual(banner["C2"].value, datetime(2026, 9, 30))
+                self.assertEqual(banner["C2"].number_format, "yyyy-mm-dd")
+                self.assertEqual(banner["E2"].value, "=TEST_FORMULA")
+                self.assertEqual(banner["E2"].data_type, "s")
+                self.assertEqual(list(banner.values)[2], (None, "NO CWID", "invalid", None, None, None, None))
             finally:
                 book.close()
             self.assertEqual(source_path.read_bytes(), original)
+
+    def test_banner_display_cwid_searches_full_description_without_changing_attribution(self):
+        result = self.build([], [
+            bn_row(account="TPS00100", desc="Tuition (10000001), repeated 10000001"),
+            bn_row(account=10000002.0, desc="Tuition 100000020 or 20000002"),
+            bn_row(account="10000003", desc="Tuition for 10000004"),
+            bn_row(account="TPS00101", desc="10000005 then 10000006"),
+            bn_row(account="TPS00102", desc="Tuition 20000007 or 910000007"),
+            bn_row(account="10000008", desc="Tuition for 10000008"),
+        ])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                self.assertEqual([cell.value for cell in book["Banner Data"]["B"]], [
+                    "CWID", "10000001", "10000002", "REVIEW: CWID conflict",
+                    "REVIEW: CWID conflict", "NO CWID", "10000008",
+                ])
+                self.assertEqual([cell.value for cell in book["1305 CWID Recon"]["C"]],
+                                 ["CWID", "10000002", "10000003", "10000005", "10000008"])
+            finally:
+                book.close()
+
+    def test_rolling_total_lists_contributing_periods_and_blanks_zero_totals(self):
+        self.params = BannerActivityParameters.from_inputs("2026-06-01", "2026-09-30", "TPDT")
+        result = self.build([], [
+            bn_row(-150, day="2026-06-30"), bn_row(50, day="2026-07-01"),
+            bn_row(0, day="2026-08-01"),
+            bn_row(10, day="2026-07-01", account="10000002"),
+            bn_row(-10, day="2026-08-01", account="10000002"),
+            bn_row(12, day="2026-07-01", account="10000003"),
+            bn_row(5, day="2026-08-01", account="10000003"),
+        ])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                rolling = book["CWID Rolling Total"]
+                self.assertEqual(list(rolling.values), [
+                    ("CWID", "Total Amt", "Fiscal Year", "Period", "Notes"),
+                    ("10000001", -100, "FY2026; FY2027", "P12; P01", None),
+                    ("10000002", 0, None, None, None),
+                    ("10000003", 17, "FY2027; FY2027", "P01; P02", None),
+                ])
+                self.assertEqual(rolling["B2"].data_type, "n")
+                self.assertEqual(rolling.auto_filter.ref, "A1:E4")
+            finally:
+                book.close()
+
+    def test_rolling_total_marks_missing_period_reference_for_nonzero_amount(self):
+        rows = [["FY2027", None, "10000001", Decimal("-100"), Decimal("0"), Decimal("-100")]]
+        self.assertEqual(_rolling_total_rows(rows),
+                         [["10000001", Decimal("-100"), "Not Found", "Not Found", None]])
 
     def test_blank_external_reference_falls_back_to_numeric_memo(self):
         result = self.build([wd_row(memo=9001.0, ext="")], [bn_row(feed="9001.0")])
@@ -527,7 +583,7 @@ class GraduateContractReconTests(unittest.TestCase):
             export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
             book = load_workbook(output)
             self.assertEqual(book.sheetnames[0], "1305 Combined")
-            self.assertEqual(len(book.sheetnames), 6)
+            self.assertEqual(len(book.sheetnames), 7)
             self.assertNotIn("1305 Verification", book.sheetnames)
             self.assertNotIn("1305 Exceptions", book.sheetnames)
             self.assertTrue(all(not sheet.tables for sheet in book))

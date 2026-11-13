@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from itertools import groupby
 from math import ceil
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,7 +16,7 @@ from data_processing.shared.xlsx_output_format import apply_default_font, format
 from shared.cancellation import CancellationToken
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
 from .reconciliation import COMBINED_HEADERS, Reconciliation
-from .sources import header_key, parse_date
+from .sources import STUDENT_PATTERN, ZERO, header_key, parse_date, student_id, text
 from .worktags import StudentWorktags, WORKTAG_HEADERS
 
 
@@ -31,6 +32,7 @@ DOC_OUTPUT_HEADERS = ["Fiscal Year", "Period", "Feed Document", "Workday Total A
 CWID_OUTPUT_HEADERS = ["Fiscal Year", "Period", "CWID", "Banner Total Amt",
                        "Workday Total Amt", "Net Period Activity", "Notes / Explanation",
                        "Project", "Grant", "Operating Account", "Ledger Acct", "Spend Cat"]
+ROLLING_TOTAL_HEADERS = ["CWID", "Total Amt", "Fiscal Year", "Period", "Notes"]
 PERIOD_OUTPUT_HEADERS = ["Fiscal Year", "Period", "Quarter", "Workday SIS Amt",
                          "Workday Other Amt", "Banner Amt", "Difference", "Notes"]
 
@@ -41,6 +43,32 @@ def combined_output_row(row: list[object]) -> list[object]:
     values[3] = str(row[3])
     values[9] = values[3]
     return values
+
+
+def _banner_display_cwid(account: object, description: object) -> str:
+    account_cwid = student_id(account)
+    description_cwids = {match for match in STUDENT_PATTERN.findall(text(description)) if student_id(match)}
+    if len(description_cwids) > 1 or (account_cwid and description_cwids - {account_cwid}):
+        return "REVIEW: CWID conflict"
+    return next(iter(description_cwids), account_cwid) or "NO CWID"
+
+
+def _rolling_total_rows(students: list[list[object]]) -> list[list[object]]:
+    rows = []
+    for cwid, student_rows in groupby(students, key=lambda row: row[2]):
+        activity = list(student_rows)
+        total = sum((row[5] for row in activity), ZERO)
+        fiscal_years = periods = None
+        if total:
+            # Preserve each year/period pair in the same order across both cells.
+            contributing = [(row[0], row[1]) for row in activity if row[5] and row[0] and row[1]]
+            if contributing:
+                fiscal_years = "; ".join(year for year, _ in contributing)
+                periods = "; ".join(period for _, period in contributing)
+            else:
+                fiscal_years = periods = "Not Found"
+        rows.append([cwid, total, fiscal_years, periods, None])
+    return rows
 
 
 def export_reconciliation(
@@ -137,6 +165,7 @@ def export_reconciliation(
         for column in ("H", "I", "J"):
             for cell in book["1305 CWID Recon"][column][1:]:
                 cell.number_format = "@"
+        sheet("CWID Rolling Total", ROLLING_TOTAL_HEADERS, _rolling_total_rows(students))
         periods = []
         for row in review.periods:
             sis, other, banner_amount = row[3] - row[6], row[9] - row[10], row[4] - row[7]
@@ -156,10 +185,15 @@ def export_reconciliation(
                 raise ValueError(f"{source.source} has source rows wider than the headers.")
             if source.source == "Banner":
                 columns = [index for index, header in enumerate(source.headers)
-                           if header_key(header) not in {"sourcerow", "aidyear", "selectionstatus"}]
+                           if index != source.columns["id"]
+                           and header_key(header) not in {"sourcerow", "aidyear", "selectionstatus"}]
+                headers = [source.headers[source.columns["id"]], "CWID"]
+                headers.extend("Source CWID" if header_key(source.headers[index]) == "cwid"
+                               else source.headers[index] for index in columns)
                 rows = []
                 for _, values in source.rows:
-                    row = []
+                    account = source.value(values, "id")
+                    row = [account, _banner_display_cwid(account, source.value(values, "description"))]
                     for index in columns:
                         value = values[index] if index < len(values) else None
                         if index == source.columns["feed_date"]:
@@ -170,7 +204,7 @@ def export_reconciliation(
                                 pass
                         row.append(value)
                     rows.append(row)
-                sheet("Banner Data", [source.headers[index] for index in columns], rows)
+                sheet("Banner Data", headers, rows)
                 continue
             sheet(f"{source.source} Data", ["Source Row", *source.headers, "Selection Status"],
                 [[number, *values, *([None] * (len(source.headers) - len(values))),
@@ -186,7 +220,8 @@ def export_reconciliation(
                 lines = 1
                 for cell in row:
                     header = ws.cell(1, cell.column).value
-                    if header in wrap_headers:
+                    rolling_period = ws.title == "CWID Rolling Total" and header in {"Fiscal Year", "Period"}
+                    if header in wrap_headers or rolling_period:
                         cell.alignment = Alignment(wrap_text=True, vertical="top")
                         width = max(1, ws.column_dimensions[cell.column_letter].width - 2)
                         lines = max(lines, ceil(len(str(cell.value or "")) / width))

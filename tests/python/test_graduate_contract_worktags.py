@@ -68,7 +68,7 @@ class StudentWorktagTests(unittest.TestCase):
             export_reconciliation(review, path, app_version="synthetic", banner_source="manual", worktags=tags)
             book = load_workbook(path)
             try:
-                self.assertEqual(len(book.sheetnames), 7)
+                self.assertEqual(len(book.sheetnames), 8)
                 self.assertEqual(book["Worktags"].max_column, 5)
                 self.assertEqual(book["1305 CWID Recon"].max_row, 3)
                 self.assertEqual([cell.value for cell in book["1305 CWID Recon"][1]][7:10],

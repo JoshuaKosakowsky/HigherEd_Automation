@@ -118,10 +118,32 @@ The periods are not collapsed or netted across rows.
 | 1305 Combined | Workday rows anchor each feed group, followed by its Banner detail, with alternating grey journal groups. Both sources' Debit/Credit remain visible for comparison, including the TPS00080 correction; Period Totals keeps each source separate. |
 | 1305 Doc Recon | Union of feed documents from both sources, with signed Workday Total Amt (SIS), Banner Total Amt, Difference (Banner minus Workday), and editable Notes. |
 | 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner plus Workday; opposite signed amounts wash to zero. This is activity, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation remains; Project, Grant, Operating Account, Ledger Acct and Spend Cat provide student coding. |
+| CWID Rolling Total | One row per CWID in 1305 CWID Recon. Total Amt sums signed Net Period Activity. Nonzero totals list contributing fiscal year/period pairs. Notes starts blank. |
 | 1305 Period Totals | Fiscal Year, Period, Quarter, Workday SIS Amt, Workday Other Amt, Banner Amt, Difference, Notes. Difference is Banner minus (Workday SIS + Workday Other). Includes empty periods in the selected range; Notes starts blank. |
 | Workday Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
 | Banner Data | Source rows, including excluded rows, with Source Row, Aid Year and Selection Status omitted. Valid Feed Date values are real Excel dates displayed as yyyy-mm-dd, without time or time-zone conversion. Blank/invalid dates remain as supplied. Other source values remain literal, including text beginning with `=`. Original input files and internal selection controls are unchanged. |
 | Worktags (when uploaded) | Cleaned CWID, term code/description, worktag type and six-digit number. Only the requested metadata is retained. |
+
+### Banner CWID and rolling totals (0.27.1)
+
+Banner Data puts ID first and adds CWID in column B. A CWID has eight digits
+beginning with `10`. Search the entire transaction Description for a complete
+number, then fall back to a valid ID if Description has none. Repeated mentions
+of the same number count once. If Description contains several distinct CWIDs
+or disagrees with a valid ID, show `REVIEW: CWID conflict`. If neither field
+supplies one, show `NO CWID`. For example, ID `TPS00100` with Description
+`Tuition (10000001)` displays `10000001`; ID `10000002` with the same description
+displays `REVIEW: CWID conflict`. This display field is independent of the
+existing transaction attribution used by the reconciliation. [Issue #38](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/38)
+
+CWID Rolling Total uses the student and fiscal-period rows in 1305 CWID Recon
+and lists each nonzero contributing period in chronological order. Semicolon
+positions pair Fiscal Year with Period, including repeated years. Zero totals
+have blank Fiscal Year and Period. Use `Not Found` in both cells if a nonzero
+total has no usable period reference. For example, −150 in P01 and +50 in P02
+produce −100 with both periods shown. The periods identify activity for review;
+staff can record the cause in Notes. Rerun with new source data to refresh the
+snapshot. [Issue #39](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/39)
 
 ## Workday coding and signed amounts (0.25.1)
 
