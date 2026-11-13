@@ -48,7 +48,7 @@ the same displayed values. The report uses current SPRIDEN identities
 (`SPRIDEN_CHANGE_IND IS NULL`), assumed unique per PIDM. There is no enrollment
 or SGBSTDN filter; the qualifying CO hold defines the account population.
 
-Output (0.23.5): `CWID`, `Last Name`, `First Name`, `CO Hold`, `TO Hold`,
+Output (0.27.3): `CWID`, `Last Name`, `First Name`, `CO Hold`, `TO Hold`, `Has SSN`,
 `CO From Date`, `CO To Date`, `Current Account Balance`, `WOFF`, `BDRC`,
 `Total Balance`. Latest Feed Date is no longer selected. The balance uses the
 delinquency report's all-term charges-minus-payments method with TBBDETC types

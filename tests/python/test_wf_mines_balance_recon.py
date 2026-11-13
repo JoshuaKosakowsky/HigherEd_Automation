@@ -19,7 +19,7 @@ from shared.cancellation import CancellationToken, WorkflowCancelled
 
 
 def holds_frame():
-    return pd.DataFrame([['TEST-1', 'Student', 'Synthetic', 'CO', None,
+    return pd.DataFrame([['TEST-1', 'Student', 'Synthetic', 'CO', None, 'Y',
                           '2099-01-01', '9999-12-31', -5, 25, 10, 30]], columns=HOLD_HEADERS)
 
 
@@ -89,7 +89,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         try:
             self.assertEqual(len(book.sheetnames), 5)
             self.assertEqual(book.sheetnames[:2], ['Reconciliation', 'Students in Collections'])
-            self.assertEqual(book['Students in Collections']['G2'].value, datetime(9999, 12, 31))
+            self.assertEqual(book['Students in Collections']['H2'].value, datetime(9999, 12, 31))
             agency = book[book.sheetnames[2]]
             self.assertEqual(agency['A2'].value, '0000123')
             self.assertEqual(agency['B2'].number_format, '$#,##0.00')
@@ -116,16 +116,28 @@ class WFMinesBalanceTests(unittest.TestCase):
         try:
             sheet = book['Students in Collections']
             self.assertEqual(tuple(cell.value for cell in sheet[1]), (
-                'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold',
+                'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold', 'Has SSN',
                 'CO From Date', 'CO To Date', 'Current Account Balance',
                 'WOFF', 'BDRC', 'Total Balance',
             ))
             self.assertEqual(sheet['B2'].value, 'Student')
             self.assertEqual(sheet['C2'].value, 'Synthetic')
-            self.assertEqual(sheet['G2'].value, datetime(9999, 12, 31))
-            self.assertEqual(sheet['H2'].value, -5)
+            self.assertEqual(sheet['F2'].value, 'Y')
+            self.assertEqual(sheet['H2'].value, datetime(9999, 12, 31))
+            self.assertEqual(sheet['I2'].value, -5)
         finally:
             book.close()
+
+    def test_old_or_invalid_ssn_flag_upload_requires_regeneration(self):
+        for frame in (
+            holds_frame().drop(columns=['Has SSN']),
+            holds_frame().assign(**{'Has SSN': 'synthetic invalid value'}),
+        ):
+            with self.subTest(columns=list(frame.columns)):
+                write_frame(self.holds, frame)
+                with self.assertRaisesRegex(ValueError, 'Regenerate'):
+                    run_wf_mines_balance_recon(self.context())
+                self.assertFalse(self.output.exists())
 
     def test_batch_same_names_long_names_and_sheet_name_collisions_preserve_all_files(self):
         files = []
@@ -260,7 +272,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         try:
             self.assertEqual(book.sheetnames, ['Reconciliation', 'Students in Collections', 'W&F Collections', 'W&F Returned'])
             for name, expected, date_column in (
-                ('Students in Collections', ['H-new', 'H-old', 'H-blank'], 'F'),
+                ('Students in Collections', ['H-new', 'H-old', 'H-blank'], 'G'),
                 ('W&F Collections', ['C-new', 'C-earlier', 'C-old', 'C-unknown', 'C-blank'], 'C'),
                 ('W&F Returned', ['R-new', 'R-mid', 'R-old'], 'H'),
             ):
@@ -272,7 +284,7 @@ class WFMinesBalanceTests(unittest.TestCase):
                             self.assertEqual(cell.value.time(), datetime.min.time())
                             self.assertEqual(cell.number_format, 'yyyy-mm-dd')
             self.assertEqual(book['W&F Collections']['C5'].value, 'unknown date')
-            self.assertEqual(book['Students in Collections']['G2'].value, datetime(9999, 12, 31))
+            self.assertEqual(book['Students in Collections']['H2'].value, datetime(9999, 12, 31))
             self.assertEqual(book['W&F Returned']['G2'].number_format, 'yyyy-mm-dd')
         finally:
             book.close()
@@ -418,7 +430,7 @@ class WFMinesBalanceTests(unittest.TestCase):
         client.run_sql.assert_not_called()
         book = load_workbook(self.output)
         try:
-            self.assertEqual(book['Students in Collections'].max_column, 11)
+            self.assertEqual(book['Students in Collections'].max_column, 12)
             self.assertNotIn('Banner Detail Codes', book.sheetnames)
         finally:
             book.close()

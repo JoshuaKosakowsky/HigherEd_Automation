@@ -84,10 +84,11 @@ class WFSourceFormatTests(unittest.TestCase):
         from data_processing.wf_mines_balance_recon.workbook import read_insights_file
         with self.assertRaisesRegex(ValueError, 'exactly one matching students'):
             read_insights_file(legacy, 'students')
-        self.params['banner_file'] = self.xls('students', 'combined.xls')
+        with self.assertRaisesRegex(ValueError, 'Regenerate'):
+            read_insights_file(self.xls('students', 'combined.xls'), 'students')
         returned = self.xls('returned', 'Report - ReturnedAccounts- 12003-2099-10-01.xls')
         book = self.run_review((returned,))
-        self.assertEqual(book['Students in Collections']['G2'].value, datetime(9999, 12, 31))
+        self.assertEqual(book['Students in Collections']['H2'].value, datetime(9999, 12, 31))
         self.assertEqual(book['W&F Returned'].max_row, 2)
         self.assertEqual(book['W&F Returned']['A2'].value, '0000123')
         self.assertEqual(book['W&F Returned']['G2'].value, datetime(2099, 1, 1))

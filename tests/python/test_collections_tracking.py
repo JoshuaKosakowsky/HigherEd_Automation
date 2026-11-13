@@ -20,11 +20,13 @@ class CollectionsTrackingTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.addCleanup(self.db.close)
+        self.db.create_function("CHR", 1, chr)
         self.db.executescript("""
             ATTACH DATABASE ':memory:' AS taismgr;
             ATTACH DATABASE ':memory:' AS saturn;
             CREATE TABLE saturn.spriden (spriden_pidm INTEGER, spriden_id TEXT,
                 spriden_first_name TEXT, spriden_last_name TEXT, spriden_change_ind TEXT);
+            CREATE TABLE saturn.spbpers (spbpers_pidm INTEGER, spbpers_ssn TEXT);
             CREATE TABLE saturn.sprhold (sprhold_pidm INTEGER, sprhold_hldd_code TEXT,
                 sprhold_from_date TEXT, sprhold_to_date TEXT);
             CREATE TABLE taismgr.tbraccd (tbraccd_pidm INTEGER,
@@ -73,7 +75,7 @@ class CollectionsTrackingTests(unittest.TestCase):
             INSERT INTO saturn.spriden VALUES (1, 'OLD', 'Old', 'Name', 'N');
         """)
         self.assertEqual(self.db.execute(self.query).fetchall(), [
-            ('TEST-1', 'Student', 'Synthetic', 'CO', None,
+            ('TEST-1', 'Student', 'Synthetic', 'CO', None, 'N',
              '2099-03-01', '2099-12-01', 100, 0, 0, 100, 1),
         ])
 
@@ -87,7 +89,7 @@ class CollectionsTrackingTests(unittest.TestCase):
         self.transaction(2, 100, "PAYMENT")
         self.transaction(3, 150, "PAYMENT")
         rows = self.db.execute(self.query).fetchall()
-        self.assertEqual([row[7] for row in rows], [60, 0, -50])
+        self.assertEqual([row[8] for row in rows], [60, 0, -50])
 
     def test_missing_or_unknown_transactions_keep_account_with_blank_balance(self):
         for pidm in range(1, 5):
@@ -98,16 +100,31 @@ class CollectionsTrackingTests(unittest.TestCase):
         self.transaction(4, 50, "BAD")
         rows = self.db.execute(self.query).fetchall()
         self.assertEqual(len(rows), 4)
-        self.assertTrue(all(row[7] is None for row in rows))
+        self.assertTrue(all(row[8] is None for row in rows))
 
     def test_empty_results_keep_expected_headers(self):
         cursor = self.db.execute(self.query)
         self.assertEqual(cursor.fetchall(), [])
         self.assertEqual([col[0] for col in cursor.description], [
-            "CWID", "Last Name", "First Name", "CO Hold", "TO Hold",
+            "CWID", "Last Name", "First Name", "CO Hold", "TO Hold", "Has SSN",
             "CO From Date", "CO To Date", "Current Account Balance",
             "WOFF", "BDRC", "Total Balance", "Report Row Count",
         ])
+
+    def test_ssn_presence_preserves_accounts_holds_and_balances(self):
+        for pidm in range(1, 7):
+            self.account(pidm)
+            self.transaction(pidm, 100)
+        self.db.execute("INSERT INTO saturn.sprhold VALUES (2, 'TO', '2099-01-01', '2099-12-31')")
+        self.db.executemany("INSERT INTO saturn.spbpers VALUES (?, ?)", [
+            (1, 'synthetic populated'), (1, 'another synthetic value'),
+            (2, 'synthetic populated'), (3, None), (4, ''), (5, ' \t\r\n '),
+        ])
+        rows = self.db.execute(self.query).fetchall()
+        self.assertEqual([(row[4], row[5]) for row in rows], [
+            (None, 'Y'), ('TO', 'Y'), (None, 'N'), (None, 'N'), (None, 'N'), (None, 'N'),
+        ])
+        self.assertTrue(all(row[8] == 100 and row[-1] == 6 for row in rows))
 
     def test_app_export_dates_completeness_and_administrator_access(self):
         self.account(1, end="9999-12-31")
@@ -151,18 +168,19 @@ class CollectionsTrackingTests(unittest.TestCase):
                         workbook = load_workbook(output)
                         try:
                             sheet = workbook.active
-                            self.assertEqual(sheet.max_column, 11)
+                            self.assertEqual(sheet.max_column, 12)
                             self.assertEqual(tuple(cell.value for cell in sheet[1]), (
-                                'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold',
+                                'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold', 'Has SSN',
                                 'CO From Date', 'CO To Date', 'Current Account Balance',
                                 'WOFF', 'BDRC', 'Total Balance',
                             ))
                             self.assertEqual(sheet.max_row, 1 if empty else 2)
                             if not empty:
-                                self.assertEqual(sheet['H2'].value, -50)
-                                self.assertEqual(sheet['F2'].value, datetime(2099, 1, 1))
-                                self.assertTrue(sheet['G2'].is_date)
-                                self.assertEqual(sheet['G2'].value, datetime(9999, 12, 31))
+                                self.assertEqual(sheet['F2'].value, 'N')
+                                self.assertEqual(sheet['I2'].value, -50)
+                                self.assertEqual(sheet['G2'].value, datetime(2099, 1, 1))
+                                self.assertTrue(sheet['H2'].is_date)
+                                self.assertEqual(sheet['H2'].value, datetime(9999, 12, 31))
                         finally:
                             workbook.close()
 

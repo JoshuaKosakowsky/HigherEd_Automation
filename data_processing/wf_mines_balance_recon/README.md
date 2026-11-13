@@ -74,10 +74,17 @@ See [SQL rules and validation](../../query/AR/holds/README.md).
 | Tab | Content |
 | --- | --- |
 | Reconciliation | CWID, First Name, Last Name, Banner Total Balance, W&F Principal Amount, Difference, W&F Returned |
-| Students in Collections | Combined Banner report: CWID, Last Name, First Name, CO Hold, TO Hold, CO From Date, CO To Date, Current Account Balance, WOFF, BDRC, Total Balance (in this order) |
+| Students in Collections | Combined Banner report: CWID, Last Name, First Name, CO Hold, TO Hold, Has SSN, CO From Date, CO To Date, Current Account Balance, WOFF, BDRC, Total Balance (in this order) |
 | W&F Collections | Consolidated Account Status reports with creditor, fee type, source file and Principal Amount |
 | W&F Returned | Consolidated Returned Accounts reports with creditor and source file |
 | WF file - worksheet | Other source worksheets, retaining value snapshots and layout |
+
+From 0.27.3, **Has SSN** in column F shows `Y` when a matching Banner person
+record has a nonblank SSN on file. Null, empty, whitespace-only, and missing
+person records yield `N`. Any nonblank placeholder counts as `Y`. The query
+returns only the flag. Filter for **Has SSN = Y** and a blank **TO Hold** to find
+accounts for review. Direct Insights runs and uploads require the flag.
+Regenerate older exports that lack it. See [issue #40](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/40).
 
 From patch 0.23.5, tab order is Reconciliation, Students in Collections,
 W&F Collections, W&F Returned, then other source worksheets. Agency tabs appear

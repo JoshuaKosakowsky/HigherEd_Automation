@@ -68,6 +68,13 @@ SELECT
     s.spriden_first_name AS "First Name",
     'CO' AS "CO Hold",
     CASE WHEN th.pidm IS NOT NULL THEN 'TO' END AS "TO Hold",
+    -- Return only presence. EXISTS preserves one report row even with multiple person records.
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM saturn.spbpers p
+        WHERE p.spbpers_pidm = h.pidm
+          AND TRIM(p.spbpers_ssn, ' ' || CHR(9) || CHR(10) || CHR(11) || CHR(12) || CHR(13)) <> ''
+    ) THEN 'Y' ELSE 'N' END AS "Has SSN",
     CAST(h.from_date AS date) AS "CO From Date",
     CAST(h.to_date AS date) AS "CO To Date",
     a.total_balance AS "Current Account Balance",

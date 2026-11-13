@@ -24,7 +24,7 @@ from .source_workbooks import open_source_workbook
 
 
 HOLD_HEADERS = (
-    'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold',
+    'CWID', 'Last Name', 'First Name', 'CO Hold', 'TO Hold', 'Has SSN',
     'CO From Date', 'CO To Date', 'Current Account Balance',
     'WOFF', 'BDRC', 'Total Balance',
 )
@@ -34,6 +34,7 @@ ACTIVITY_HEADERS = (
     'detail_code_description', 'Transaction User',
 )
 REPORT_HEADERS = {'students': HOLD_HEADERS, 'holds': HOLD_HEADERS, 'activity': ACTIVITY_HEADERS}
+_MISSING_SSN_FLAG = 'The Banner report is missing Has SSN. Regenerate the W&F - Banner Recon export in Insights.'
 
 
 def _header_key(value: object) -> str:
@@ -44,6 +45,8 @@ def prepare_report(frame: pd.DataFrame, report: str) -> pd.DataFrame:
     """Validate source identity without filtering or reclassifying source rows."""
     headers = [_header_key(value) for value in frame.columns]
     required = {_header_key(value) for value in REPORT_HEADERS[report]}
+    if 'has ssn' in required and 'has ssn' not in headers:
+        raise ValueError(_MISSING_SSN_FLAG)
     if not required.issubset(headers) or len(headers) != len(set(headers)):
         raise ValueError(f'The {report} report is missing required headers or has duplicate headers.')
     if 'Report Row Count' in frame.columns:
@@ -52,6 +55,8 @@ def prepare_report(frame: pd.DataFrame, report: str) -> pd.DataFrame:
     frame = frame.rename(columns={value: canonical.get(_header_key(value), value) for value in frame.columns})
     if report in {'students', 'holds'}:
         frame = frame.loc[:, list(REPORT_HEADERS[report])]
+        if not frame['Has SSN'].isin(['Y', 'N']).all():
+            raise ValueError('Has SSN must contain only Y or N. Regenerate the W&F - Banner Recon export in Insights.')
     return prepare_excel_dates(frame)
 
 
@@ -59,13 +64,18 @@ def read_insights_file(path: Path, report: str) -> pd.DataFrame:
     """Locate exactly one source table, allowing the usual report title rows."""
     required = {_header_key(value) for value in REPORT_HEADERS[report]}
     candidates = []
+    outdated_export = False
 
     def inspect(rows) -> None:
+        nonlocal outdated_export
         iterator = iter(rows)
         for number, row in enumerate(iterator, 1):
             if number > 30:
                 break
-            if not required.issubset({_header_key(value) for value in row}):
+            missing = required - {_header_key(value) for value in row}
+            if missing == {'has ssn'}:
+                outdated_export = True
+            if missing:
                 continue
             headers = [str(value) if value is not None else '' for value in row]
             records = []
@@ -91,6 +101,8 @@ def read_insights_file(path: Path, report: str) -> pd.DataFrame:
             inspect(rows())
     finally:
         book.close()
+    if not candidates and outdated_export:
+        raise ValueError(_MISSING_SSN_FLAG)
     if len(candidates) != 1:
         raise ValueError(f'Upload exactly one matching {report} source table; found {len(candidates)}.')
     return candidates[0]
