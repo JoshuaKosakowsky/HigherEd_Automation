@@ -25,7 +25,8 @@ SELECT
     UPPER(TRIM(d.tbbdetc_type_ind)) AS type_ind,
     TRIM(CAST(d.tbbdetc_priority AS text)) AS priority,
     UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
-    UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) AS title_iv_ind
+    UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) AS title_iv_ind,
+    UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) AS non_allowable_charge_ind
 FROM batch_scope s
 INNER JOIN taismgr.tbraccd t
     ON t.tbraccd_pidm = s.pidm

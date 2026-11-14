@@ -38,6 +38,7 @@ TRANSACTION_COLUMNS = {
     "priority",
     "category_code",
     "title_iv_ind",
+    "non_allowable_charge_ind",
 }
 
 CONTEXT_COLUMNS = {
@@ -70,6 +71,7 @@ REPORT_COLUMNS = [
     "first_name",
     "full_account_balance",
     "total_refund_amount",
+    "title_iv_balance_due_note",
     "proposed_student_delivery",
     "student_refund_amount",
     "proposed_parent_delivery",
@@ -214,13 +216,11 @@ def _priority(value: object) -> str | None:
     return text.zfill(3)
 
 
-def _effective_priority(detail_code: str, priority: str | None) -> tuple[str | None, int | None]:
-    if detail_code in {"TPDT", "TPPY"} and priority == "800":
-        return "800A", 8002
-    if priority == "800":
-        return "800", 8001
-    if detail_code == "COFP" and priority == "000":
-        return "000A", 2
+def _effective_priority(priority: str | None) -> tuple[str | None, int | None]:
+    # Refund reconstruction treats 800/000 alike, including sponsor and COF
+    # payments. Funding eligibility is checked separately for each charge.
+    if priority in {"800", "000"}:
+        return "000", 1
     if priority is None:
         return None, None
     return priority, int(priority) * 10 + 1
@@ -282,6 +282,7 @@ def _normalize_transaction(row: dict[str, Any], source_id: int) -> dict[str, Any
         "priority_code": priority,
         "category_code": _text(row["category_code"], upper=True) or "",
         "is_title_iv": _text(row["title_iv_ind"], upper=True) == "Y",
+        "non_allowable_charge_ind": _text(row["non_allowable_charge_ind"], upper=True),
         "accounting_amount": accounting_amount,
     }
 
@@ -306,7 +307,7 @@ def _payment_sources(transactions: list[dict[str, Any]]) -> tuple[list[dict[str,
             prior_positive += row["raw_amount"]
             if amount <= 0:
                 continue
-            effective, priority_sort = _effective_priority(row["detail_code"], row["priority_code"])
+            effective, priority_sort = _effective_priority(row["priority_code"])
             if row["is_title_iv"]:
                 fund_type = "TITLE_IV"
             elif row["category_code"].startswith("FA"):
@@ -332,7 +333,7 @@ def _charge_sources(
 ) -> tuple[list[dict[str, Any]], int]:
     """Build term-and-priority charge pools through the target term.
 
-    Charge credits/reversals net only within their original term and priority.
+    Charge credits/reversals net only within their term, priority and eligibility.
     Keeping every term separate is required because cross-term payment rules are
     applied later, from the oldest outstanding term forward.
     """
@@ -345,11 +346,11 @@ def _charge_sources(
     ]
     grouped: dict[tuple[object, ...], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        grouped[(row["term_code"], row["priority_code"])].append(row)
+        grouped[(row["term_code"], row["priority_code"], row["non_allowable_charge_ind"])].append(row)
 
     charges: list[dict[str, Any]] = []
     negative_groups = 0
-    for (term_code, priority), group in grouped.items():
+    for (term_code, priority, non_allowable), group in grouped.items():
         group_net = sum((row["raw_amount"] for row in group), ZERO)
         if group_net < 0:
             negative_groups += 1
@@ -373,6 +374,7 @@ def _charge_sources(
             "detail_code": f"PRIORITY_{priority or 'INVALID'}",
             "detail_desc": "Aggregated charges at the same term and priority",
             "priority_code": priority,
+            "non_allowable_charge_ind": non_allowable,
             "charge_amount": _money(sum((amount for _, amount in surviving), ZERO)),
         })
     return charges, negative_groups
@@ -477,7 +479,11 @@ def _apply_pairs(
         for source in sources:
             if charge_remaining[charge_index] <= 0:
                 break
-            if not _priority_matches(charge["priority_code"], source["priority_code"]):
+            if not _priority_matches(charge["priority_code"], source["effective_priority_code"]):
+                continue
+            # Unknown charge flags fail closed for Title IV. Neither an
+            # artificial wildcard nor a student authorization overrides Y.
+            if source["is_title_iv"] and charge["non_allowable_charge_ind"] != "N":
                 continue
             available_charge = charge_remaining[charge_index]
             available_payment = payment_remaining[source["source_id"]]
@@ -785,11 +791,6 @@ def _allocate_account(
         return None
 
     full_balance = _money(sum((row["accounting_amount"] or ZERO for row in transactions), ZERO))
-    # Offset credits and charges across the complete account before proposing
-    # money to return. Reallocation cannot create a refund on a zero-net account.
-    if full_balance >= ZERO:
-        return None
-
     invalid_priority_count = sum(
         row["raw_amount"] != 0
         and row["priority_code"] is None
@@ -803,11 +804,10 @@ def _allocate_account(
         row["raw_amount"] != 0 and row["term_sort"] is not None and row["term_sort"] > target_sort
         for row in transactions
     )
-    special_priority_mismatch_count = sum(
-        row["raw_amount"] != 0 and (
-            (row["detail_code"] in {"TPDT", "TPPY"} and row["priority_code"] != "800")
-            or (row["detail_code"] == "COFP" and row["priority_code"] != "000")
-        )
+    invalid_charge_flag_count = sum(
+        row["type_ind"] == "C" and row["raw_amount"] != 0
+        and row["detail_code"] not in POSTED_STUDENT_REFUND_CODES
+        and row["non_allowable_charge_ind"] not in {"Y", "N"}
         for row in transactions
     )
     missing_balance_count = sum(row["stored_balance"] is None for row in transactions)
@@ -865,7 +865,24 @@ def _allocate_account(
     unused_fdpl = _money(sum((source["source_credit_amount"] for source in selected_sources if source["detail_code"] == "FDPL"), ZERO))
     unused_non_fdpl = policy_unused_total - unused_fdpl
     account_credit = _money(max(-full_balance, ZERO))
-    policy_credit_mismatch = policy_unused_total != account_credit
+    non_allowable_balance = _money(sum((
+        remaining for charge, remaining in zip(staged_charges, charge_remaining)
+        if charge["non_allowable_charge_ind"] == "Y"
+    ), ZERO))
+    unused_title_iv = _money(sum((
+        source["source_credit_amount"] for source in selected_sources if source["is_title_iv"]
+    ), ZERO))
+    # Only confirmed non-allowable charges may coexist with this extra refund.
+    # Other unpaid charges/cap mismatches retain the existing reconciliation gate.
+    title_iv_exception = (
+        min(unused_title_iv, non_allowable_balance)
+        if unpaid_charges == non_allowable_balance and not invalid_charge_flag_count
+        else ZERO
+    )
+    refund_amount = _money(account_credit + title_iv_exception)
+    if refund_amount <= ZERO:
+        return None
+    policy_credit_mismatch = policy_unused_total != refund_amount
     # Reallocation may change cash applications, but must not present aid that
     # Banner already consumed as a newly available refund source.
     applied_aid_reopened = any(
@@ -977,7 +994,7 @@ def _allocate_account(
         missing_amount_count,
         invalid_term_count,
         future_term_count,
-        special_priority_mismatch_count,
+        invalid_charge_flag_count,
         negative_net_source_count,
         missing_auth_count,
         conflicting_auth_count,
@@ -1034,7 +1051,7 @@ def _allocate_account(
         split_blocked
         or missing_balance_count > 0
         or stored_difference_count > 0
-        or unpaid_charges > 0
+        or (unpaid_charges > 0 and title_iv_exception <= ZERO)
         or policy_credit_mismatch
         or ledger_residual != ZERO
     )
@@ -1063,9 +1080,9 @@ def _allocate_account(
         "APPLIED_AID_REOPENED_BY_RECONSTRUCTION" if applied_aid_reopened else None,
         "UNRECOGNIZED_TERM_CODE" if invalid_term_count else None,
         "FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION" if future_term_count else None,
-        "ARTIFICIAL_PRIORITY_DETAIL_CODE_HAS_UNEXPECTED_BASE_PRIORITY" if special_priority_mismatch_count else None,
+        "MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG" if invalid_charge_flag_count else None,
         "NEGATIVE_NET_SOURCE_REQUIRES_REVIEW" if negative_net_source_count else None,
-        "UNPAID_CHARGES_AFTER_POLICY_ALLOCATION" if unpaid_charges > 0 else None,
+        "UNPAID_CHARGES_AFTER_POLICY_ALLOCATION" if unpaid_charges > 0 and title_iv_exception <= ZERO else None,
         "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT" if policy_credit_mismatch else None,
         "ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS" if ledger_residual != ZERO else None,
         "REFUND_HOLD_RH" if refund_hold else None,
@@ -1120,7 +1137,13 @@ def _allocate_account(
         "last_name": account["last_name"],
         "first_name": account["first_name"],
         "full_account_balance": full_balance,
-        "total_refund_amount": account_credit,
+        "total_refund_amount": refund_amount,
+        "title_iv_balance_due_note": (
+            f"Yes - ${_format_money(full_balance + refund_amount)} in non-allowable charges "
+            "remains owed after the proposed Title IV refund."
+            if title_iv_exception > ZERO and not split_blocked
+            else "Review required" if title_iv_exception > ZERO else "No"
+        ),
         "proposed_student_delivery": student_delivery,
         "student_refund_amount": student_amount,
         "proposed_parent_delivery": parent_delivery,

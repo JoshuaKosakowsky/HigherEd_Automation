@@ -30,7 +30,9 @@ The local Python process then performs:
 - Title IV classification and separate $200 giving/receiving fiscal-year caps;
 - unrestricted cross-term allocation;
 - Banner positional priority matching;
-- the 800A (TPDT/TPPY) and 000A (COFP) artificial ordering bands;
+- a common artificial `000` matching/ordering band for stored `800` and `000`
+  payments, including TPDT/TPPY and COFP;
+- exclusion of Non-Allowable Charges from Title IV payment application;
 - earliest transaction-number tie breaking;
 - FDPL ownership by aid year and PLUS authorization;
 - ACH/credit-card delivery routing and review statuses; and
@@ -48,18 +50,19 @@ lookback starts with the whole term containing `run_date - 2 years` (September
 accounts retain their full history. There is no five-year history cutoff. A CWID
 filter selects that account directly.
 
-The flat exports may include zero-balance accounts. The Python allocator and
-standalone report exclude every account whose full-account balance is zero or
-positive, including accounts with offsetting restricted credits and charges.
-An amount owed in Summer and an equal credit in Fall produce no refund proposal.
+An amount owed in Summer and an equal credit in Fall ordinarily produces no
+refund proposal. The exception is unused Title IV funding with confirmed
+Non-Allowable Charges still owed, as described below. These accounts may have
+a negative, zero, or positive full-account balance.
 
 `full_account_balance` remains charges minus payments across all history,
-including refunds already posted. For a negative balance, `total_refund_amount`
-is its absolute value: the account's net credit. Reallocation cannot increase
-this amount. `total_unused_payment_amount`, `balance_sources`, and unused-source
-subtotals describe the reconstruction and can differ from that net credit.
-Such a difference blocks the recipient split and delivery; the account's net
-credit remains visible for manual review, without choosing which source to trim.
+including refunds already posted. Normally `total_refund_amount` is the account's
+net credit. If all remaining unpaid charges are explicitly Non-Allowable, add
+the lesser of their unpaid amount and the unused Title IV principal. This allows
+the agreed federal refund while leaving those charges owed. Reconstructed source
+remainders must equal this permitted refund; otherwise ownership and delivery
+remain blocked, without arbitrarily trimming a source. Other unpaid charges,
+including fiscal-year cap mismatches, do not qualify for this exception.
 
 Reconstructed unused Title IV or non-Title-IV `FA%` aid must not exceed the
 surviving source's stored unapplied credit. A missing aid balance or an excess
@@ -86,6 +89,9 @@ Synthetic acceptance examples:
 | Same-term HLTH $1,000 and HIWR -$1,000 at priority 879; unapplied cash $100 | Insurance nets to $0 before allocation; the $100 cash credit remains available. |
 | Summer tuition $1,000 and applied Title IV aid $1,200; Fall tuition $500 and scholarship $600 with $300 unapplied | Earlier aid applies first; $300 of Fall scholarship remains, without reopening Summer aid. |
 | Old-FY charges $1,000; newer Title IV payment $1,200, of which the configured cap applies $200 | Net credit $200 goes to manual review with no recipient/delivery; reconstructed unused $1,000 is diagnostic only. |
+| Tuition $1,000; LPPF $100 marked Non-Allowable; Pell $1,200 with $200 unapplied | Refund $200; $100 remains owed; new column identifies the balance. |
+| Same example with LPPF $200 or $300 | Refund $200 even though the starting account balance is zero or positive; $200 or $300 remains owed. |
+| Tuition $1,000; Non-Allowable fee $100; Pell $1,200 followed by cash $100 | Cash pays the fee; Pell refund $200; new column says No. |
 
 ### Priorities, delivery, and review
 
@@ -94,9 +100,43 @@ priority. Existing zero wildcard rules and Title IV fiscal-year limits also
 apply across terms. Payments use oldest term first, then descending priority
 and earliest transaction number within that term. A later scholarship's higher
 priority cannot put it ahead of earlier-term aid. ACH and cards have no special
-last-payment band: at `000` they follow COFP (`000A`), then compete with other
-`000` payments by transaction
-number. FDPL likewise uses the existing chronological tie rule.
+last-payment band. Stored `800` and `000` use the same artificial `000` for both
+matching and order, below other nonzero priorities. TPDT/TPPY and COFP have no
+special bands; all compete by transaction number within their payment term.
+Original priorities, payment identity, and PLUS ownership remain available to
+the calculation. This does not edit Banner's detail-code configuration.
+
+### Title IV refunds that leave charges owed (0.28.0)
+
+The [allocation decision in issue #29](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823)
+defines the common priority. In the implementation follow-up, the owner confirmed
+removing the sponsor/COF exceptions, keeping oldest-term-first order, and the
+$200 Pell refund/$100 LPPF balance example above. The related
+[Title IV flag question](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6870164720)
+tracks the charge-eligibility context; these confirmations are not live validation.
+
+`TBBDETC_TIV_IND = Y` identifies Title IV payments. A charge with
+`TBBDETC_NON_ALLOW_CHG_IND = Y` cannot consume those payments, even under the
+common `000` wildcard. Other eligible funding can pay it. Charges pool only
+within the same term, priority, and Non-Allowable flag, so differently restricted
+charges cannot be combined. Missing/invalid charge flags block recipient splits
+and are not treated as Title-IV-eligible. LPPF is not hard-coded: the flag governs
+every charge detail code. Stored aid-balance safeguards still apply.
+
+Every workbook tab adds **Title IV Refund Leaves Balance Due**, immediately
+after **Total_Owed_to_Student**. A calculated exception displays `Yes` with the
+total non-allowable balance remaining after the proposed account refund, not
+just the increase in balance or that tab's portion. An unresolved exception
+displays `Review required`; other cases display `No`. Holds and sponsor/parent
+review routing still apply. The column supports staff follow-up; it neither
+confirms issuance nor sends email.
+
+This implements the explicit Non-Allowable exclusion only. Institutional-charge
+authorization (`TBBDETC_INST_CHG_IND` and the student's authorization records)
+is not inferred; its extraction and rules remain a separate unresolved scope.
+Before operational use, validate the new column in the Insights schema and
+compare representative Banner accounts. Regenerate paired manual downloads or
+start a fresh API extraction; cache format 6 rejects older caches.
 
 After all ordinary charges are allocated oldest-term first, posted student
 refunds with detail code `ARFD` or `RFND` reconcile against still-unused payment
@@ -183,9 +223,9 @@ Synthetic acceptance cases:
   Holds, preserving the third-party reason. Third Party Reviews stays empty.
 
 **Refresh both manual downloads or start a new API extraction after upgrading.**
-Old downloads lack Feed Date and sponsor columns and are rejected with a request
-to rerun the current export SQL. Old format-version-4 caches cannot resume as
-format version 5. Run `validate_refund_schema.sql` to confirm TBBCSTU fields and
+Old downloads lacking Feed Date, sponsor columns, or the Non-Allowable Charge
+flag are rejected with a request to rerun the current export SQL. Caches now
+use format version 6 and reject older formats. Run `validate_refund_schema.sql` to confirm TBBCSTU fields and
 TBRACCD_FEED_DATE in the actual Insights schema, then compare representative
 sponsors/contracts against TSACONT before operational use. Candidate selection
 now includes historical TPPY accounts; production-size extraction timing needs
@@ -374,9 +414,9 @@ and pass the matching `-TargetTerm` and `-RunDate` to Python.
 The later workbook-tab-only change does not require new SQL downloads; existing
 compatible extracts can be recalculated to produce the new layout.
 
-The net-credit and payment-order correction also uses the existing extract
-columns and candidate scope. Recalculate matching complete downloads to compare
-the same snapshot, then obtain fresh paired downloads for the next live review.
+Version 0.28.0 requires the new `non_allowable_charge_ind` transaction column.
+Older downloads are rejected with a refresh instruction. Use the updated SQL
+for both paired downloads before recalculating this version.
 
 ## Validation expectation
 

@@ -22,6 +22,7 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('TAISMGR', 'TBBDETC', 'PRIORITY'),
         ('TAISMGR', 'TBBDETC', 'DCAT_CODE'),
         ('TAISMGR', 'TBBDETC', 'TIV_IND'),
+        ('TAISMGR', 'TBBDETC', 'NON_ALLOW_CHG_IND'),
         ('TAISMGR', 'TBBACCT', 'PIDM'),
         ('TAISMGR', 'TBBACCT', 'DELI_CODE'),
         ('TAISMGR', 'TBBACCT', 'REFUND_IND'),

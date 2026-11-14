@@ -50,7 +50,7 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("FROM REPORT_SCOPE_PIDMS V", screening)
         self.assertIn("T.TBRACCD_PIDM = V.PIDM", screening)
         self.assertNotIn("TAISMGR.TBRACCD", self.query[self.query.index("account_balance_rollup AS"):].upper())
-        self.assertIn("FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
+        self.assertNotIn("AND F.FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
 
     def test_recursion_uses_per_account_vectors_without_pair_relation_rescans(self) -> None:
         allocation = self.section("allocation_final AS MATERIALIZED", "allocation_transfer_summary AS")
@@ -68,15 +68,13 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("RAW_TRANSACTION_BALANCE IS DISTINCT FROM 0", history)
         self.assertIn("CUMULATIVE_BALANCE = 0 AND UNRESOLVED_PREFIX = 0", history)
 
-    def test_refunds_require_net_credit_and_block_unreliable_ownership(self) -> None:
-        self.assertIn(
-            "GREATEST(-B.FULL_ACCOUNT_BALANCE, 0) AS TOTAL_REFUND_AMOUNT",
-            self.normalized_query,
-        )
-        self.assertIn("AND F.FULL_ACCOUNT_BALANCE < 0", self.normalized_query)
+    def test_title_iv_exception_retains_source_reconciliation(self) -> None:
+        totals = self.section("refund_totals AS", "joined AS")
+        self.assertIn("UC.UNPAID_CHARGE_AMOUNT = UC.NON_ALLOWABLE_BALANCE", totals)
+        self.assertIn("BS.UNUSED_TITLE_IV_AMOUNT", totals)
         split = self.section("joined AS", "parent_plus_calculation AS")
         self.assertIn("COALESCE(SC.APPLIED_AID_REOPENED_COUNT, 0) > 0", split)
-        self.assertIn("<> GREATEST(-B.FULL_ACCOUNT_BALANCE, 0)", split)
+        self.assertIn("<> FT.TOTAL_REFUND_AMOUNT", split)
 
     def test_schema_inventory_requires_new_metadata(self) -> None:
         schema_query = REFUNDS_QUERY.with_name("validate_refund_schema.sql").read_text(
@@ -85,6 +83,7 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("('TAISMGR', 'TBBDETC', 'PRIORITY')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'DCAT_CODE')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
+        self.assertIn("('TAISMGR', 'TBBDETC', 'NON_ALLOW_CHG_IND')", schema_query)
 
 
 class RefundExtractSqlTests(unittest.TestCase):
@@ -118,7 +117,7 @@ class RefundExtractSqlTests(unittest.TestCase):
         self.database.create_aggregate("delimited_values", 4, DelimitedValues)
         schemas = {
             "taismgr.tbraccd": "pidm int, term_code text, aidy_code text, tran_number int, detail_code text, amount numeric, balance numeric, effective_date text, activity_date text, feed_date text",
-            "taismgr.tbbdetc": "detail_code text, desc text, type_ind text, priority text, dcat_code text, tiv_ind text",
+            "taismgr.tbbdetc": "detail_code text, desc text, type_ind text, priority text, dcat_code text, tiv_ind text, non_allow_chg_ind text",
             "taismgr.tbbcstu": "stu_pidm int, contract_pidm int, contract_number text, term_code text",
             "taismgr.tbbacct": "pidm int, deli_code text, refund_ind text, activity_date text",
             "saturn.spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
@@ -131,7 +130,7 @@ class RefundExtractSqlTests(unittest.TestCase):
             prefixed = ", ".join(f"{prefix}_{column}" for column in columns.split(", "))
             self.database.execute(f"CREATE TABLE {table} ({prefixed})")
         for code, kind, priority in (("TPPY", "P", "800"), ("Z0LE", "P", "000"), ("FREE", "P", "000"), ("CHG", "C", "899")):
-            self.database.execute("INSERT INTO taismgr.tbbdetc VALUES (?, ?, ?, ?, 'CSH', 'N')", (code, "Synthetic", kind, priority))
+            self.database.execute("INSERT INTO taismgr.tbbdetc VALUES (?, ?, ?, ?, 'CSH', 'N', 'N')", (code, "Synthetic", kind, priority))
         for pidm in (1, 2, 3, 4):
             term = "209980" if pidm == 1 else "208080"
             rows = [(pidm, term, "9900", 3, "FREE", 50, -50, "2080-08-01", "2080-08-01", None)]
@@ -195,6 +194,30 @@ class RefundExtractSqlTests(unittest.TestCase):
         self.assertEqual(row.sponsor_ids, "TPS-TEST-1")
         self.assertEqual(row.contract_numbers, "OLD-2")
 
+    def test_real_extract_scope_keeps_title_iv_refunds_on_positive_accounts(self) -> None:
+        self.database.executemany("INSERT INTO taismgr.tbbdetc VALUES (?, 'Synthetic', ?, ?, 'FA', ?, ?)",
+                                  [("PELL", "P", "800", "Y", "N"), ("LPPF", "C", "789", "N", "Y")])
+        for pidm, late_fee in ((5, 100), (6, 200), (7, 300)):
+            for tran, code, amount, balance in ((1, "CHG", 1000, 0),
+                                               (2, "LPPF", late_fee, late_fee),
+                                               (3, "PELL", 1200, -200)):
+                self.database.execute(
+                    "INSERT INTO taismgr.tbraccd VALUES (?, '209910', '9899', ?, ?, ?, ?, '2099-01-01', '2099-01-01', NULL)",
+                    (pidm, tran, code, amount, balance))
+            self.database.execute("INSERT INTO saturn.spriden VALUES (?, ?, 'Synthetic', 'Student', NULL)",
+                                  (pidm, f"TEST-{pidm}"))
+            self.database.execute("INSERT INTO taismgr.tbbacct VALUES (?, NULL, 'N', '2099-08-31')", (pidm,))
+        transactions = self.extract("transactions")
+        self.assertEqual(set(transactions.query("detail_code == 'LPPF'").non_allowable_charge_ind), {"Y"})
+        self.assertEqual(set(transactions.query("detail_code == 'PELL'").priority), {"800"})
+        report = allocate_refunds(transactions, self.extract("context"),
+                                  RefundParameters("209910", date(2099, 8, 31)))
+        for pidm, late_fee in ((5, 100), (6, 200), (7, 300)):
+            row = report.loc[report.cwid == f"TEST-{pidm}"].iloc[0]
+            self.assertEqual(row.total_refund_amount, Decimal(200))
+            self.assertEqual(row.full_account_balance, Decimal(late_fee - 200))
+            self.assertIn(f"${late_fee:.2f}", row.title_iv_balance_due_note)
+
     def test_sponsor_lists_keep_names_ids_and_contracts_aligned(self) -> None:
         self.database.execute("UPDATE saturn.spriden SET spriden_last_name = 'Zeta' WHERE spriden_pidm = 101")
         self.database.execute("UPDATE saturn.spriden SET spriden_last_name = 'Alpha' WHERE spriden_pidm = 102")
@@ -236,6 +259,7 @@ class RefundTransaction:
     title_iv: str = "N"
     tran_number: int | None = None
     feed_date: str | None = None
+    non_allowable: str | None = "N"
 
 
 class RefundsPostgresPolicyTests(unittest.TestCase):
@@ -259,9 +283,9 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("OTHR", "C", "700", 500),
             RefundTransaction("PAYA", "P", "899", 2000),
             RefundTransaction("PAYB", "P", "890", 1500),
-            RefundTransaction("FDPL", "P", "800", 4000, balance=-500,
+            RefundTransaction("FDPL", "P", "800", 4000, balance=0,
                               category="FA", title_iv="Y"),
-            RefundTransaction("PAYC", "P", "000", 2000, balance=-1500),
+            RefundTransaction("PAYC", "P", "000", 2000, balance=-2000),
         ]
 
     def run_report(
@@ -300,7 +324,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 "detail_code text, amount numeric, balance numeric, "
                 "effective_date date, activity_date timestamp, feed_date date",
             "tbbdetc": "detail_code text, desc text, type_ind text, priority text, "
-                "dcat_code text, tiv_ind text",
+                "dcat_code text, tiv_ind text, non_allow_chg_ind text",
             "spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
             "spbpers": "pidm int, dead_ind text, dead_date date, confid_ind text, activity_date date",
             "tbbacct": "pidm int, deli_code text, refund_ind text, activity_date date",
@@ -320,7 +344,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ]
             sql.append(f"INSERT INTO {table} VALUES ({', '.join(literals)});")
 
-        details: dict[str, tuple[str, str | None, str, str]] = {}
+        details: dict[str, tuple[str, str | None, str, str, str | None]] = {}
         used_numbers: dict[int, set[int]] = {}
         next_numbers: dict[int, int] = {}
         for transaction in transactions:
@@ -329,6 +353,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 transaction.priority,
                 transaction.category,
                 transaction.title_iv,
+                transaction.non_allowable,
             )
             if transaction.detail_code in details:
                 self.assertEqual(details[transaction.detail_code], definition)
@@ -426,11 +451,11 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
     def test_worked_example_uses_priority_allocation(self) -> None:
         row = self.one(self.worked_example())
-        self.assert_split(row, 500, 1500)
+        self.assert_split(row, 0, 2000)
         self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
         self.assertNotIn("PAYA", row["balance_sources"])
         self.assertNotIn("PAYB", row["balance_sources"])
-        self.assertIn("FDPL", row["balance_sources"])
+        self.assertNotIn("FDPL", row["balance_sources"])
         self.assertIn("PAYC", row["balance_sources"])
         self.assertEqual(
             row["fdpl_priority_tie_rule"],
@@ -446,7 +471,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
     def test_output_columns_follow_requested_order_with_policy_audit(self) -> None:
         expected = """
-            cwid last_name first_name full_account_balance total_refund_amount
+            cwid last_name first_name full_account_balance total_refund_amount title_iv_balance_due_note
             proposed_student_delivery student_refund_amount proposed_parent_delivery
             parent_refund_amount balance_sources plus_to_student_status
             parent_plus_target_term refund_split_status third_party_review_required_ind
@@ -605,16 +630,16 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         self.assertEqual(row["total_unused_payment_amount"], 400)
         self.assertEqual(row["unpaid_charge_amount"], 300)
 
-    def test_800a_sources_apply_before_regular_800(self) -> None:
+    def test_sponsor_sources_share_common_priority(self) -> None:
         row = self.one([
             RefundTransaction("CHG8", "C", "899", 100, tran_number=10),
             RefundTransaction("FDPL", "P", "800", 100, balance=-100,
                               category="FA", title_iv="Y", tran_number=2),
             RefundTransaction("TPDT", "P", "800", 100, tran_number=3),
         ])
-        self.assert_split(row, 100, 0)
-        self.assertIn("FDPL", row["balance_sources"])
-        self.assertNotIn("TPDT", row["balance_sources"])
+        self.assert_split(row, 0, 100)
+        self.assertNotIn("FDPL", row["balance_sources"])
+        self.assertIn("TPDT", row["balance_sources"])
 
     def test_regular_800_ties_use_earliest_transaction_number(self) -> None:
         early_fdpl = self.one([
@@ -633,15 +658,15 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         ])
         self.assert_split(late_fdpl, 100, 0)
 
-    def test_000a_applies_first_then_ordinary_000_by_transaction(self) -> None:
+    def test_cofp_and_ordinary_payments_use_transaction_order(self) -> None:
         cofp = self.one([
             RefundTransaction("CHG", "C", "700", 100),
             RefundTransaction("PAY0", "P", "000", 100, balance=-100),
             RefundTransaction("COFP", "P", "000", 100),
         ])
         self.assert_split(cofp, 0, 100)
-        self.assertIn("PAY0", cofp["balance_sources"])
-        self.assertNotIn("COFP", cofp["balance_sources"])
+        self.assertNotIn("PAY0", cofp["balance_sources"])
+        self.assertIn("COFP", cofp["balance_sources"])
 
         ach = self.one([
             RefundTransaction("CHG", "C", "700", 100),
@@ -816,7 +841,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         transactions = self.worked_example()
         transactions[-1] = replace(transactions[-1], balance=0)
         row = self.one(transactions)
-        self.assert_split(row, 500, 1500)
+        self.assert_split(row, 0, 2000)
         self.assertEqual(row["allocation_review_required_ind"], "Y")
         self.assertIn("STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION", row["review_reasons"])
 
@@ -981,7 +1006,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                     amount=t.amount, balance=t.stored_balance, term=t.term,
                     aid_year=t.aid_year, effective_date=t.effective_date,
                     activity_date=t.activity_date, category=t.category,
-                    title_iv=t.title_iv, tran_number=t.tran_number,
+                    title_iv=t.title_iv, tran_number=t.tran_number, non_allowable=t.non_allowable,
                 ) for t in transactions]
                 arguments = {key: value for key, value in kwargs.items() if key not in {"expected_rows", "sponsor_context", "progress_reporter"}}
                 if "run_date" in arguments:
