@@ -5,7 +5,10 @@ This is intentionally a flat, non-recursive query. The Python refund workflow
 replaces the expensive SQL allocation engine and substitutes the validated
 tokens below before execution. Do not run this template directly in Insights.
 */
-WITH batch_scope AS MATERIALIZED (
+WITH non_allowable_detail_codes(detail_code) AS (
+    __NON_ALLOWABLE_DETAIL_CODES_SQL__
+),
+batch_scope AS MATERIALIZED (
     __REFUND_SCOPE_SQL__
 )
 SELECT
@@ -26,7 +29,12 @@ SELECT
     TRIM(CAST(d.tbbdetc_priority AS text)) AS priority,
     UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
     UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) AS title_iv_ind,
-    UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) AS non_allowable_charge_ind
+    CASE
+        WHEN d.tbbdetc_detail_code IS NULL THEN NULL
+        WHEN UPPER(TRIM(d.tbbdetc_detail_code)) IN (
+            SELECT detail_code FROM non_allowable_detail_codes) THEN 'Y'
+        ELSE 'N'
+    END AS non_allowable_charge_ind
 FROM batch_scope s
 INNER JOIN taismgr.tbraccd t
     ON t.tbraccd_pidm = s.pidm

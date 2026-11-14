@@ -5,7 +5,10 @@ The result contains one row per account and PLUS authorization row. Account
 controls are aggregated before the authorization join so duplicate control or
 hold rows cannot multiply the financial transaction extract.
 */
-WITH batch_scope AS MATERIALIZED (
+WITH non_allowable_detail_codes(detail_code) AS (
+    __NON_ALLOWABLE_DETAIL_CODES_SQL__
+),
+batch_scope AS MATERIALIZED (
     __REFUND_SCOPE_SQL__
 ),
 current_identity AS MATERIALIZED (

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -20,6 +21,7 @@ from .terms import validate_term
 CWID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,30}$")
 QUERY_DIRECTORY = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
 TEMPLATE_TOKENS = {
+    "__NON_ALLOWABLE_DETAIL_CODES_SQL__",
     "__REFUND_SCOPE_SQL__",
     "__BATCH_COUNT__",
     "__BATCH_INDEX__",
@@ -100,6 +102,26 @@ def _scope_sql(settings: ExtractSettings, pidm_range: tuple[int | None, int | No
     )
 
 
+def render_non_allowable_policy_sql(sql: str) -> str:
+    """Expand the maintained Banner snapshot in templates or generated SQL."""
+    policy = (QUERY_DIRECTORY / "refund_non_allowable_detail_codes.sql").read_text(
+        encoding="utf-8"
+    ).strip()
+    # Mark generated copies so one command can refresh the runnable SQL too.
+    pattern = (
+        r"(?P<indent>^[ \t]*)(?:__NON_ALLOWABLE_DETAIL_CODES_SQL__|"
+        r"/\* BEGIN GENERATED NON-ALLOWABLE CODES \*/.*?"
+        r"/\* END GENERATED NON-ALLOWABLE CODES \*/)"
+    )
+
+    def replace_policy(match: re.Match[str]) -> str:
+        lines = ["/* BEGIN GENERATED NON-ALLOWABLE CODES */", *policy.splitlines(),
+                 "/* END GENERATED NON-ALLOWABLE CODES */"]
+        return "\n".join(match["indent"] + line for line in lines)
+
+    return re.sub(pattern, replace_policy, sql, flags=re.MULTILINE | re.DOTALL)
+
+
 def render_manual_extract_sql(template: str) -> str:
     """Generate standalone website SQL from the same scope used by API batches."""
     scope = (
@@ -116,11 +138,14 @@ def render_manual_extract_sql(template: str) -> str:
         "/* MANUAL WEBSITE EXPORT: download the complete result as XLSX or CSV.\n"
         "Use identical run_date, target_term_override and cwid_filter in both exports.\n"
         "Defaults: today's term, entire candidate population. Never commit a CWID.\n"
-        "Generated from the extract template and refund_scope.sql; regenerate when either changes. */\n"
+        "Generated from the extract template, refund_scope.sql and Non-Allowable code policy.\n"
+        "Regenerate with: python -m data_processing.refunds.extract */\n"
     )
     # The template's API-only introduction is misleading in a runnable export.
     body = re.sub(r"\A\s*/\*.*?\*/\s*", "", template, count=1, flags=re.DOTALL)
-    return header + body.replace("__REFUND_SCOPE_SQL__", scope).replace("__TRANSACTION_FILTER__", "TRUE")
+    return render_non_allowable_policy_sql(
+        header + body.replace("__REFUND_SCOPE_SQL__", scope).replace("__TRANSACTION_FILTER__", "TRUE")
+    )
 
 
 def render_extract_sql(
@@ -139,6 +164,7 @@ def render_extract_sql(
         .replace("__IDENTITY_PIDM_FILTER__", _range_filter("i.spriden_pidm", pidm_range))
         .replace("__TRANSACTION_FILTER__", _range_filter("t.tbraccd_tran_number", transaction_range))
     )
+    rendered = render_non_allowable_policy_sql(rendered)
     unresolved = sorted(token for token in TEMPLATE_TOKENS if token in rendered)
     if unresolved:
         raise ValueError(f"Unresolved SQL template tokens: {', '.join(unresolved)}")
@@ -339,7 +365,10 @@ def _complete_partition(
 
 def _manifest_values(settings: ExtractSettings) -> dict[str, object]:
     return {
-        "format_version": 6,
+        "format_version": 7,
+        "non_allowable_policy_sha256": sha256(
+            (QUERY_DIRECTORY / "refund_non_allowable_detail_codes.sql").read_bytes()
+        ).hexdigest(),
         "target_term": settings.target_term,
         "batch_count": settings.batch_count,
         "cwid": settings.cwid,
@@ -439,3 +468,20 @@ def read_refund_extracts(settings: ExtractSettings) -> tuple[pd.DataFrame, pd.Da
                 raise FileNotFoundError(f"Cached refund extract is incomplete: {path}")
             frames.append(_read_cached(path))
     return pd.concat(transaction_frames, ignore_index=True), pd.concat(context_frames, ignore_index=True)
+
+
+def regenerate_refund_sql() -> None:
+    """Refresh checked-in website queries after a scope, template or policy edit."""
+    for name in ("transactions", "context"):
+        template = (QUERY_DIRECTORY / f"refund_{name}_extract.sql").read_text(encoding="utf-8")
+        (QUERY_DIRECTORY / f"refund_{name}_manual.sql").write_text(
+            render_manual_extract_sql(template), encoding="utf-8"
+        )
+    standalone = QUERY_DIRECTORY / "Refunds.sql"
+    standalone.write_text(
+        render_non_allowable_policy_sql(standalone.read_text(encoding="utf-8")), encoding="utf-8"
+    )
+
+
+if __name__ == "__main__":
+    regenerate_refund_sql()

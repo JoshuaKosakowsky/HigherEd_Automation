@@ -34,9 +34,18 @@ Starting with 0.27.0, the flat transaction extract includes TBRACCD_FEED_DATE;
 the context extract aggregates TBBCSTU sponsor attachments and current SPRIDEN
 identity before joining PLUS authorizations. **Regenerate both manual downloads**
 after upgrading. Old downloads and format-version-4 API caches cannot supply the
-new report context and must be refreshed. Version 0.28.0 additionally requires `TBBDETC_NON_ALLOW_CHG_IND` as
-`non_allowable_charge_ind` in transactions. Regenerate paired downloads; API
-caches now use format version 6 and reject earlier formats.
+new report context and must be refreshed. Version 0.28.0 additionally requires
+`non_allowable_charge_ind` in transactions. From 0.28.1 it is derived from the
+owner-confirmed Non-Allowable detail-code list because the Banner checkbox's
+source column is unavailable in Insights. Regenerate paired downloads; API
+caches use format version 7 and the policy fingerprint to reject stale flags.
+
+Maintain the current list in `refund_non_allowable_detail_codes.sql`, a SQL
+fragment containing the 11 codes confirmed on 2026-11-14. It is not a standalone
+Insights query. After editing it, run `python -m data_processing.refunds.extract`
+from the repository root to refresh both manual SQL files and the marked policy
+block in `Refunds.sql`. Tests check that generated copies match. See the
+[source decision and maintenance procedure](../../../workflows/refunds/README.md#maintained-non-allowable-list-0281).
 
 Only Third Party Reviews adds sponsor names, IDs and contract numbers, the
 calendar-derived current term, signed TPPY/Z0LE current-term transaction totals,
@@ -213,10 +222,12 @@ earlier-term payments because of its higher priority. Other nonzero priorities
 precede the common `000` band; TPDT/TPPY and COFP no longer have `800A`/`000A`
 exceptions. Individual sources, original priorities, dates and ownership survive.
 
-`TBBDETC_NON_ALLOW_CHG_IND = Y` prohibits Title IV from paying a charge,
-regardless of priority or authorization. Missing/invalid charge flags fail closed
-and block recipient assignment. Non-Title-IV payments retain their matching
-rules. Reversals net within payment term/aid year/detail and charge
+Membership in the maintained Non-Allowable list prohibits Title IV from paying
+a charge, regardless of priority or authorization. `TBBDETC_TIV_IND = Y`
+identifies the restricted payments, even when their stored priority is `000`.
+Non-Title-IV payments, including stored `800`, retain their matching rules.
+Other charge codes with Banner detail metadata receive `N`; missing metadata
+stays unknown and blocks recipient assignment. Reversals net within payment term/aid year/detail and charge
 term/priority/Non-Allowable flag; differently restricted charges never pool.
 Negative net source groups still require review.
 

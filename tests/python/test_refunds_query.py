@@ -20,7 +20,9 @@ from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_r
 from data_processing.refunds.export import (
     WORKBOOK_HEADERS, WORKBOOK_OMITTED_COLUMNS, WORKBOOK_COLUMNS, THIRD_PARTY_COLUMNS,
 )
-from data_processing.refunds.extract import ExtractSettings, render_extract_sql
+from data_processing.refunds.extract import (
+    ExtractSettings, render_extract_sql, render_non_allowable_policy_sql,
+)
 from data_processing.refunds.pipeline import run_refund_download_pipeline
 from tests.python import test_refunds_workflow as python_cases
 
@@ -83,7 +85,12 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("('TAISMGR', 'TBBDETC', 'PRIORITY')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'DCAT_CODE')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
-        self.assertIn("('TAISMGR', 'TBBDETC', 'NON_ALLOW_CHG_IND')", schema_query)
+        self.assertNotIn("NON_ALLOW_CHG_IND", schema_query)
+
+    def test_standalone_policy_matches_maintained_snapshot(self) -> None:
+        self.assertEqual(self.query.count("/* BEGIN GENERATED NON-ALLOWABLE CODES */"), 1)
+        self.assertEqual(self.query, render_non_allowable_policy_sql(self.query))
+        self.assertNotRegex(self.query.lower(), r"tbbde(?:tc|ct)_non_allow_chg_ind")
 
 
 class RefundExtractSqlTests(unittest.TestCase):
@@ -117,7 +124,8 @@ class RefundExtractSqlTests(unittest.TestCase):
         self.database.create_aggregate("delimited_values", 4, DelimitedValues)
         schemas = {
             "taismgr.tbraccd": "pidm int, term_code text, aidy_code text, tran_number int, detail_code text, amount numeric, balance numeric, effective_date text, activity_date text, feed_date text",
-            "taismgr.tbbdetc": "detail_code text, desc text, type_ind text, priority text, dcat_code text, tiv_ind text, non_allow_chg_ind text",
+            # Match Insights: neither spelling of Non-Allowable exists here.
+            "taismgr.tbbdetc": "detail_code text, desc text, type_ind text, priority text, dcat_code text, tiv_ind text",
             "taismgr.tbbcstu": "stu_pidm int, contract_pidm int, contract_number text, term_code text",
             "taismgr.tbbacct": "pidm int, deli_code text, refund_ind text, activity_date text",
             "saturn.spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
@@ -130,7 +138,7 @@ class RefundExtractSqlTests(unittest.TestCase):
             prefixed = ", ".join(f"{prefix}_{column}" for column in columns.split(", "))
             self.database.execute(f"CREATE TABLE {table} ({prefixed})")
         for code, kind, priority in (("TPPY", "P", "800"), ("Z0LE", "P", "000"), ("FREE", "P", "000"), ("CHG", "C", "899")):
-            self.database.execute("INSERT INTO taismgr.tbbdetc VALUES (?, ?, ?, ?, 'CSH', 'N', 'N')", (code, "Synthetic", kind, priority))
+            self.database.execute("INSERT INTO taismgr.tbbdetc VALUES (?, ?, ?, ?, 'CSH', 'N')", (code, "Synthetic", kind, priority))
         for pidm in (1, 2, 3, 4):
             term = "209980" if pidm == 1 else "208080"
             rows = [(pidm, term, "9900", 3, "FREE", 50, -50, "2080-08-01", "2080-08-01", None)]
@@ -195,8 +203,8 @@ class RefundExtractSqlTests(unittest.TestCase):
         self.assertEqual(row.contract_numbers, "OLD-2")
 
     def test_real_extract_scope_keeps_title_iv_refunds_on_positive_accounts(self) -> None:
-        self.database.executemany("INSERT INTO taismgr.tbbdetc VALUES (?, 'Synthetic', ?, ?, 'FA', ?, ?)",
-                                  [("PELL", "P", "800", "Y", "N"), ("LPPF", "C", "789", "N", "Y")])
+        self.database.executemany("INSERT INTO taismgr.tbbdetc VALUES (?, 'Synthetic', ?, ?, 'FA', ?)",
+                                  [("PELL", "P", "800", "Y"), ("LPPF", "C", "789", "N")])
         for pidm, late_fee in ((5, 100), (6, 200), (7, 300)):
             for tran, code, amount, balance in ((1, "CHG", 1000, 0),
                                                (2, "LPPF", late_fee, late_fee),
@@ -217,6 +225,65 @@ class RefundExtractSqlTests(unittest.TestCase):
             self.assertEqual(row.total_refund_amount, Decimal(200))
             self.assertEqual(row.full_account_balance, Decimal(late_fee - 200))
             self.assertIn(f"${late_fee:.2f}", row.title_iv_balance_due_note)
+
+    def test_snapshot_blocks_all_eleven_codes_by_funding_not_priority(self) -> None:
+        # Owner's 2026-11-14 snapshot. Include an unlisted charge at 789 to prove
+        # priority is not a proxy for the charge restriction.
+        codes = {"BIKE": "889", "BLID": "789", "CFEE": "789", "COCC": "779",
+                 "COLL": "789", "HCMC": "799", "HLCC": "799", "HLTE": "789",
+                 "LPPF": "789", "PENL": "789", "SBAL": "699", "OKAY": "789"}
+        self.database.executemany(
+            "INSERT INTO taismgr.tbbdetc VALUES (?, 'Synthetic', 'C', ?, 'BIL', 'N')",
+            codes.items(),
+        )
+        cases = []
+        for priority in ("800", "000"):
+            for title_iv in ("Y", "N"):
+                payment_code = f"P{priority[0]}{title_iv}"
+                self.database.execute(
+                    "INSERT INTO taismgr.tbbdetc VALUES (?, 'Synthetic', 'P', ?, 'FA', ?)",
+                    (payment_code, priority, title_iv),
+                )
+                for code in codes:
+                    pidm = len(cases) + 10
+                    restricted = title_iv == "Y" and code != "OKAY"
+                    cases.append((pidm, code, priority, restricted))
+                    for number, detail, amount, balance in (
+                        (1, "CHG", 1000, 0), (2, code, 100, 100 if restricted else 0),
+                        (3, payment_code, 1200, -200 if restricted else -100),
+                    ):
+                        self.database.execute(
+                            "INSERT INTO taismgr.tbraccd VALUES (?, '209910', '9899', ?, ?, ?, ?, '2099-01-01', '2099-01-01', NULL)",
+                            (pidm, number, detail, amount, balance),
+                        )
+                    self.database.execute(
+                        "INSERT INTO saturn.spriden VALUES (?, ?, 'Synthetic', 'Student', NULL)",
+                        (pidm, f"TEST-{pidm}"),
+                    )
+                    self.database.execute(
+                        "INSERT INTO taismgr.tbbacct VALUES (?, NULL, 'N', '2099-08-31')", (pidm,),
+                    )
+        transactions = self.extract("transactions")
+        flagged = transactions.loc[transactions.non_allowable_charge_ind == "Y", "detail_code"]
+        self.assertEqual(set(flagged), set(codes) - {"OKAY"})
+        report = allocate_refunds(transactions, self.extract("context"),
+                                  RefundParameters("209910", date(2099, 8, 31)))
+        for pidm, code, priority, restricted in cases:
+            with self.subTest(code=code, priority=priority, restricted=restricted):
+                payment = transactions.loc[(transactions.pidm == pidm) & (transactions.type_ind == "P")].iloc[0]
+                self.assertEqual(payment.priority, priority)
+                row = report.loc[report.cwid == f"TEST-{pidm}"].iloc[0]
+                self.assertEqual(row.student_refund_amount, Decimal(200 if restricted else 100))
+                self.assertEqual(row.unpaid_charge_amount, Decimal(100 if restricted else 0))
+                self.assertEqual(row.review_status, "READY_FOR_STAFF_REVIEW")
+                self.assertEqual(row.title_iv_balance_due_note.startswith("Yes"), restricted)
+
+    def test_missing_detail_metadata_is_not_assumed_allowable(self) -> None:
+        self.database.execute(
+            "INSERT INTO taismgr.tbraccd VALUES (1, '209910', '9899', 9, 'MISS', 10, 10, '2099-01-01', '2099-01-01', NULL)"
+        )
+        row = self.extract("transactions").query("detail_code == 'MISS'").iloc[0]
+        self.assertIsNone(row.non_allowable_charge_ind)
 
     def test_sponsor_lists_keep_names_ids_and_contracts_aligned(self) -> None:
         self.database.execute("UPDATE saturn.spriden SET spriden_last_name = 'Zeta' WHERE spriden_pidm = 101")
@@ -324,7 +391,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 "detail_code text, amount numeric, balance numeric, "
                 "effective_date date, activity_date timestamp, feed_date date",
             "tbbdetc": "detail_code text, desc text, type_ind text, priority text, "
-                "dcat_code text, tiv_ind text, non_allow_chg_ind text",
+                "dcat_code text, tiv_ind text",
             "spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
             "spbpers": "pidm int, dead_ind text, dead_date date, confid_ind text, activity_date date",
             "tbbacct": "pidm int, deli_code text, refund_ind text, activity_date date",
@@ -344,7 +411,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ]
             sql.append(f"INSERT INTO {table} VALUES ({', '.join(literals)});")
 
-        details: dict[str, tuple[str, str | None, str, str, str | None]] = {}
+        details: dict[str, tuple[str, str | None, str, str]] = {}
         used_numbers: dict[int, set[int]] = {}
         next_numbers: dict[int, int] = {}
         for transaction in transactions:
@@ -353,7 +420,6 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 transaction.priority,
                 transaction.category,
                 transaction.title_iv,
-                transaction.non_allowable,
             )
             if transaction.detail_code in details:
                 self.assertEqual(details[transaction.detail_code], definition)
@@ -1011,7 +1077,29 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 arguments = {key: value for key, value in kwargs.items() if key not in {"expected_rows", "sponsor_context", "progress_reporter"}}
                 if "run_date" in arguments:
                     arguments["run_date"] = arguments["run_date"].isoformat()
-                actual = sql_case.run_report(converted, query=filtered,
+                # These allocator scenarios intentionally vary flags (including
+                # unknown flags) independently of the approved production list.
+                # Supply their synthetic classification without inventing an
+                # Insights column. Separate extraction tests cover the list.
+                flags = {t.detail_code: t.non_allowable for t in transactions}
+                literals = [
+                    "WHEN '" + code.replace("'", "''") + "' THEN " + (
+                        "NULL" if flag is None else "'" + flag.replace("'", "''") + "'"
+                    ) for code, flag in flags.items()
+                ]
+                classification = (
+                    "CASE d.tbbdetc_detail_code " + " ".join(literals)
+                    + " ELSE NULL END AS non_allowable_charge_ind"
+                ) if literals else "CAST(NULL AS text) AS non_allowable_charge_ind"
+                scenario_query, count = re.subn(
+                    r"CASE\s+WHEN d\.tbbdetc_detail_code IS NULL THEN NULL\s+"
+                    r"WHEN UPPER\(TRIM\(d\.tbbdetc_detail_code\)\) IN \(\s+"
+                    r"SELECT detail_code FROM non_allowable_detail_codes\) THEN 'Y'\s+"
+                    r"ELSE 'N'\s+END AS non_allowable_charge_ind",
+                    lambda _: classification, filtered,
+                )
+                sql_case.assertEqual(count, 1)
+                actual = sql_case.run_report(converted, query=scenario_query,
                                              context_activity_date="2099-08-31", **arguments)
                 sql_case.assertEqual(len(actual), kwargs.get("expected_rows", 1))
                 if actual:
@@ -1021,6 +1109,22 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         for method in unittest.defaultTestLoader.getTestCaseNames(CompareWithSQL):
             with self.subTest(scenario=method):
                 CompareWithSQL(method).debug()
+
+    def test_standalone_snapshot_blocks_high_and_low_priority_fees(self) -> None:
+        for priority in ("800", "000"):
+            for title_iv in ("Y", "N"):
+                with self.subTest(priority=priority, title_iv=title_iv):
+                    restricted = title_iv == "Y"
+                    transactions = [RefundTransaction("TUIN", "C", "899", 1000)]
+                    for code, charge_priority in (("BIKE", "889"), ("HCMC", "799"), ("LPPF", "789")):
+                        transactions.append(RefundTransaction(
+                            code, "C", charge_priority, 25, balance=25 if restricted else 0))
+                    transactions.append(RefundTransaction(
+                        "AID", "P", priority, 1200, balance=-200 if restricted else -125,
+                        category="FA", title_iv=title_iv))
+                    row = self.run_report(transactions)[0]
+                    self.assertEqual(Decimal(str(row["student_refund_amount"])), Decimal(200 if restricted else 125))
+                    self.assertEqual(Decimal(str(row["unpaid_charge_amount"])), Decimal(75 if restricted else 0))
 
     def test_sql_matches_python_for_seeded_open_history_population(self) -> None:
         rng = random.Random(90210)
