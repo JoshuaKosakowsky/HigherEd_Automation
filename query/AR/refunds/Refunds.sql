@@ -21,6 +21,8 @@ CURRENT POLICY
   term, then descending priority and earliest transaction number. Stored 800
   and 000 share artificial 000 for matching/order, including TPDT/TPPY and COFP.
   Title IV cannot pay Non-Allowable charges; unknown charge flags block splits.
+  Non-Allowable codes use the owner-confirmed 2026-11-14 Banner snapshot in
+  refund_non_allowable_detail_codes.sql; regenerate this query when it changes.
   Other nonzero priorities remain unchanged. No payment-method preference.
 - After normal charges are allocated oldest-term first, posted ARFD/RFND student
   refunds consume remaining payment sources with lower transaction numbers
@@ -67,6 +69,28 @@ a single result set; separate Excel tabs remain a workbook-export feature.
 This report proposes amounts/routes for staff review and does not issue refunds.
 */
 WITH RECURSIVE
+non_allowable_detail_codes(detail_code) AS (
+    /* BEGIN GENERATED NON-ALLOWABLE CODES */
+    /* SQL fragment: owner-confirmed TSADETC Non-Allowable Charge = Y snapshot,
+       2026-11-14. The flag is not exposed in Insights. Maintain this list from a
+       complete filtered Banner export, then regenerate runnable SQL with:
+       python -m data_processing.refunds.extract
+       These are charge exclusions for Title IV, independent of charge priority.
+       See workflows/refunds/README.md for the decision and refresh procedure. */
+    VALUES
+        ('BIKE'),
+        ('BLID'),
+        ('CFEE'),
+        ('COCC'),
+        ('COLL'),
+        ('HCMC'),
+        ('HLCC'),
+        ('HLTE'),
+        ('LPPF'),
+        ('PENL'),
+        ('SBAL')
+    /* END GENERATED NON-ALLOWABLE CODES */
+),
 term_context AS (
     SELECT
         CURRENT_DATE AS run_date,
@@ -260,7 +284,12 @@ screening_transactions AS MATERIALIZED (
         UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
         CASE WHEN UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) = 'Y'
             THEN 1 ELSE 0 END AS is_title_iv,
-        UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) AS non_allowable_charge_ind,
+        CASE
+            WHEN d.tbbdetc_detail_code IS NULL THEN NULL
+            WHEN UPPER(TRIM(d.tbbdetc_detail_code)) IN (
+                SELECT detail_code FROM non_allowable_detail_codes) THEN 'Y'
+            ELSE 'N'
+        END AS non_allowable_charge_ind,
         CASE WHEN TRIM(CAST(d.tbbdetc_priority AS text)) ~ '^[0-9]{1,3}$'
             THEN LPAD(TRIM(CAST(d.tbbdetc_priority AS text)), 3, '0') END AS priority_code,
         CASE WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60|80)$'

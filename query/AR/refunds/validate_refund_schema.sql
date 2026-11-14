@@ -1,4 +1,6 @@
-/* Read-only schema inventory for refund review and refund-hold diagnostics. */
+/* Read-only schema inventory for refund review and refund-hold diagnostics.
+   Non-Allowable flags come from refund_non_allowable_detail_codes.sql because
+   the corresponding Banner UI field is unavailable in Insights. */
 
 WITH required_columns (table_schema, table_name, column_name) AS (
     VALUES
@@ -22,7 +24,6 @@ WITH required_columns (table_schema, table_name, column_name) AS (
         ('TAISMGR', 'TBBDETC', 'PRIORITY'),
         ('TAISMGR', 'TBBDETC', 'DCAT_CODE'),
         ('TAISMGR', 'TBBDETC', 'TIV_IND'),
-        ('TAISMGR', 'TBBDETC', 'NON_ALLOW_CHG_IND'),
         ('TAISMGR', 'TBBACCT', 'PIDM'),
         ('TAISMGR', 'TBBACCT', 'DELI_CODE'),
         ('TAISMGR', 'TBBACCT', 'REFUND_IND'),

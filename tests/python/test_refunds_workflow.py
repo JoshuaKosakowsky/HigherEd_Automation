@@ -1388,11 +1388,29 @@ class RefundExtractTests(unittest.TestCase):
             root = Path(directory)
             settings = ExtractSettings("209980", 1, root, run_date=date(2099, 8, 31), resume=True)
             (root / "extract_manifest.json").write_text(json.dumps({
-                "format_version": 5, "target_term": "209980", "batch_count": 1,
+                "format_version": 6, "target_term": "209980", "batch_count": 1,
                 "cwid": None, "run_date": "2099-08-31",
             }))
             with self.assertRaisesRegex(ValueError, "manifest does not match"):
                 read_refund_extracts(settings)
+
+    def test_changed_non_allowable_snapshot_rejects_offline_and_resume_cache(self) -> None:
+        from data_processing.refunds.extract import QUERY_DIRECTORY, _prepare_manifest
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = ExtractSettings("209980", 1, root / "cache",
+                                       run_date=date(2099, 8, 31), resume=True)
+            _prepare_manifest(settings)
+            policy_name = "refund_non_allowable_detail_codes.sql"
+            (root / policy_name).write_text(
+                (QUERY_DIRECTORY / policy_name).read_text() + "\n/* Changed snapshot */\n"
+            )
+            with patch("data_processing.refunds.extract.QUERY_DIRECTORY", root):
+                with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                    read_refund_extracts(settings)
+                with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                    _prepare_manifest(settings)
 
     def test_cached_sponsor_identifiers_preserve_leading_zeroes(self) -> None:
         from data_processing.refunds.extract import _read_cached

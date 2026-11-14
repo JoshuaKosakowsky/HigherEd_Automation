@@ -115,13 +115,54 @@ $200 Pell refund/$100 LPPF balance example above. The related
 [Title IV flag question](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6870164720)
 tracks the charge-eligibility context; these confirmations are not live validation.
 
-`TBBDETC_TIV_IND = Y` identifies Title IV payments. A charge with
-`TBBDETC_NON_ALLOW_CHG_IND = Y` cannot consume those payments, even under the
-common `000` wildcard. Other eligible funding can pay it. Charges pool only
-within the same term, priority, and Non-Allowable flag, so differently restricted
-charges cannot be combined. Missing/invalid charge flags block recipient splits
-and are not treated as Title-IV-eligible. LPPF is not hard-coded: the flag governs
-every charge detail code. Stored aid-balance safeguards still apply.
+`TBBDETC_TIV_IND = Y` identifies Title IV payments. A charge marked Non-Allowable
+cannot consume those payments, even under the common `000` wildcard. Other
+eligible funding can pay it. The funding flag controls this exclusion, not the
+payment's original priority: Title IV at `000` is still restricted; non-Title-IV
+at `800` can pay these charges under the common wildcard. Charges pool only
+within the same term, priority, and Non-Allowable flag. Missing/invalid extracted
+flags block recipient splits. Stored aid-balance safeguards still apply.
+
+#### Maintained Non-Allowable list (0.28.1)
+
+PROD Insights exposes neither `TBBDETC_NON_ALLOW_CHG_IND` nor the spelling shown
+by Banner's UI item, `TBBDECT_NON_ALLOW_CHG_IND`. Referencing the first field in
+0.28.0 caused the refund extraction to fail with HTTP 400. On 2026-11-14, the owner
+provided a complete TSADETC export filtered to Non-Allowable Charge `Y` and
+explicitly authorized using those 11 codes as the current standing list in the
+implementation discussion. This replaces the unavailable source field; it does
+not change the funding restriction agreed in issue #29.
+
+The authoritative list is
+[`refund_non_allowable_detail_codes.sql`](../../query/AR/refunds/refund_non_allowable_detail_codes.sql):
+BIKE, BLID, CFEE, COCC, COLL, HCMC, HLCC, HLTE, LPPF, PENL, SBAL.
+BIKE is priority `889`; HCMC and HLCC are `799`; the remaining eight are `789`
+or below. The list applies regardless of a code's priority. All listed detail
+codes produce `non_allowable_charge_ind = Y`; other codes with existing Banner
+detail metadata produce `N`. Missing detail metadata stays unknown. This is a
+maintained snapshot, not a live read of Banner's checkbox, and `INST_CHG_IND`
+is not used as a substitute.
+
+When Banner's Non-Allowable configuration changes, obtain the complete filtered
+export again, update the list and its snapshot date, and run from the repository
+root:
+
+```powershell
+python -m data_processing.refunds.extract
+```
+
+This regenerates both manual extracts and the marked policy block in the
+standalone `Refunds.sql`. API extracts use the same source file directly.
+Regenerate both manual downloads or start a fresh API extraction after a list
+change. Cache format 7 includes the policy fingerprint, so resume/offline mode
+rejects caches made with a different list. This list does not automatically
+pick up new flags set in Banner.
+
+Additional synthetic acceptance cases: tuition $1,000, one $100 charge using
+BIKE, HCMC or LPPF, and Title IV $1,200 with $200 unapplied yield refund $200 and $100 still owed,
+whether the Title IV payment priority is `800` or `000`. The same account with
+non-Title-IV funds at either priority can pay the fee, leaving refund $100 and
+no unpaid fee. An unlisted allowable charge at `789` can be paid by Title IV.
 
 Every workbook tab adds **Title IV Refund Leaves Balance Due**, immediately
 after **Total_Owed_to_Student**. A calculated exception displays `Yes` with the
@@ -134,9 +175,8 @@ confirms issuance nor sends email.
 This implements the explicit Non-Allowable exclusion only. Institutional-charge
 authorization (`TBBDETC_INST_CHG_IND` and the student's authorization records)
 is not inferred; its extraction and rules remain a separate unresolved scope.
-Before operational use, validate the new column in the Insights schema and
-compare representative Banner accounts. Regenerate paired manual downloads or
-start a fresh API extraction; cache format 6 rejects older caches.
+Before operational use, compare representative Banner accounts with fresh
+extracts, including the `889` BIKE exception and unrestricted payments.
 
 After all ordinary charges are allocated oldest-term first, posted student
 refunds with detail code `ARFD` or `RFND` reconcile against still-unused payment
@@ -225,7 +265,7 @@ Synthetic acceptance cases:
 **Refresh both manual downloads or start a new API extraction after upgrading.**
 Old downloads lacking Feed Date, sponsor columns, or the Non-Allowable Charge
 flag are rejected with a request to rerun the current export SQL. Caches now
-use format version 6 and reject older formats. Run `validate_refund_schema.sql` to confirm TBBCSTU fields and
+use format version 7 and reject older formats. Run `validate_refund_schema.sql` to confirm TBBCSTU fields and
 TBRACCD_FEED_DATE in the actual Insights schema, then compare representative
 sponsors/contracts against TSACONT before operational use. Candidate selection
 now includes historical TPPY accounts; production-size extraction timing needs
@@ -416,7 +456,9 @@ compatible extracts can be recalculated to produce the new layout.
 
 Version 0.28.0 requires the new `non_allowable_charge_ind` transaction column.
 Older downloads are rejected with a refresh instruction. Use the updated SQL
-for both paired downloads before recalculating this version.
+for both paired downloads before recalculating. Version 0.28.1 derives this
+column from the maintained Non-Allowable list; refresh both downloads after
+upgrading or changing that list.
 
 ## Validation expectation
 

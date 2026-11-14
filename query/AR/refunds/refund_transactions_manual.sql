@@ -1,8 +1,31 @@
 /* MANUAL WEBSITE EXPORT: download the complete result as XLSX or CSV.
 Use identical run_date, target_term_override and cwid_filter in both exports.
 Defaults: today's term, entire candidate population. Never commit a CWID.
-Generated from the extract template and refund_scope.sql; regenerate when either changes. */
-WITH batch_scope AS MATERIALIZED (
+Generated from the extract template, refund_scope.sql and Non-Allowable code policy.
+Regenerate with: python -m data_processing.refunds.extract */
+WITH non_allowable_detail_codes(detail_code) AS (
+    /* BEGIN GENERATED NON-ALLOWABLE CODES */
+    /* SQL fragment: owner-confirmed TSADETC Non-Allowable Charge = Y snapshot,
+       2026-11-14. The flag is not exposed in Insights. Maintain this list from a
+       complete filtered Banner export, then regenerate runnable SQL with:
+       python -m data_processing.refunds.extract
+       These are charge exclusions for Title IV, independent of charge priority.
+       See workflows/refunds/README.md for the decision and refresh procedure. */
+    VALUES
+        ('BIKE'),
+        ('BLID'),
+        ('CFEE'),
+        ('COCC'),
+        ('COLL'),
+        ('HCMC'),
+        ('HLCC'),
+        ('HLTE'),
+        ('LPPF'),
+        ('PENL'),
+        ('SBAL')
+    /* END GENERATED NON-ALLOWABLE CODES */
+),
+batch_scope AS MATERIALIZED (
     /* Shared candidate selection for both exports. Render through extract.py.
    The two-year window selects accounts; it never truncates their history. */
 WITH run_settings AS (
@@ -119,7 +142,8 @@ account_balances AS MATERIALIZED (
             AND UPPER(TRIM(d.tbbdetc_tiv_ind)) = 'Y'
             AND t.tbraccd_amount > 0) AS title_iv_payment_count,
         COUNT(*) FILTER (WHERE UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
-            AND UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) = 'Y'
+            AND UPPER(TRIM(d.tbbdetc_detail_code)) IN (
+                SELECT detail_code FROM non_allowable_detail_codes)
             AND t.tbraccd_amount > 0) AS non_allowable_charge_count,
         COUNT(*) FILTER (WHERE t.tbraccd_amount IS NULL
             OR d.tbbdetc_type_ind IS NULL
@@ -155,7 +179,12 @@ SELECT
     TRIM(CAST(d.tbbdetc_priority AS text)) AS priority,
     UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
     UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) AS title_iv_ind,
-    UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) AS non_allowable_charge_ind
+    CASE
+        WHEN d.tbbdetc_detail_code IS NULL THEN NULL
+        WHEN UPPER(TRIM(d.tbbdetc_detail_code)) IN (
+            SELECT detail_code FROM non_allowable_detail_codes) THEN 'Y'
+        ELSE 'N'
+    END AS non_allowable_charge_ind
 FROM batch_scope s
 INNER JOIN taismgr.tbraccd t
     ON t.tbraccd_pidm = s.pidm

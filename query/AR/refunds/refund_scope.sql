@@ -114,7 +114,8 @@ account_balances AS MATERIALIZED (
             AND UPPER(TRIM(d.tbbdetc_tiv_ind)) = 'Y'
             AND t.tbraccd_amount > 0) AS title_iv_payment_count,
         COUNT(*) FILTER (WHERE UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
-            AND UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) = 'Y'
+            AND UPPER(TRIM(d.tbbdetc_detail_code)) IN (
+                SELECT detail_code FROM non_allowable_detail_codes)
             AND t.tbraccd_amount > 0) AS non_allowable_charge_count,
         COUNT(*) FILTER (WHERE t.tbraccd_amount IS NULL
             OR d.tbbdetc_type_ind IS NULL

@@ -162,6 +162,13 @@ SQL downloads/API extraction are required. See the
 [refund workflow guide](../../workflows/refunds/README.md#title-iv-refunds-that-leave-charges-owed-0280)
 for the confirmed example and validation requirements.
 
+**0.28.1** fixes the refund HTTP 400 caused by the unavailable Non-Allowable
+source column. Extraction uses the owner's maintained 11-code Banner snapshot,
+including BIKE at priority 889. Title IV remains blocked from these charges;
+unrestricted funds can pay them. Refresh both manual downloads or start a fresh
+API extraction. Update the maintained list when Banner's flags change; the
+workflow guide includes the regeneration procedure.
+
 ## Workflow visibility
 
 ### Insights connections (administrators)
