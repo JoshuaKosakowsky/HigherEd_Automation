@@ -34,7 +34,7 @@ from data_processing.refunds.terms import derive_target_term, fiscal_year_start,
 TRANSACTION_COLUMNS = [
     "pidm", "term_code", "aidy_code", "tran_number", "detail_code", "amount",
     "stored_balance", "effective_date", "activity_date", "detail_desc", "type_ind",
-    "priority", "category_code", "title_iv_ind", "feed_date",
+    "priority", "category_code", "title_iv_ind", "feed_date", "non_allowable_charge_ind",
 ]
 CONTEXT_COLUMNS = [
     "pidm", "cwid", "last_name", "first_name", "deceased_ind", "deceased_date",
@@ -61,6 +61,7 @@ class Transaction:
     title_iv: str = "N"
     tran_number: int | None = None
     feed_date: str | None = None
+    non_allowable: str | None = "N"
 
 
 class RefundAllocationTests(unittest.TestCase):
@@ -94,7 +95,7 @@ class RefundAllocationTests(unittest.TestCase):
                 transaction.detail_code, transaction.amount, transaction.stored_balance,
                 transaction.effective_date, transaction.activity_date, "Synthetic source",
                 transaction.type_ind, transaction.priority, transaction.category,
-                transaction.title_iv, transaction.feed_date,
+                transaction.title_iv, transaction.feed_date, transaction.non_allowable,
             ])
 
         authorization_values = {"9900": "N"} if authorizations is None else authorizations
@@ -138,8 +139,8 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("OTHR", "C", "700", 500),
             Transaction("PAYA", "P", "899", 2000),
             Transaction("PAYB", "P", "890", 1500),
-            Transaction("FDPL", "P", "800", 4000, -500, category="FA", title_iv="Y"),
-            Transaction("PAYC", "P", "000", 2000, -1500),
+            Transaction("FDPL", "P", "800", 4000, 0, category="FA", title_iv="Y"),
+            Transaction("PAYC", "P", "000", 2000, -2000),
         ]
 
     def assert_split(self, row: dict[str, object], parent: str, student: str) -> None:
@@ -156,16 +157,16 @@ class RefundAllocationTests(unittest.TestCase):
 
     def test_worked_example_and_output_contract(self) -> None:
         row = self.report(self.worked_example())
-        self.assert_split(row, "500.00", "1500.00")
+        self.assert_split(row, "0.00", "2000.00")
         self.assertEqual(list(row), REPORT_COLUMNS)
         self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
-        self.assertIn("FDPL", str(row["balance_sources"]))
+        self.assertNotIn("FDPL", str(row["balance_sources"]))
         self.assertNotIn("PAYA", str(row["balance_sources"]))
 
     def test_calculation_progress_counts_accounts_without_identifiers(self):
         updates = []
         row = self.report(self.worked_example(), progress_reporter=ProgressReporter(updates.append))
-        self.assert_split(row, "500.00", "1500.00")
+        self.assert_split(row, "0.00", "2000.00")
         calculations = [update for update in updates if update.stage == "Calculating refunds by account"]
         self.assertEqual([(update.completed, update.total) for update in calculations], [(0, 1), (1, 1)])
         normalized = [update for update in updates if update.stage == "Normalizing refund transactions"]
@@ -208,13 +209,13 @@ class RefundAllocationTests(unittest.TestCase):
         self.assert_split(unrestricted, "0.00", "200.00")
         self.assertEqual(unrestricted["unrestricted_applied_to_older_terms"], Decimal("1000.00"))
 
-    def test_artificial_priority_bands_and_earliest_tie_breaker(self) -> None:
+    def test_common_priority_and_earliest_tie_breaker(self) -> None:
         first_800 = self.report([
             Transaction("CHG8", "C", "899", 100, tran_number=10),
             Transaction("FDPL", "P", "800", 100, -100, category="FA", title_iv="Y", tran_number=2),
             Transaction("TPDT", "P", "800", 100, tran_number=3),
         ])
-        self.assert_split(first_800, "100.00", "0.00")
+        self.assert_split(first_800, "0.00", "100.00")
 
         early_fdpl = self.report([
             Transaction("CHG8", "C", "899", 100, tran_number=10),
@@ -237,8 +238,131 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("PAY0", "P", "000", 100, -100),
             Transaction("COFP", "P", "000", 100),
         ])
-        self.assertIn("PAY0", str(first_000["balance_sources"]))
-        self.assertNotIn("COFP", str(first_000["balance_sources"]))
+        self.assertNotIn("PAY0", str(first_000["balance_sources"]))
+        self.assertIn("COFP", str(first_000["balance_sources"]))
+
+    def test_title_iv_refund_leaves_non_allowable_balance(self) -> None:
+        for late_fee in (100, 200, 300):
+            with self.subTest(late_fee=late_fee):
+                row = self.report([
+                    Transaction("TUIN", "C", "899", 1000),
+                    Transaction("LPPF", "C", "789", late_fee, late_fee, non_allowable="Y"),
+                    Transaction("PELL", "P", "800", 1200, -200, category="FA", title_iv="Y"),
+                ])
+                self.assert_split(row, "0.00", "200.00")
+                self.assertEqual(row["full_account_balance"], Decimal(late_fee - 200))
+                self.assertEqual(row["unpaid_charge_amount"], Decimal(late_fee))
+                self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+                self.assertEqual(row["title_iv_balance_due_note"],
+                    f"Yes - ${late_fee:.2f} in non-allowable charges remains owed "
+                    "after the proposed Title IV refund.")
+
+    def test_cash_can_pay_non_allowable_charges(self) -> None:
+        row = self.report([
+            Transaction("TUIN", "C", "899", 1000, tran_number=1),
+            Transaction("LPPF", "C", "789", 100, non_allowable="Y", tran_number=2),
+            Transaction("PELL", "P", "800", 1200, -200, category="FA", title_iv="Y", tran_number=3),
+            Transaction("CASH", "P", "000", 100, tran_number=4),
+        ])
+        self.assert_split(row, "0.00", "200.00")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal(0))
+        self.assertEqual(row["title_iv_balance_due_note"], "No")
+
+    def test_charge_flags_keep_same_priority_pools_separate(self) -> None:
+        row = self.report([
+            Transaction("TUIN", "C", "899", 1000),
+            Transaction("FINE", "C", "899", 100, 100, non_allowable="Y"),
+            Transaction("FINE", "C", "899", -25, -25, non_allowable="Y"),
+            Transaction("PELL", "P", "800", 1200, -200, category="FA", title_iv="Y"),
+        ])
+        self.assert_split(row, "0.00", "200.00")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal("75.00"))
+        self.assertIn("$75.00", row["title_iv_balance_due_note"])
+
+    def test_non_allowable_exception_requires_title_iv_and_marked_charge(self) -> None:
+        for title_iv, flag in (("N", "Y"), ("Y", "N")):
+            with self.subTest(title_iv=title_iv, flag=flag):
+                row = self.report([
+                    Transaction("TUIN", "C", "899", 1000),
+                    Transaction("LPPF", "C", "789", 100, non_allowable=flag),
+                    Transaction("AID", "P", "800", 1200, -100, category="FA", title_iv=title_iv),
+                ])
+                self.assert_split(row, "0.00", "100.00")
+                self.assertEqual(row["title_iv_balance_due_note"], "No")
+
+    def test_unknown_charge_flags_block_title_iv_and_recipient_split(self) -> None:
+        for flag in (None, "", "?"):
+            with self.subTest(flag=flag):
+                row = self.report([
+                    Transaction("TUIN", "C", "899", 1000),
+                    Transaction("LPPF", "C", "789", 100, 100, non_allowable=flag),
+                    Transaction("PELL", "P", "800", 1200, -200, category="FA", title_iv="Y"),
+                ])
+                self.assert_unassigned_credit(row, "100.00")
+                self.assertEqual(row["unpaid_charge_amount"], Decimal(100))
+                self.assertIn("MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG", row["review_reasons"])
+
+    def test_title_iv_exception_preserves_aid_balance_and_other_debt_checks(self) -> None:
+        base = [
+            Transaction("TUIN", "C", "899", 1000),
+            Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y"),
+            Transaction("PELL", "P", "800", 1200, 0, category="FA", title_iv="Y"),
+        ]
+        row = self.report(base)
+        self.assertIsNone(row["student_refund_amount"])
+        self.assertEqual(row["title_iv_balance_due_note"], "Review required")
+        self.assertIn("APPLIED_AID_REOPENED_BY_RECONSTRUCTION", row["review_reasons"])
+        other_debt = self.report([
+            Transaction("OLD", "C", "899", 500, 300, term="209880"),
+            Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y"),
+            Transaction("PELL", "P", "800", 1000, -800, category="FA", title_iv="Y"),
+        ])
+        self.assert_unassigned_credit(other_debt, "400.00")
+
+    def test_title_iv_reversals_and_issued_refunds_do_not_repeat_refunds(self) -> None:
+        base = [
+            Transaction("TUIN", "C", "899", 1000, tran_number=1),
+            Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y", tran_number=2),
+            Transaction("PELL", "P", "800", 1300, -300, category="FA", title_iv="Y", tran_number=3),
+            Transaction("PELL", "P", "800", -100, 100, category="FA", title_iv="Y", tran_number=4),
+        ]
+        row = self.report(base)
+        self.assert_split(row, "0.00", "200.00")
+        self.report(base + [Transaction("RFND", "C", "800", 200, tran_number=5)], expected_rows=0)
+
+    def test_title_iv_balance_note_survives_parent_hold_and_workbook_routing(self) -> None:
+        base = [
+            Transaction("TUIN", "C", "899", 1000),
+            Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y"),
+            Transaction("FDPL", "P", "800", 1200, -200, category="FA", title_iv="Y"),
+        ]
+        for authorized, hold, sheet in (("Y", False, "Direct Deposit"),
+                                       ("N", False, "Refund to Parent"),
+                                       ("Y", True, "Refund Holds")):
+            with self.subTest(authorized=authorized, hold=hold):
+                row = self.report(base, authorizations={"9900": authorized}, refund_hold=hold)
+                self.assert_split(row, "200.00" if authorized == "N" else "0.00",
+                                  "200.00" if authorized == "Y" else "0.00")
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+                    workbook = load_workbook(output)
+                    ws = workbook[sheet]
+                    headers = [cell.value for cell in ws[1]]
+                    note = ws.cell(2, headers.index("Title IV Refund Leaves Balance Due") + 1).value
+                    self.assertIn("$100.00", note)
+                    self.assertIn("proposed", note)
+                    self.assertEqual(ws.cell(2, headers.index("Detail_Code_Refund_Amt") + 1).value, 200)
+                    workbook.close()
+
+    def test_800_and_000_share_order_but_preserve_payment_identity(self) -> None:
+        row = self.report([
+            Transaction("TUIN", "C", "899", 1000, tran_number=1),
+            Transaction("CASH", "P", "000", 1000, tran_number=2),
+            Transaction("FDPL", "P", "800", 200, -200, category="FA", title_iv="Y", tran_number=3),
+        ])
+        self.assert_split(row, "200.00", "0.00")
+        self.assertIn("FDPL", row["balance_sources"])
+        self.assertNotIn("CASH", row["balance_sources"])
 
     def test_positional_wildcards_preserve_descending_charge_order(self) -> None:
         row = self.report([
@@ -394,8 +518,8 @@ class RefundAllocationTests(unittest.TestCase):
                     row = self.report([
                         Transaction("CHG7", "C", "700", 100),
                         Transaction("AID", "P", "800", 100, stored,
-                                    category="FA", title_iv=title_iv),
-                        Transaction("CASH", "P", "000", 100, -100),
+                                    category="FA", title_iv=title_iv, tran_number=3),
+                        Transaction("CASH", "P", "000", 100, -100, tran_number=2),
                     ])
                     self.assert_unassigned_credit(row, "100.00")
                     self.assertIn("APPLIED_AID_REOPENED_BY_RECONSTRUCTION", row["review_reasons"])
@@ -417,7 +541,7 @@ class RefundAllocationTests(unittest.TestCase):
     def test_parent_source_cannot_exceed_net_credit(self) -> None:
         row = self.report([
             Transaction("CHG7", "C", "700", 500, 500),
-            Transaction("FDPL", "P", "800", 600, -600, category="FA", title_iv="Y"),
+            Transaction("FDPL", "P", "899", 600, -600, category="FA", title_iv="Y"),
         ])
         self.assert_unassigned_credit(row, "100.00")
         self.assertEqual(row["total_unused_payment_amount"], Decimal("600.00"))
@@ -466,8 +590,8 @@ class RefundAllocationTests(unittest.TestCase):
                 ])
                 self.assert_split(row, "0.00", "1800.00")
                 route = "AFRD" if code == "ACHK" else code
-                self.assertEqual(row["proposed_student_delivery"], f"{route} (Transact) 300.00; ARFD (System) 1500.00")
-                self.assertEqual(row["original_payment_total"], Decimal("300.00"))
+                self.assertEqual(row["proposed_student_delivery"], f"{route} (Transact) 200.00; ARFD (System) 1600.00")
+                self.assertEqual(row["original_payment_total"], Decimal("200.00"))
                 self.assertNotIn("000Z", row["balance_sources"])
 
     def test_cards_immediate_ach_day_16_and_card_reversals(self) -> None:
@@ -813,7 +937,7 @@ class RefundAllocationTests(unittest.TestCase):
         transactions = self.worked_example()
         transactions[-1] = Transaction("PAYC", "P", "000", 2000, 0)
         row = self.report(transactions)
-        self.assert_split(row, "500.00", "1500.00")
+        self.assert_split(row, "0.00", "2000.00")
         self.assertEqual(row["allocation_review_required_ind"], "Y")
         self.assertIn(
             "STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION",
@@ -1252,6 +1376,8 @@ class RefundExtractTests(unittest.TestCase):
         transactions = pd.DataFrame(columns=TRANSACTION_COLUMNS)
         context = pd.DataFrame(columns=CONTEXT_COLUMNS)
         parameters = RefundParameters("209980", date(2099, 8, 31))
+        with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*non_allowable_charge_ind"):
+            allocate_refunds(transactions.drop(columns="non_allowable_charge_ind"), context, parameters)
         with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*feed_date"):
             allocate_refunds(transactions.drop(columns="feed_date"), context, parameters)
         with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*sponsor_ids"):
@@ -1262,7 +1388,7 @@ class RefundExtractTests(unittest.TestCase):
             root = Path(directory)
             settings = ExtractSettings("209980", 1, root, run_date=date(2099, 8, 31), resume=True)
             (root / "extract_manifest.json").write_text(json.dumps({
-                "format_version": 4, "target_term": "209980", "batch_count": 1,
+                "format_version": 5, "target_term": "209980", "batch_count": 1,
                 "cwid": None, "run_date": "2099-08-31",
             }))
             with self.assertRaisesRegex(ValueError, "manifest does not match"):
@@ -1417,6 +1543,7 @@ class RefundExtractTests(unittest.TestCase):
                     "tab_review_note": "Detail_Code_Note",
                     "full_account_balance": "Current_Total_Balance",
                     "total_refund_amount": "Total_Owed_to_Student",
+                    "title_iv_balance_due_note": "Title IV Refund Leaves Balance Due",
                     "proposed_student_delivery": "Proposed_DetailCode&Amt",
                     "raw_delinquency_code": "Active RH",
                     "active_ed_ind": "Active ED",

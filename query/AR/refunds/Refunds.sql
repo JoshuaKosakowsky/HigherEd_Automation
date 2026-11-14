@@ -9,24 +9,26 @@ CURRENT POLICY
 - Candidates: target-term activity OR any TPPY history OR HOMP effective in the past 32 days OR a
   stored payment credit from the whole term containing run_date minus two years
   through the target term. Validation CWID/name filters bypass activity criteria.
-- Zero and positive full-account balances are excluded. The proposal equals the
-  account's net credit; offsetting term credits/debts cannot create a refund.
-  Reconstructed unused principal differing from net credit blocks ownership.
+- Normally the proposal equals the account net credit. If all remaining unpaid
+  charges are explicitly Non-Allowable, add the lesser of their unpaid balance
+  and unused Title IV principal. This can include zero/positive accounts.
+  Source remainders differing from this permitted refund block ownership.
   Unused aid exceeding Banner's unapplied source credit also blocks ownership;
   already-applied aid cannot become a proposed recipient's refund.
 - Keep every term and charge priority. Oldest charge terms apply first, then
   descending charge priority. Payment zero digits are positional wildcards;
   899/869 only pay their exact priorities in any term. Payments apply by oldest
-  term, then descending priority and earliest transaction number. TPDT/TPPY
-  retain 800A; COFP retains
-  000A. ACH/cards use their normal stored priority; there is no 000Z.
+  term, then descending priority and earliest transaction number. Stored 800
+  and 000 share artificial 000 for matching/order, including TPDT/TPPY and COFP.
+  Title IV cannot pay Non-Allowable charges; unknown charge flags block splits.
+  Other nonzero priorities remain unchanged. No payment-method preference.
 - After normal charges are allocated oldest-term first, posted ARFD/RFND student
   refunds consume remaining payment sources with lower transaction numbers
   across the account, regardless of priority. RFDP is not part of this rule.
 - A completed historical prefix is settled only when its cumulative raw total
   and every stored transaction balance are known zero. Other history is replayed.
 - Reversals reduce newest positive payment rows within term/aid year/detail and
-  charge rows within term/priority. Payments retain source ownership and dates.
+  charge rows within term/priority/Non-Allowable flag. Payments retain source ownership and dates.
 - TBBDETC_TIV_IND=Y overrides category. FA% without Y, CSH, and other non-Title-IV
   funds are unrestricted. Within one FY Title IV has no cap. Between different
   FYs, each source FY gives at most 200 and each destination FY receives at most
@@ -168,7 +170,7 @@ legacy_third_party_cwids AS (
 Select the daily population before loading history: target-term activity, recent
 HOMP activity, any TPPY history, or a stored payment credit in the last two years of whole terms.
 The lookback selects accounts, never cuts their history. Validation filters
-override activity requirements, but known positive account balances stay out.
+override activity requirements; final selection requires a permitted refund.
 */
 validation_scope_pidms AS (
     SELECT DISTINCT s.spriden_pidm AS pidm
@@ -258,6 +260,7 @@ screening_transactions AS MATERIALIZED (
         UPPER(TRIM(COALESCE(d.tbbdetc_dcat_code, ''))) AS category_code,
         CASE WHEN UPPER(TRIM(COALESCE(d.tbbdetc_tiv_ind, ''))) = 'Y'
             THEN 1 ELSE 0 END AS is_title_iv,
+        UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) AS non_allowable_charge_ind,
         CASE WHEN TRIM(CAST(d.tbbdetc_priority AS text)) ~ '^[0-9]{1,3}$'
             THEN LPAD(TRIM(CAST(d.tbbdetc_priority AS text)), 3, '0') END AS priority_code,
         CASE WHEN TRIM(t.tbraccd_term_code) ~ '^[0-9]{4}(10|50|55|60|80)$'
@@ -284,6 +287,10 @@ screening_transactions AS MATERIALIZED (
 account_balance_rollup AS (
     SELECT pidm, ROUND(SUM(accounting_amount), 2) AS full_account_balance,
         BOOL_OR(type_ind IS NULL OR type_ind NOT IN ('C', 'P')) AS has_unclassified_detail_type,
+        COUNT(*) FILTER (WHERE is_payment AND is_title_iv = 1 AND raw_amount > 0)
+            AS title_iv_payment_count,
+        COUNT(*) FILTER (WHERE is_charge AND non_allowable_charge_ind = 'Y' AND raw_amount > 0)
+            AS non_allowable_charge_count,
         MAX(activity_date) AS last_ar_activity_date
     FROM screening_transactions
     GROUP BY pidm
@@ -291,7 +298,9 @@ account_balance_rollup AS (
 account_balances AS MATERIALIZED (
     SELECT pidm, full_account_balance, last_ar_activity_date
     FROM account_balance_rollup
-    WHERE NOT has_unclassified_detail_type AND full_account_balance < 0
+    WHERE NOT has_unclassified_detail_type
+      AND (full_account_balance < 0
+           OR (title_iv_payment_count > 0 AND non_allowable_charge_count > 0))
 ),
 
 /*
@@ -479,11 +488,9 @@ balance_input_checks AS MATERIALIZED (
         ) AS future_term_count,
         COUNT(*) FILTER (
             WHERE x.raw_amount <> 0
-              AND (
-                (x.detail_code IN ('TPDT', 'TPPY') AND x.priority_code IS DISTINCT FROM '800')
-                OR (x.detail_code = 'COFP' AND x.priority_code IS DISTINCT FROM '000')
-              )
-        ) AS special_priority_mismatch_count,
+              AND x.is_charge AND x.detail_code NOT IN ('ARFD', 'RFND')
+              AND COALESCE(x.non_allowable_charge_ind, '') NOT IN ('Y', 'N')
+        ) AS invalid_charge_flag_count,
         COUNT(*) FILTER (WHERE x.raw_transaction_balance IS NULL)
             AS missing_transaction_balance_count
     FROM account_balances b
@@ -533,17 +540,11 @@ payment_sources AS (
         END AS fund_type,
         r.priority_code,
         CASE
-            WHEN r.detail_code IN ('TPDT', 'TPPY') AND r.priority_code = '800'
-                THEN '800A'
-            WHEN r.detail_code = 'COFP' AND r.priority_code = '000'
-                THEN '000A'
+            WHEN r.priority_code IN ('800', '000') THEN '000'
             ELSE r.priority_code
         END AS effective_priority_code,
         CASE
-            WHEN r.detail_code IN ('TPDT', 'TPPY') AND r.priority_code = '800'
-                THEN 8002
-            WHEN r.priority_code = '800' THEN 8001
-            WHEN r.detail_code = 'COFP' AND r.priority_code = '000' THEN 2
+            WHEN r.priority_code IN ('800', '000') THEN 1
             WHEN r.priority_code IS NOT NULL
                 THEN CAST(r.priority_code AS integer) * 10 + 1
             ELSE NULL
@@ -571,11 +572,11 @@ charge_rows AS (
     SELECT
         x.*,
         SUM(x.raw_amount) OVER (
-            PARTITION BY x.pidm, x.term_code, x.priority_code
+            PARTITION BY x.pidm, x.term_code, x.priority_code, x.non_allowable_charge_ind
         ) AS charge_group_net,
         COALESCE(SUM(CASE WHEN x.raw_amount > 0 THEN x.raw_amount ELSE 0 END)
             OVER (
-                PARTITION BY x.pidm, x.term_code, x.priority_code
+                PARTITION BY x.pidm, x.term_code, x.priority_code, x.non_allowable_charge_ind
                 ORDER BY x.tran_number
                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
             ), 0) AS prior_positive_charge_amount
@@ -597,6 +598,7 @@ charge_source_rows AS (
         r.detail_code,
         r.detail_desc,
         r.priority_code,
+        r.non_allowable_charge_ind,
         ROUND(LEAST(
             r.raw_amount,
             GREATEST(r.charge_group_net - r.prior_positive_charge_amount, 0)
@@ -620,6 +622,7 @@ charge_sources AS (
         CONCAT('PRIORITY_', COALESCE(r.priority_code, 'INVALID')) AS detail_code,
         'Aggregated charges at the same term and priority' AS detail_desc,
         r.priority_code,
+        r.non_allowable_charge_ind,
         ROUND(SUM(r.charge_amount), 2) AS charge_amount
     FROM charge_source_rows r
     GROUP BY
@@ -627,7 +630,8 @@ charge_sources AS (
         r.term_code,
         r.term_sort,
         r.fiscal_year_start,
-        r.priority_code
+        r.priority_code,
+        r.non_allowable_charge_ind
 ),
 
 /* Posted student refunds reconcile after normal oldest-term charge allocation. */
@@ -686,9 +690,9 @@ net_source_checks AS MATERIALIZED (
     LEFT JOIN (
         SELECT pidm, COUNT(*) AS negative_charge_group_count
         FROM (
-            SELECT pidm, term_code, priority_code
+            SELECT pidm, term_code, priority_code, non_allowable_charge_ind
             FROM charge_rows
-            GROUP BY pidm, term_code, priority_code
+            GROUP BY pidm, term_code, priority_code, non_allowable_charge_ind
             HAVING SUM(raw_amount) < 0
         ) g
         GROUP BY pidm
@@ -751,7 +755,7 @@ priority_matches AS (
         ARRAY_AGG(s.payment_sequence ORDER BY s.payment_sequence) AS payment_indexes
     FROM charge_priority_types c
     JOIN numbered_payment_sources s ON s.pidm = c.pidm
-    WHERE c.priority_code LIKE REPLACE(s.priority_code, '0', '_')
+    WHERE c.priority_code LIKE REPLACE(s.effective_priority_code, '0', '_')
     GROUP BY c.pidm, c.priority_code
 ),
 priority_vectors AS MATERIALIZED (
@@ -773,6 +777,7 @@ charge_vectors AS MATERIALIZED (
     SELECT pidm,
         ARRAY_AGG(charge_amount ORDER BY charge_sequence) AS amounts,
         ARRAY_AGG(priority_code ORDER BY charge_sequence) AS priorities,
+        ARRAY_AGG(non_allowable_charge_ind ORDER BY charge_sequence) AS non_allowable_flags,
         ARRAY_AGG(fiscal_year_start ORDER BY charge_sequence) AS fiscal_years,
         ARRAY_AGG(term_sort ORDER BY charge_sequence) AS terms
     FROM numbered_charges
@@ -795,6 +800,7 @@ allocation_inputs AS MATERIALIZED (
         COALESCE(c.amounts, ARRAY[]::numeric[]) AS initial_charges,
         c.priorities AS charge_priorities, c.fiscal_years AS charge_years,
         c.terms AS charge_terms,
+        c.non_allowable_flags AS charge_non_allowable,
         COALESCE(r.amounts, ARRAY[]::numeric[]) AS posted_refunds,
         r.transaction_numbers AS posted_refund_transaction_numbers
     FROM account_balances b
@@ -822,6 +828,7 @@ allocation_final AS MATERIALIZED (
                 1 AS charge_index,
                 COALESCE(i.initial_charges[1], 0) AS current_charge_remaining,
                 0::numeric AS unpaid_charge_amount,
+                0::numeric AS non_allowable_balance,
                 i.initial_payments AS payment_remaining,
                 '{}'::jsonb AS title_iv_given_by_fy,
                 '{}'::jsonb AS title_iv_received_by_fy,
@@ -838,6 +845,9 @@ allocation_final AS MATERIALIZED (
                     THEN COALESCE(i.initial_charges[a.charge_index + 1], 0)
                     ELSE a.current_charge_remaining - applied.amount END,
                 a.unpaid_charge_amount + CASE WHEN e.s IS NULL
+                    THEN a.current_charge_remaining ELSE 0 END,
+                a.non_allowable_balance + CASE WHEN e.s IS NULL
+                    AND i.charge_non_allowable[a.charge_index] = 'Y'
                     THEN a.current_charge_remaining ELSE 0 END,
                 CASE WHEN applied.amount > 0 THEN
                     a.payment_remaining[:e.s - 1]
@@ -865,6 +875,8 @@ allocation_final AS MATERIALIZED (
                     i.priority_matches -> i.charge_priorities[a.charge_index], '[]'::jsonb
                 )) k
                 WHERE a.payment_remaining[k.value::integer] > 0
+                  AND (NOT i.payment_title_iv[k.value::integer]
+                       OR i.charge_non_allowable[a.charge_index] = 'N')
                   AND (
                     NOT i.payment_title_iv[k.value::integer]
                     OR i.payment_years[k.value::integer] = i.charge_years[a.charge_index]
@@ -976,6 +988,7 @@ selected_balance_sources AS (
 unpaid_charge_summary AS MATERIALIZED (
     SELECT a.pidm,
         a.unpaid_charge_amount AS ordinary_unpaid_charge_amount,
+        a.non_allowable_balance,
         a.unpaid_charge_amount + r.unmatched_posted_refund_amount AS unpaid_charge_amount
     FROM allocation_final a
     INNER JOIN posted_refund_final r ON r.pidm = a.pidm
@@ -1012,6 +1025,8 @@ balance_source_summary AS MATERIALIZED (
         r.pidm,
         COUNT(*) AS balance_source_group_count,
         ROUND(SUM(r.source_credit_amount), 2) AS balance_source_credit_total,
+        ROUND(SUM(CASE WHEN r.is_title_iv = 1
+            THEN r.source_credit_amount ELSE 0 END), 2) AS unused_title_iv_amount,
         ROUND(SUM(CASE WHEN r.detail_code = 'FDPL'
             THEN r.source_credit_amount ELSE 0 END), 2) AS unused_fdpl_amount,
         ROUND(SUM(CASE WHEN r.detail_code <> 'FDPL'
@@ -1271,6 +1286,21 @@ student_delivery_sources AS MATERIALIZED (
     GROUP BY s.pidm
 ),
 
+/* A Title IV remainder may be returned while confirmed non-allowable charges
+remain owed. Other unpaid-charge and source-reconciliation safeguards remain. */
+refund_totals AS (
+    SELECT b.pidm,
+        GREATEST(-b.full_account_balance, 0) + CASE
+            WHEN uc.unpaid_charge_amount = uc.non_allowable_balance
+             AND v.invalid_charge_flag_count = 0
+            THEN LEAST(COALESCE(bs.unused_title_iv_amount, 0), uc.non_allowable_balance)
+            ELSE 0 END AS total_refund_amount
+    FROM account_balances b
+    JOIN balance_input_checks v ON v.pidm = b.pidm
+    LEFT JOIN unpaid_charge_summary uc ON uc.pidm = b.pidm
+    LEFT JOIN balance_source_summary bs ON bs.pidm = b.pidm
+),
+
 joined AS (
     SELECT
         b.pidm,
@@ -1297,7 +1327,7 @@ joined AS (
             - (COALESCE(uc.unpaid_charge_amount, 0) - COALESCE(bs.balance_source_credit_total, 0))
             AS ledger_residual,
         b.full_account_balance,
-        GREATEST(-b.full_account_balance, 0) AS total_refund_amount,
+        ft.total_refund_amount,
         bs.balance_sources,
         COALESCE(bs.balance_source_group_count, 0) AS balance_source_group_count,
         COALESCE(bs.balance_source_credit_total, 0) AS balance_source_credit_total,
@@ -1308,7 +1338,7 @@ joined AS (
         v.negative_source_count,
         v.invalid_term_count,
         v.future_term_count,
-        v.special_priority_mismatch_count,
+        v.invalid_charge_flag_count,
         v.missing_transaction_balance_count,
         COALESCE(n.negative_net_source_count, 0) AS negative_net_source_count,
         COALESCE(sc.stored_balance_difference_count, 0)
@@ -1328,13 +1358,13 @@ joined AS (
                OR v.missing_transaction_amount_count > 0
                OR v.invalid_term_count > 0
                OR v.future_term_count > 0
-               OR v.special_priority_mismatch_count > 0
+               OR v.invalid_charge_flag_count > 0
                OR COALESCE(n.negative_net_source_count, 0) > 0
                OR COALESCE(fr.missing_fdpl_auth_count, 0) > 0
                OR COALESCE(fr.conflicting_fdpl_auth_count, 0) > 0
                OR COALESCE(sc.applied_aid_reopened_count, 0) > 0
                OR COALESCE(bs.balance_source_credit_total, 0)
-                    <> GREATEST(-b.full_account_balance, 0)
+                    <> ft.total_refund_amount
                OR COALESCE(al.included_balance, 0)
                     <> COALESCE(uc.unpaid_charge_amount, 0) - COALESCE(bs.balance_source_credit_total, 0)
             THEN 'Y' ELSE 'N' END AS refund_split_blocked_ind,
@@ -1399,6 +1429,7 @@ joined AS (
         COALESCE(ds.crds_transact_amount, 0) AS crds_transact_amount,
         COALESCE(ds.crmc_transact_amount, 0) AS crmc_transact_amount
     FROM account_balances b
+    INNER JOIN refund_totals ft ON ft.pidm = b.pidm
     INNER JOIN balance_input_checks v ON v.pidm = b.pidm
     LEFT JOIN current_identity i
         ON i.pidm = b.pidm
@@ -1435,13 +1466,14 @@ joined AS (
 parent_plus_calculation AS (
     SELECT
         j.*,
-        /* Applied aid and a source total exceeding account credit block ownership. */
+        /* Preserve review gates except debt explicitly allowed by the Title IV rule. */
         CASE WHEN j.refund_split_blocked_ind = 'Y'
                OR j.missing_transaction_balance_count > 0
                OR j.stored_balance_difference_count > 0
-               OR j.unpaid_charge_amount > 0
+               OR (j.unpaid_charge_amount > 0
+                   AND j.total_refund_amount <= GREATEST(-j.full_account_balance, 0))
                OR j.balance_source_credit_total
-                    <> GREATEST(-j.full_account_balance, 0)
+                    <> j.total_refund_amount
                OR j.ambiguous_source_pool_count > 0
             THEN 'Y' ELSE 'N' END AS allocation_review_required_ind,
         CASE
@@ -1602,16 +1634,17 @@ final_review AS (
                 THEN 'UNRECOGNIZED_TERM_CODE' END,
             CASE WHEN d.future_term_count > 0
                 THEN 'FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION' END,
-            CASE WHEN d.special_priority_mismatch_count > 0
-                THEN 'ARTIFICIAL_PRIORITY_DETAIL_CODE_HAS_UNEXPECTED_BASE_PRIORITY' END,
+            CASE WHEN d.invalid_charge_flag_count > 0
+                THEN 'MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG' END,
             CASE WHEN d.negative_net_source_count > 0
                 THEN 'NEGATIVE_NET_SOURCE_REQUIRES_REVIEW' END,
             CASE WHEN d.unpaid_charge_amount > 0
+                       AND d.total_refund_amount <= GREATEST(-d.full_account_balance, 0)
                 THEN 'UNPAID_CHARGES_AFTER_POLICY_ALLOCATION' END,
             CASE WHEN d.ledger_residual <> 0
                 THEN 'ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS' END,
             CASE WHEN d.balance_source_credit_total
-                          <> GREATEST(-d.full_account_balance, 0)
+                       <> d.total_refund_amount
                 THEN 'POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT' END,
             CASE WHEN d.refund_hold_ind = 'Y' THEN 'REFUND_HOLD_RH' END,
             CASE WHEN UPPER(TRIM(COALESCE(d.deceased_ind, ''))) = 'Y'
@@ -1658,6 +1691,12 @@ SELECT
     f.first_name,
     f.full_account_balance,
     f.total_refund_amount,
+    CASE WHEN f.total_refund_amount > GREATEST(-f.full_account_balance, 0) THEN
+        CASE WHEN f.refund_split_blocked_ind = 'Y' THEN 'Review required'
+            ELSE CONCAT('Yes - $',
+                TO_CHAR(f.full_account_balance + f.total_refund_amount, 'FM999999990.00'),
+                ' in non-allowable charges remains owed after the proposed Title IV refund.')
+        END ELSE 'No' END AS title_iv_balance_due_note,
     f.proposed_student_delivery,
     f.proposed_student_refund_amount AS student_refund_amount,
     f.proposed_parent_delivery,
@@ -1730,7 +1769,6 @@ WHERE (p.cwid_filter IS NULL OR f.cwid = TRIM(p.cwid_filter))
   AND (p.last_name_filter IS NULL
        OR UPPER(f.last_name) LIKE UPPER(p.last_name_filter))
   AND f.total_refund_amount > 0
-  AND f.full_account_balance < 0
 ORDER BY
     f.last_name,
     f.first_name,

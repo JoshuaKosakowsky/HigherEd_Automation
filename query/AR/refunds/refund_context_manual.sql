@@ -106,15 +106,21 @@ candidate_pidms AS MATERIALIZED (
       AND TRUE
 ),
 account_balances AS MATERIALIZED (
-    /* Full history for selected accounts only. Positive balances are out of scope.
-       Keep uncertain balances for Python's data-quality checks rather than
-       silently inferring a credit from missing amounts or classifications. */
+    /* Keep positive balances with potential Title IV/Non-Allowable refunds.
+       Python decides actual eligibility after allocation; uncertain data also
+       stays available for its data-quality checks. */
     SELECT
         c.pidm,
         SUM(CASE UPPER(TRIM(d.tbbdetc_type_ind))
             WHEN 'P' THEN -t.tbraccd_amount
             WHEN 'C' THEN t.tbraccd_amount
         END) AS full_account_balance,
+        COUNT(*) FILTER (WHERE UPPER(TRIM(d.tbbdetc_type_ind)) = 'P'
+            AND UPPER(TRIM(d.tbbdetc_tiv_ind)) = 'Y'
+            AND t.tbraccd_amount > 0) AS title_iv_payment_count,
+        COUNT(*) FILTER (WHERE UPPER(TRIM(d.tbbdetc_type_ind)) = 'C'
+            AND UPPER(TRIM(d.tbbdetc_non_allow_chg_ind)) = 'Y'
+            AND t.tbraccd_amount > 0) AS non_allowable_charge_count,
         COUNT(*) FILTER (WHERE t.tbraccd_amount IS NULL
             OR d.tbbdetc_type_ind IS NULL
             OR UPPER(TRIM(d.tbbdetc_type_ind)) NOT IN ('C', 'P')) AS invalid_rows
@@ -128,6 +134,7 @@ SELECT a.pidm, p.target_term,
 FROM account_balances a
 CROSS JOIN params p
 WHERE ROUND(a.full_account_balance, 2) <= 0 OR a.invalid_rows > 0
+   OR (a.title_iv_payment_count > 0 AND a.non_allowable_charge_count > 0)
 
 ),
 current_identity AS MATERIALIZED (

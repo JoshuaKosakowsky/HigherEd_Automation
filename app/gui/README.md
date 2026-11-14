@@ -154,6 +154,14 @@ Excel to populate and refresh the pivot tabs; the recon rows themselves are
 populated before that refresh. The output path must be new. Student data stays in the selected
 output workbook and is not added to the repository.
 
+From **0.28.0**, Refund Review treats stored payment priorities 800/000 as a
+common band (including TPDT/TPPY/COFP), preserves oldest-term-first order, and
+excludes Non-Allowable Charges from Title IV application. Every workbook tab
+adds **Title IV Refund Leaves Balance Due** for student follow-up. Fresh paired
+SQL downloads/API extraction are required. See the
+[refund workflow guide](../../workflows/refunds/README.md#title-iv-refunds-that-leave-charges-owed-0280)
+for the confirmed example and validation requirements.
+
 ## Workflow visibility
 
 ### Insights connections (administrators)

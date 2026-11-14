@@ -34,7 +34,9 @@ Starting with 0.27.0, the flat transaction extract includes TBRACCD_FEED_DATE;
 the context extract aggregates TBBCSTU sponsor attachments and current SPRIDEN
 identity before joining PLUS authorizations. **Regenerate both manual downloads**
 after upgrading. Old downloads and format-version-4 API caches cannot supply the
-new report context and must be refreshed. API caches now use format version 5.
+new report context and must be refreshed. Version 0.28.0 additionally requires `TBBDETC_NON_ALLOW_CHG_IND` as
+`non_allowable_charge_ind` in transactions. Regenerate paired downloads; API
+caches now use format version 6 and reject earlier formats.
 
 Only Third Party Reviews adds sponsor names, IDs and contract numbers, the
 calendar-derived current term, signed TPPY/Z0LE current-term transaction totals,
@@ -78,15 +80,13 @@ truncated download.
 
 Candidate selection is shared in `refund_scope.sql`: target-term activity,
 qualifying HOMP charges, any TPPY history, or a negative stored payment
-balance within two years of terms. Known positive full-account balances are
-excluded. Selected accounts retain all transaction history; the two-year
-condition is not a replay cutoff.
-Python excludes zero-net accounts, including offsetting credits and unpaid
-charges. A refund proposal cannot exceed the full-account net credit.
+balance within two years of terms. Selected accounts retain all transaction
+history; the two-year condition is not a replay cutoff. Zero/positive accounts
+are retained only when the Title IV/Non-Allowable exception produces a proposed
+refund. Ordinary offsetting credits and unpaid charges still produce no refund.
 See [the workflow rules and synthetic acceptance examples](../../../workflows/refunds/README.md#population-and-refund-amounts)
 for netting, applied-aid protection, ownership, and review behavior. This
-calculation correction uses existing extract columns; matching complete
-downloads can be replayed without changing the SQL downloads.
+version requires the new charge flag; refresh both source downloads before use.
 
 Re-download both exports when extract columns or candidate scope change. To
 maintain the standalone manual SQL, edit the extract templates or shared scope, then regenerate from the
@@ -172,12 +172,15 @@ Candidates have target-term activity, a qualifying HOMP charge, any
 TPPY history, or a negative stored payment balance within the last two years of
 whole terms through the target term. The two-year condition selects accounts;
 their complete history is retained. There is no five-year history cutoff. A
-CWID or last-name validation filter bypasses the activity conditions but still
-excludes zero and positive balances. Do not commit identifying filters.
+CWID or last-name validation filter bypasses the activity conditions. Final
+selection requires a positive permitted refund, not necessarily a negative net
+account balance. Do not commit identifying filters.
 
-Zero and positive full-account balances are excluded, regardless of offsetting
-restricted credits or unpaid charges. `total_refund_amount` is the absolute
-negative full-account balance, including refunds already posted. A $5,000 Summer
+`total_refund_amount` normally equals the account net credit, including refunds
+already posted. If all remaining unpaid charges are marked Non-Allowable, add
+the lesser of that unpaid balance and unused Title IV principal. The source
+remainders must reconcile to the permitted refund; other mismatches still block
+ownership. This exception can include zero/positive account balances. A $5,000 Summer
 debt offset by a $5,000 Fall credit produces no refund proposal. A $5,500 cash
 payment covering $5,000 of charges in another term leaves a $500 net credit.
 
@@ -200,22 +203,38 @@ funds paying newer charges. Non-Title-IV payments cross FYs without a cap.
 
 Within each term, charges apply from priority `999` downward. Payment zeros
 are positional wildcards: `899` matches only `899`, `890` matches `89x`,
-`800` matches `8xx`, and `000` matches any charge. Strict priorities retain
-this restriction when crossing terms and fiscal years.
+stored `800` and `000` both use artificial `000`, matching any charge subject
+to funding eligibility. Other priorities retain positional matching across terms
+and fiscal years.
 
 Payments apply oldest term first, then by descending priority and earliest
 transaction number within that term. Later-term aid cannot jump ahead of
-earlier-term payments because of its higher priority. Within a term, bands are:
-`999..801`, `800A` (TPDT/TPPY), regular `800`, `799..001`, `000A` (COFP),
-and regular `000`. ACH/cards use their configured numeric priority like ordinary
-payments; the former `000Z` band is removed. Artificial suffixes change order
-only; matching still uses the stored three digits. Conflicting base priorities
-for TPDT/TPPY/COFP require review.
+earlier-term payments because of its higher priority. Other nonzero priorities
+precede the common `000` band; TPDT/TPPY and COFP no longer have `800A`/`000A`
+exceptions. Individual sources, original priorities, dates and ownership survive.
 
-Reversals reduce newest positive payments within term/aid year/detail, and
-charges within term/priority. Charge pooling permits paired detail codes, such
-as a charge and waiver at the same priority, to offset. Negative net source
-groups still require review.
+`TBBDETC_NON_ALLOW_CHG_IND = Y` prohibits Title IV from paying a charge,
+regardless of priority or authorization. Missing/invalid charge flags fail closed
+and block recipient assignment. Non-Title-IV payments retain their matching
+rules. Reversals net within payment term/aid year/detail and charge
+term/priority/Non-Allowable flag; differently restricted charges never pool.
+Negative net source groups still require review.
+
+The new `title_iv_balance_due_note` appears as **Title IV Refund Leaves Balance
+Due** on every workbook tab and is also returned by the standalone SQL. It
+reports the total non-allowable balance after the proposed account refund;
+`Review required` denotes unresolved ownership, and `No` denotes no exception.
+For tuition $1,000, flagged LPPF $100, and Pell $1,200 with $200 unapplied, the
+refund is $200 and the new column reports $100 remaining owed. Increasing LPPF
+to $200/$300 keeps the $200 refund and reports $200/$300 owed. Cash that pays
+LPPF removes the balance-due flag. Parent PLUS and holds preserve their routing.
+
+See the [current rule, decision references and acceptance examples](../../../workflows/refunds/README.md#title-iv-refunds-that-leave-charges-owed-0280).
+The owner confirmed the common band and Non-Allowable example in the
+implementation follow-up to [issue #29](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823).
+Broader institutional-charge/student-authorization handling remains unresolved
+and is not inferred from this flag. Validate the new schema column and real
+Banner cases before operational use.
 
 In particular, same-term `HIWR` directly offsets `HLTH` in their shared `879`
 charge-priority pool before any aid or cash is used. Equal positive HLTH and
@@ -267,9 +286,9 @@ term, or effective 0–32 days ago in any term, adds `Mines Park Charge - Review
 without hiding amounts or delivery. Paid HOMP charges qualify; fully reversed
 charges do not.
 
-If reconstructed unused principal differs from the account's net credit,
-recipient amounts and delivery are blocked; the net credit remains available
-for manual review. No source is arbitrarily reduced to make ownership fit.
+If reconstructed unused principal differs from the permitted refund (net credit
+plus the explicit Non-Allowable/Title IV exception), recipient amounts and
+delivery are blocked; the permitted amount remains visible for manual review. No source is arbitrarily reduced to make ownership fit.
 `total_unused_payment_amount`, unused-source subtotals, and `balance_sources`
 remain reconstruction diagnostics, not additional amounts to refund.
 
