@@ -19,12 +19,12 @@ from data_processing.shared.xlsx_output_format import (
 
 from shared.cancellation import CancellationToken
 from shared.progress import ProgressReporter
-from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS
+from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS, STUDENT_CHECK_MINIMUM
 
 
 REFUND_SHEETS = (
-    "ACH or CC Refunds", "Refund by Check", "Refund to Parent", "Direct Deposit",
-    "Third Party Reviews", "Refund Holds", "ACH Clearing", "ACH Reviews",
+    "ACH or CC Refunds", "Refund by Check", "Check Refund < 25", "Refund to Parent", "Direct Deposit",
+    "Third Party Reviews", "Refund Holds", "Payment Clearing", "ACH Clearing", "ACH Reviews",
     "Mines Park Reviews", "Manual Reviews",
 )
 REFUND_TAB_COLORS = {
@@ -47,6 +47,15 @@ WORKBOOK_HEADERS = {
     "full_account_balance": "Current_Total_Balance",
     "total_refund_amount": "Total_Owed_to_Student",
     "title_iv_balance_due_note": "Title IV Refund Leaves Balance Due",
+    "student_refund_available_amount": "Student Available Now",
+    "parent_refund_available_amount": "Parent Available Now",
+    "student_clearing_reserve_amount": "Student Clearing Reserve",
+    "parent_clearing_reserve_amount": "Parent Clearing Reserve",
+    "clearing_payment_amount": "Uncleared Payment Principal",
+    "clearing_insurance_amount": "Student Insurance Reserve",
+    "clearing_payment_count": "Uncleared Payment Count",
+    "clearing_next_eligible_date": "Next Clearing Date",
+    "clearing_final_eligible_date": "Final Clearing Date",
     "proposed_student_delivery": "Proposed_DetailCode&Amt",
     "raw_delinquency_code": "Active RH",
     "active_ed_ind": "Active ED",
@@ -133,6 +142,10 @@ def _student_portions(delivery: str, amount: Decimal) -> list[RefundPortion]:
         sheet = "ACH Clearing" if ACH_WAIT.fullmatch(label) else DELIVERY_SHEETS.get(label)
         if sheet is None or portion_amount <= 0:
             raise ValueError("Unrecognized student delivery; verify the recipient and method.")
+        # Apply the check minimum to this delivery portion, not the whole account
+        # or other recipients. ACH/card, ED and Parent PLUS retain their routes.
+        if label == "RFND (CHECK)" and portion_amount < STUDENT_CHECK_MINIMUM:
+            sheet = "Check Refund < 25"
         portions.append(RefundPortion(sheet, label, portion_amount))
     if sum((part.amount for part in portions), Decimal(0)) != amount:
         raise ValueError("Student delivery components do not equal the student refund amount.")
@@ -172,27 +185,50 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
             or min(student, parent) < 0 or student + parent != total or total <= 0):
         return review("Manual Reviews", "Recipient amounts are undetermined or do not reconcile.")
 
+    student_available = _amount(row["student_refund_available_amount"])
+    parent_available = _amount(row["parent_refund_available_amount"])
+    student_reserved = _amount(row["student_clearing_reserve_amount"])
+    parent_reserved = _amount(row["parent_clearing_reserve_amount"])
+    if (any(value is None or value < 0 for value in (
+            student_available, parent_available, student_reserved, parent_reserved))
+            or student_available + student_reserved != student
+            or parent_available + parent_reserved != parent):
+        return review("Manual Reviews", "Available and reserved amounts do not reconcile to recipient amounts.")
+
     portions = []
-    if student > 0:
+    if student_available > 0:
         try:
-            portions.extend(_student_portions(str(row["proposed_student_delivery"]), student))
+            portions.extend(_student_portions(str(row["proposed_student_delivery"]), student_available))
         except ValueError as error:
             return review("Manual Reviews", str(error))
-    if parent > 0:
+    if parent_available > 0:
         if row["proposed_parent_delivery"] != "RFDP":
             return review("Manual Reviews", "Parent refund delivery requires review.")
-        portions.append(RefundPortion("Refund to Parent", "RFDP", parent))
+        portions.append(RefundPortion("Refund to Parent", "RFDP", parent_available))
+    if student_reserved > 0:
+        portions.append(RefundPortion("Payment Clearing", "Student clearing reserve", student_reserved))
+    if parent_reserved > 0:
+        portions.append(RefundPortion("Payment Clearing", "Parent clearing reserve", parent_reserved))
 
     by_sheet: dict[str, list[RefundPortion]] = defaultdict(list)
     for portion in portions:
         by_sheet[portion.sheet].append(portion)
-    return [
-        (sheet, {**row,
-                 "tab_delivery": "; ".join(f"{part.delivery} {part.amount:.2f}" for part in parts),
-                 "tab_refund_amount": sum((part.amount for part in parts), Decimal(0)),
-                 "tab_review_note": check_wait_note if sheet != "Refund to Parent" else None})
-        for sheet, parts in by_sheet.items()
-    ]
+    rows = []
+    for sheet, parts in by_sheet.items():
+        note = check_wait_note if sheet != "Refund to Parent" else None
+        if sheet == "Payment Clearing":
+            note = "Do not issue these reserved amounts. Recalculate on the next clearing date."
+        elif sheet == "Check Refund < 25":
+            note = "Student check refund is below $25.00; do not issue a check."
+            if check_wait_note:
+                note += f" {check_wait_note}"
+        rows.append((sheet, {
+            **row,
+            "tab_delivery": "; ".join(f"{part.delivery} {part.amount:.2f}" for part in parts),
+            "tab_refund_amount": sum((part.amount for part in parts), Decimal(0)),
+            "tab_review_note": note,
+        }))
+    return rows
 
 
 CURRENCY_COLUMNS = {
@@ -201,6 +237,12 @@ CURRENCY_COLUMNS = {
     "total_refund_amount",
     "student_refund_amount",
     "parent_refund_amount",
+    "student_refund_available_amount",
+    "parent_refund_available_amount",
+    "student_clearing_reserve_amount",
+    "parent_clearing_reserve_amount",
+    "clearing_payment_amount",
+    "clearing_insurance_amount",
     "current_term_tppy_total",
     "current_term_z0le_total",
     "target_term_fdpl_amount",
@@ -216,6 +258,7 @@ CURRENCY_COLUMNS = {
 }
 
 COUNT_COLUMNS = {
+    "clearing_payment_count",
     "fdpl_row_count",
     "original_payment_row_count",
     "plus_auth_row_count",
@@ -280,7 +323,7 @@ def export_refund_report(
         format_table_columns(
             worksheet, headers=headers,
             currency_headers={header_names.get(column, column) for column in CURRENCY_COLUMNS},
-            count_headers=COUNT_COLUMNS,
+            count_headers={header_names.get(column, column) for column in COUNT_COLUMNS},
         )
         for cell in worksheet[1]:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -294,7 +337,8 @@ def export_refund_report(
         worksheet.auto_filter.ref = worksheet.dimensions
         for header in (
             "deceased_date", "last_ar_activity_date", "account_control_activity_date",
-            "ed_activity_date", "plus_auth_activity_date",
+            "ed_activity_date", "plus_auth_activity_date", "clearing_next_eligible_date",
+            "clearing_final_eligible_date",
         ):
             if header not in columns:
                 continue
@@ -302,7 +346,8 @@ def export_refund_report(
             for cells in worksheet.iter_cols(min_col=column_number, max_col=column_number, min_row=2):
                 for cell in cells:
                     cell.number_format = (
-                        "mm/dd/yyyy" if header == "deceased_date" else "mm/dd/yyyy h:mm AM/PM"
+                        "mm/dd/yyyy" if header in {"deceased_date", "clearing_next_eligible_date", "clearing_final_eligible_date"}
+                        else "mm/dd/yyyy h:mm AM/PM"
                     )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)

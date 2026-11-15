@@ -42,8 +42,11 @@ CURRENT POLICY
   ARFD (System) with ED, otherwise RFND (CHECK).
   ACHK clears on effective date +16 days; after 180 days it carries an age warning.
   CRAM, CRDS, CRMC, CRVC are immediately available via their respective codes.
-- Unused CHCK remains on its normal student-delivery route but cannot be initiated
-  until effective date +16 days. Its amount and eligibility date remain visible.
+- CHCK/ACHK reserve surviving principal even when applied or in settled history
+  until effective date +16 days. Reserve up to $35 per payment from student funds
+  only; principal then uses remaining student funds before parent funds. Gross
+  ownership is preserved; delivery descriptions use available amounts. Missing
+  or future payment dates require review. The workbook separates reserved funds.
 - RH is an account-level hold and overrides every student/parent delivery and
   workbook review route. Other review reasons remain visible for later handling.
 - Unused target-term C529/Z0LE sources and surviving TPPY payments in the target
@@ -494,6 +497,37 @@ tppy_credit_term_review AS MATERIALIZED (
     HAVING BOOL_OR(detail_code = 'TPPY')
        AND (ROUND(SUM(accounting_amount), 2) < 0
             OR BOOL_OR(amount_missing_ind = 1 OR accounting_amount IS NULL))
+),
+
+/* Clearing uses original surviving payments, including applied/settled history. */
+clearing_payment_rows AS (
+    SELECT x.*,
+        SUM(raw_amount) OVER (PARTITION BY pidm, term_code, aidy_code, detail_code) AS group_net,
+        COALESCE(SUM(GREATEST(raw_amount, 0)) OVER (
+            PARTITION BY pidm, term_code, aidy_code, detail_code ORDER BY tran_number
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ), 0) AS prior_positive
+    FROM candidate_transactions x
+    CROSS JOIN params p
+    WHERE x.is_payment AND x.detail_code IN ('CHCK', 'ACHK')
+      AND x.term_sort <= p.target_term::integer
+),
+clearing_payment_summary AS MATERIALIZED (
+    SELECT x.pidm,
+        ROUND(SUM(LEAST(x.raw_amount, GREATEST(x.group_net - x.prior_positive, 0))), 2)
+            AS clearing_payment_amount,
+        COUNT(*) AS clearing_payment_count,
+        COUNT(*) FILTER (WHERE x.effective_date IS NULL OR x.effective_date > p.run_date)
+            AS clearing_date_review_count,
+        MIN(x.effective_date + 16) FILTER (WHERE x.effective_date <= p.run_date)
+            AS clearing_next_eligible_date,
+        MAX(x.effective_date + 16) FILTER (WHERE x.effective_date <= p.run_date)
+            AS clearing_final_eligible_date
+    FROM clearing_payment_rows x
+    CROSS JOIN params p
+    WHERE LEAST(x.raw_amount, GREATEST(x.group_net - x.prior_positive, 0)) > 0
+      AND (x.effective_date IS NULL OR p.run_date < x.effective_date + 16)
+    GROUP BY x.pidm
 ),
 
 /* Account-level summaries are materialized once for the same join-plan reason. */
@@ -1368,6 +1402,11 @@ joined AS (
         v.invalid_term_count,
         v.future_term_count,
         v.invalid_charge_flag_count,
+        COALESCE(cp.clearing_payment_amount, 0) AS clearing_payment_amount,
+        COALESCE(cp.clearing_payment_count, 0) AS clearing_payment_count,
+        COALESCE(cp.clearing_date_review_count, 0) AS clearing_date_review_count,
+        cp.clearing_next_eligible_date,
+        cp.clearing_final_eligible_date,
         v.missing_transaction_balance_count,
         COALESCE(n.negative_net_source_count, 0) AS negative_net_source_count,
         COALESCE(sc.stored_balance_difference_count, 0)
@@ -1388,6 +1427,7 @@ joined AS (
                OR v.invalid_term_count > 0
                OR v.future_term_count > 0
                OR v.invalid_charge_flag_count > 0
+               OR COALESCE(cp.clearing_date_review_count, 0) > 0
                OR COALESCE(n.negative_net_source_count, 0) > 0
                OR COALESCE(fr.missing_fdpl_auth_count, 0) > 0
                OR COALESCE(fr.conflicting_fdpl_auth_count, 0) > 0
@@ -1490,6 +1530,8 @@ joined AS (
         ON op.pidm = b.pidm
     LEFT JOIN student_delivery_sources ds
         ON ds.pidm = b.pidm
+    LEFT JOIN clearing_payment_summary cp
+        ON cp.pidm = b.pidm
 ),
 
 parent_plus_calculation AS (
@@ -1529,119 +1571,101 @@ refund_split AS (
     FROM parent_plus_calculation c
 ),
 
-delivery_amounts AS (
-    SELECT
-        s.*,
-        ROUND(GREATEST(
-            COALESCE(s.proposed_student_refund_amount, 0)
-                - s.achk_transact_eligible_amount
-                - s.achk_clearing_wait_amount
-                - s.achk_too_old_amount
-                - s.achk_date_review_amount
-                - s.crvc_transact_amount - s.cram_transact_amount - s.crds_transact_amount - s.crmc_transact_amount,
-            0
-        ), 2) AS standard_student_delivery_amount,
-        (CASE WHEN s.achk_transact_eligible_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.achk_clearing_wait_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.achk_too_old_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.achk_date_review_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.crvc_transact_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.cram_transact_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.crds_transact_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN s.crmc_transact_amount > 0 THEN 1 ELSE 0 END
-         + CASE WHEN COALESCE(s.proposed_student_refund_amount, 0)
-                    - s.achk_transact_eligible_amount
-                    - s.achk_clearing_wait_amount
-                    - s.achk_too_old_amount
-                    - s.achk_date_review_amount
-                    - s.crvc_transact_amount - s.cram_transact_amount - s.crds_transact_amount - s.crmc_transact_amount > 0
-                THEN 1 ELSE 0 END) AS student_delivery_component_count
+clearing_insurance AS (
+    SELECT s.*,
+        CASE WHEN s.refund_split_blocked_ind = 'Y' THEN NULL
+            ELSE LEAST(s.proposed_student_refund_amount, 35.00 * s.clearing_payment_count)
+        END AS clearing_insurance_amount
     FROM refund_split s
 ),
+clearing_student_principal AS (
+    SELECT s.*,
+        CASE WHEN s.refund_split_blocked_ind = 'Y' THEN NULL
+            ELSE LEAST(s.proposed_student_refund_amount - s.clearing_insurance_amount,
+                       s.clearing_payment_amount)
+        END AS student_principal_reserve
+    FROM clearing_insurance s
+),
+clearing_reserves AS (
+    SELECT s.*,
+        s.clearing_insurance_amount + s.student_principal_reserve AS student_clearing_reserve_amount,
+        CASE WHEN s.refund_split_blocked_ind = 'Y' THEN NULL
+            ELSE LEAST(s.proposed_parent_refund_amount,
+                       s.clearing_payment_amount - s.student_principal_reserve)
+        END AS parent_clearing_reserve_amount
+    FROM clearing_student_principal s
+),
+refund_availability AS (
+    SELECT s.*,
+        s.proposed_student_refund_amount - s.student_clearing_reserve_amount AS student_refund_available_amount,
+        s.proposed_parent_refund_amount - s.parent_clearing_reserve_amount AS parent_refund_available_amount
+    FROM clearing_reserves s
+),
 
+/* Limit original-method portions to available student funds, in delivery order.
+   Pending ACH is already withheld by the account-level clearing reserve. */
+delivery_special_components AS (
+    SELECT a.pidm, v.delivery_order, v.delivery_label,
+        ROUND(LEAST(v.amount, GREATEST(
+            COALESCE(a.student_refund_available_amount, 0)
+            - COALESCE(SUM(v.amount) OVER (
+                PARTITION BY a.pidm ORDER BY v.delivery_order
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ), 0), 0)), 2) AS amount
+    FROM refund_availability a
+    CROSS JOIN LATERAL (VALUES
+        (1, 'AFRD (Transact)', a.achk_transact_eligible_amount),
+        (2, 'CRAM (Transact)', a.cram_transact_amount),
+        (3, 'CRDS (Transact)', a.crds_transact_amount),
+        (4, 'CRMC (Transact)', a.crmc_transact_amount),
+        (5, 'CRVC (Transact)', a.crvc_transact_amount),
+        (6, 'AFRD (Transact) - May Be Too Old', a.achk_too_old_amount),
+        (7, 'ACHK Date Review', a.achk_date_review_amount)
+    ) v(delivery_order, delivery_label, amount)
+),
+delivery_components AS (
+    SELECT pidm, delivery_order, delivery_label, amount
+    FROM delivery_special_components WHERE amount > 0
+    UNION ALL
+    SELECT a.pidm, 8,
+        CASE WHEN a.active_ed_ind = 'Y' THEN 'ARFD (System)' ELSE 'RFND (CHECK)' END,
+        GREATEST(COALESCE(a.student_refund_available_amount, 0) - SUM(v.amount), 0)
+    FROM refund_availability a
+    JOIN delivery_special_components v ON v.pidm = a.pidm
+    GROUP BY a.pidm, a.active_ed_ind, a.student_refund_available_amount
+    HAVING COALESCE(a.student_refund_available_amount, 0) > SUM(v.amount)
+),
+delivery_summary AS (
+    SELECT pidm,
+        BOOL_OR(delivery_label = 'RFND (CHECK)' AND amount < 25.00) AS check_below_minimum,
+        CASE WHEN COUNT(*) = 1 THEN MIN(delivery_label)
+            ELSE STRING_AGG(CONCAT(delivery_label, ' ', TO_CHAR(amount, 'FM999999990.00')),
+                            '; ' ORDER BY delivery_order)
+        END AS student_delivery
+    FROM delivery_components
+    GROUP BY pidm
+),
 delivery AS (
-    SELECT
-        s.*,
+    SELECT s.*,
+        COALESCE(ds.check_below_minimum, FALSE) AS check_below_minimum,
         CASE
-            WHEN COALESCE(s.proposed_student_refund_amount, 0) <= 0 THEN 'NONE'
+            WHEN COALESCE(s.student_refund_available_amount, 0) <= 0 THEN 'NONE'
             WHEN s.refund_hold_ind = 'Y' THEN 'Refund Hold - Student'
-            WHEN s.third_party_review_required_ind = 'Y'
-                THEN 'THIRD_PARTY_REVIEW'
-            WHEN s.student_delivery_component_count = 1
-             AND s.achk_transact_eligible_amount > 0 THEN 'AFRD (Transact)'
-            WHEN s.student_delivery_component_count = 1
-             AND s.achk_clearing_wait_amount > 0 THEN CONCAT(
-                'ACHK Clearing Wait until ',
-                TO_CHAR(s.achk_next_eligible_date, 'MM/DD/YYYY')
-             )
-            WHEN s.student_delivery_component_count = 1
-             AND s.achk_too_old_amount > 0
-                THEN 'AFRD (Transact) - May Be Too Old'
-            WHEN s.student_delivery_component_count = 1
-             AND s.achk_date_review_amount > 0 THEN 'ACHK Date Review'
-            WHEN s.student_delivery_component_count = 1
-             AND s.cram_transact_amount > 0 THEN 'CRAM (Transact)'
-            WHEN s.student_delivery_component_count = 1
-             AND s.crds_transact_amount > 0 THEN 'CRDS (Transact)'
-            WHEN s.student_delivery_component_count = 1
-             AND s.crmc_transact_amount > 0 THEN 'CRMC (Transact)'
-            WHEN s.student_delivery_component_count = 1
-             AND s.crvc_transact_amount > 0 THEN 'CRVC (Transact)'
-            WHEN s.student_delivery_component_count = 1
-             AND s.standard_student_delivery_amount > 0
-                THEN CASE WHEN s.active_ed_ind = 'Y'
-                    THEN 'ARFD (System)' ELSE 'RFND (CHECK)' END
-            ELSE CONCAT_WS(
-                '; ',
-                CASE WHEN s.achk_transact_eligible_amount > 0 THEN CONCAT(
-                    'AFRD (Transact) ',
-                    TO_CHAR(s.achk_transact_eligible_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.cram_transact_amount > 0 THEN CONCAT(
-                    'CRAM (Transact) ', TO_CHAR(s.cram_transact_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.crds_transact_amount > 0 THEN CONCAT(
-                    'CRDS (Transact) ', TO_CHAR(s.crds_transact_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.crmc_transact_amount > 0 THEN CONCAT(
-                    'CRMC (Transact) ', TO_CHAR(s.crmc_transact_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.crvc_transact_amount > 0 THEN CONCAT(
-                    'CRVC (Transact) ',
-                    TO_CHAR(s.crvc_transact_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.achk_clearing_wait_amount > 0 THEN CONCAT(
-                    'ACHK Clearing Wait until ',
-                    TO_CHAR(s.achk_next_eligible_date, 'MM/DD/YYYY'), ' / ',
-                    TO_CHAR(s.achk_clearing_wait_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.achk_too_old_amount > 0 THEN CONCAT(
-                    'AFRD (Transact) - May Be Too Old ',
-                    TO_CHAR(s.achk_too_old_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.achk_date_review_amount > 0 THEN CONCAT(
-                    'ACHK Date Review ',
-                    TO_CHAR(s.achk_date_review_amount, 'FM999999990.00')
-                ) END,
-                CASE WHEN s.standard_student_delivery_amount > 0 THEN CONCAT(
-                    CASE WHEN s.active_ed_ind = 'Y'
-                        THEN 'ARFD (System) ' ELSE 'RFND (CHECK) ' END,
-                    TO_CHAR(s.standard_student_delivery_amount, 'FM999999990.00')
-                ) END
-            )
+            WHEN s.third_party_review_required_ind = 'Y' THEN 'THIRD_PARTY_REVIEW'
+            ELSE COALESCE(ds.student_delivery, 'NONE')
         END AS proposed_student_delivery,
         CASE
-            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
+            WHEN COALESCE(s.parent_refund_available_amount, 0) > 0
              AND s.refund_hold_ind = 'Y' THEN 'Refund Hold - Parent'
-            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
+            WHEN COALESCE(s.parent_refund_available_amount, 0) > 0
              AND s.third_party_review_required_ind = 'Y' THEN 'THIRD_PARTY_REVIEW'
-            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
+            WHEN COALESCE(s.parent_refund_available_amount, 0) > 0
              AND s.plus_to_student_status IN ('N', 'MIXED') THEN 'RFDP'
-            WHEN COALESCE(s.proposed_parent_refund_amount, 0) > 0
-                THEN 'PARENT_PLUS_AUTH_REVIEW'
+            WHEN COALESCE(s.parent_refund_available_amount, 0) > 0 THEN 'PARENT_PLUS_AUTH_REVIEW'
             ELSE 'NONE'
         END AS proposed_parent_delivery
-    FROM delivery_amounts s
+    FROM refund_availability s
+    LEFT JOIN delivery_summary ds ON ds.pidm = s.pidm
 ),
 
 final_review AS (
@@ -1649,6 +1673,12 @@ final_review AS (
         d.*,
         NULLIF(CONCAT_WS(
             '; ',
+            CASE WHEN d.clearing_date_review_count > 0
+                THEN 'CHCK_ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END,
+            CASE WHEN COALESCE(d.student_clearing_reserve_amount, 0)
+                    + COALESCE(d.parent_clearing_reserve_amount, 0) > 0
+                THEN 'PAYMENT_CLEARING_RESERVE' END,
+            CASE WHEN d.check_below_minimum THEN 'STUDENT_CHECK_REFUND_BELOW_25' END,
             CASE WHEN d.invalid_priority_count > 0
                 THEN 'MISSING_OR_INVALID_DETAIL_PRIORITY' END,
             CASE WHEN d.missing_transaction_amount_count > 0
@@ -1727,6 +1757,15 @@ SELECT
     f.proposed_student_refund_amount AS student_refund_amount,
     f.proposed_parent_delivery,
     f.proposed_parent_refund_amount AS parent_refund_amount,
+    f.student_refund_available_amount,
+    f.parent_refund_available_amount,
+    f.student_clearing_reserve_amount,
+    f.parent_clearing_reserve_amount,
+    f.clearing_payment_amount,
+    f.clearing_insurance_amount,
+    f.clearing_payment_count,
+    f.clearing_next_eligible_date,
+    f.clearing_final_eligible_date,
     f.balance_sources,
     f.plus_to_student_status,
     p.target_term AS parent_plus_target_term,
@@ -1779,8 +1818,9 @@ SELECT
             THEN 'MANUAL_REVIEW'
         WHEN f.achk_date_review_amount > 0
           OR f.chck_date_review_amount > 0 THEN 'MANUAL_REVIEW'
-        WHEN f.achk_clearing_wait_amount > 0 THEN 'WAIT_ACH_CLEARING'
-        WHEN f.chck_clearing_wait_amount > 0 THEN 'WAIT_CHECK_CLEARING'
+        WHEN COALESCE(f.student_clearing_reserve_amount, 0)
+           + COALESCE(f.parent_clearing_reserve_amount, 0) > 0 THEN 'WAIT_PAYMENT_CLEARING'
+        WHEN f.check_below_minimum THEN 'WAIT_CHECK_MINIMUM'
         WHEN f.original_payment_row_count > 0 THEN 'TRANSACT_REVIEW'
         ELSE 'READY_FOR_STAFF_REVIEW'
     END AS review_status,

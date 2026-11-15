@@ -16,6 +16,8 @@ from shared.progress import ProgressReporter
 
 CENT = Decimal("0.01")
 ZERO = Decimal("0.00")
+CLEARING_INSURANCE_PER_PAYMENT = Decimal("35.00")
+STUDENT_CHECK_MINIMUM = Decimal("25.00")
 PRIORITY_PATTERN = re.compile(r"^[0-9]{1,3}$")
 ORIGINAL_PAYMENT_CODES = {"ACHK", "CRDS", "CRED", "CRVC", "CRAM", "CRMC"}
 CARD_PAYMENT_CODES = ("CRAM", "CRDS", "CRMC", "CRVC")
@@ -76,6 +78,15 @@ REPORT_COLUMNS = [
     "student_refund_amount",
     "proposed_parent_delivery",
     "parent_refund_amount",
+    "student_refund_available_amount",
+    "parent_refund_available_amount",
+    "student_clearing_reserve_amount",
+    "parent_clearing_reserve_amount",
+    "clearing_payment_amount",
+    "clearing_insurance_amount",
+    "clearing_payment_count",
+    "clearing_next_eligible_date",
+    "clearing_final_eligible_date",
     "balance_sources",
     "plus_to_student_status",
     "parent_plus_target_term",
@@ -685,6 +696,27 @@ def _recent_tppy_review(
     return False
 
 
+def _clearing_payments(transactions: list[dict[str, Any]], run_date: date) -> dict[str, Any]:
+    """Reserve surviving payments even when applied or in settled history."""
+    sources, _ = _payment_sources(transactions)
+    pending = [
+        source for source in sources
+        if source["detail_code"] in {"CHCK", "ACHK"}
+        and (source["effective_date"] is None
+             or run_date < source["effective_date"] + timedelta(days=16))
+    ]
+    dates = [source["effective_date"] + timedelta(days=16) for source in pending
+             if source["effective_date"] is not None and source["effective_date"] <= run_date]
+    return {
+        "principal": _money(sum((source["source_amount"] for source in pending), ZERO)),
+        "count": len(pending),
+        "date_review_count": sum(source["effective_date"] is None or source["effective_date"] > run_date
+                                 for source in pending),
+        "next_date": min(dates) if dates else None,
+        "final_date": max(dates) if dates else None,
+    }
+
+
 def _student_delivery(
     student_amount: Decimal | None,
     sources: list[dict[str, Any]],
@@ -730,16 +762,20 @@ def _student_delivery(
             amounts["ach_old"] += amount
 
     student = student_amount or ZERO
-    special_total = sum((amounts[key] for key in (
-        "ach_eligible", "ach_wait", "ach_old", "ach_date_review", *CARD_PAYMENT_CODES
-    )), ZERO)
-    standard = _money(max(student - special_total, ZERO))
+    # Pending ACH is already included in the account-level reserve. Retain
+    # cleared original-method portions up to the amount available now; ordinary
+    # student funds absorb the reserve before eligible ACH/card portions do.
+    remaining = student
+    available = {}
+    for key in ("ach_eligible", *CARD_PAYMENT_CODES, "ach_old", "ach_date_review"):
+        available[key] = min(amounts[key], remaining)
+        remaining -= available[key]
+    standard = _money(remaining)
     components: list[tuple[str, Decimal]] = [
-        ("AFRD (Transact)", amounts["ach_eligible"]),
-        *((f"{code} (Transact)", amounts[code]) for code in CARD_PAYMENT_CODES),
-        ("ACHK_WAIT", amounts["ach_wait"]),
-        ("AFRD (Transact) - May Be Too Old", amounts["ach_old"]),
-        ("ACHK Date Review", amounts["ach_date_review"]),
+        ("AFRD (Transact)", available["ach_eligible"]),
+        *((f"{code} (Transact)", available[code]) for code in CARD_PAYMENT_CODES),
+        ("AFRD (Transact) - May Be Too Old", available["ach_old"]),
+        ("ACHK Date Review", available["ach_date_review"]),
         ("ARFD (System)" if active_ed else "RFND (CHECK)", standard),
     ]
     active_components = [(label, _money(amount)) for label, amount in components if amount > 0]
@@ -752,20 +788,9 @@ def _student_delivery(
         delivery = "THIRD_PARTY_REVIEW"
     elif len(active_components) == 1:
         label, _ = active_components[0]
-        if label == "ACHK_WAIT":
-            delivery = f"ACHK Clearing Wait until {min(next_eligible):%m/%d/%Y}"
-        else:
-            delivery = label
+        delivery = label
     else:
-        descriptions: list[str] = []
-        for label, amount in active_components:
-            if label == "ACHK_WAIT":
-                descriptions.append(
-                    f"ACHK Clearing Wait until {min(next_eligible):%m/%d/%Y} / {_format_money(amount)}"
-                )
-            else:
-                descriptions.append(f"{label} {_format_money(amount)}")
-        delivery = "; ".join(descriptions)
+        delivery = "; ".join(f"{label} {_format_money(amount)}" for label, amount in active_components)
 
     return delivery, {
         **amounts,
@@ -774,6 +799,7 @@ def _student_delivery(
         # CHCK source represented by that amount has cleared.
         "check_next_eligible": max(check_next_eligible) if check_next_eligible else None,
         "standard": standard,
+        "check_below_minimum": not active_ed and ZERO < standard < STUDENT_CHECK_MINIMUM,
     }
 
 
@@ -821,6 +847,7 @@ def _allocate_account(
         target_sort,
     )
     payment_sources, negative_payment_groups = _payment_sources(allocation_transactions)
+    clearing = _clearing_payments(eligible_transactions, parameters.run_date)
 
     charges, negative_charge_groups = _charge_sources(
         allocation_transactions,
@@ -990,6 +1017,7 @@ def _allocate_account(
     plus_auth_activity = _max_datetime(summary["activity"] for summary in auth_summaries.values())
 
     split_blocked = any((
+        clearing["date_review_count"],
         invalid_priority_count,
         missing_amount_count,
         invalid_term_count,
@@ -1005,9 +1033,19 @@ def _allocate_account(
     if split_blocked:
         parent_amount = None
         student_amount = None
+        insurance = student_reserved = parent_reserved = None
+        student_available = parent_available = None
     else:
         parent_amount = _money(parent_fdpl_amount)
         student_amount = _money(policy_unused_total - parent_amount)
+        # Insurance never reduces the parent's refund. Principal uses the
+        # remaining student portion first, then the parent's portion.
+        insurance = min(student_amount, CLEARING_INSURANCE_PER_PAYMENT * clearing["count"])
+        student_principal = min(student_amount - insurance, clearing["principal"])
+        student_reserved = insurance + student_principal
+        parent_reserved = min(parent_amount, clearing["principal"] - student_principal)
+        student_available = student_amount - student_reserved
+        parent_available = parent_amount - parent_reserved
 
     cwid_upper = (account["cwid"] or "").upper()
     third_party_matches = []
@@ -1029,20 +1067,20 @@ def _allocate_account(
     refund_hold = account["refund_hold_count"] > 0
     active_ed = account["active_ed_row_count"] > 0
     student_delivery, delivery_values = _student_delivery(
-        student_amount,
+        student_available,
         selected_sources,
         run_date=parameters.run_date,
         refund_hold=refund_hold,
         third_party=third_party,
         active_ed=active_ed,
     )
-    if refund_hold and (parent_amount or ZERO) > ZERO:
+    if refund_hold and (parent_available or ZERO) > ZERO:
         parent_delivery = "Refund Hold - Parent"
-    elif third_party and (parent_amount or ZERO) > ZERO:
+    elif third_party and (parent_available or ZERO) > ZERO:
         parent_delivery = "THIRD_PARTY_REVIEW"
-    elif (parent_amount or ZERO) > 0 and plus_status in {"N", "MIXED"}:
+    elif (parent_available or ZERO) > 0 and plus_status in {"N", "MIXED"}:
         parent_delivery = "RFDP"
-    elif (parent_amount or ZERO) > 0:
+    elif (parent_available or ZERO) > 0:
         parent_delivery = "PARENT_PLUS_AUTH_REVIEW"
     else:
         parent_delivery = "NONE"
@@ -1073,6 +1111,9 @@ def _allocate_account(
     ) or None
 
     reasons = _join_reasons([
+        "CHCK_ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE" if clearing["date_review_count"] else None,
+        "PAYMENT_CLEARING_RESERVE" if (student_reserved or ZERO) + (parent_reserved or ZERO) > ZERO else None,
+        "STUDENT_CHECK_REFUND_BELOW_25" if delivery_values["check_below_minimum"] else None,
         "MISSING_OR_INVALID_DETAIL_PRIORITY" if invalid_priority_count else None,
         "MISSING_TRANSACTION_AMOUNT" if missing_amount_count else None,
         "MISSING_TRANSACTION_BALANCE" if missing_balance_count else None,
@@ -1122,10 +1163,10 @@ def _allocate_account(
           or delivery_values["ach_date_review"] > 0
           or delivery_values["check_date_review"] > 0):
         review_status = "MANUAL_REVIEW"
-    elif delivery_values["ach_wait"] > 0:
-        review_status = "WAIT_ACH_CLEARING"
-    elif delivery_values["check_wait"] > 0:
-        review_status = "WAIT_CHECK_CLEARING"
+    elif (student_reserved or ZERO) + (parent_reserved or ZERO) > ZERO:
+        review_status = "WAIT_PAYMENT_CLEARING"
+    elif delivery_values["check_below_minimum"]:
+        review_status = "WAIT_CHECK_MINIMUM"
     elif original_sources:
         review_status = "TRANSACT_REVIEW"
     else:
@@ -1145,6 +1186,15 @@ def _allocate_account(
         "student_refund_amount": student_amount,
         "proposed_parent_delivery": parent_delivery,
         "parent_refund_amount": parent_amount,
+        "student_refund_available_amount": student_available,
+        "parent_refund_available_amount": parent_available,
+        "student_clearing_reserve_amount": student_reserved,
+        "parent_clearing_reserve_amount": parent_reserved,
+        "clearing_payment_amount": clearing["principal"],
+        "clearing_insurance_amount": insurance,
+        "clearing_payment_count": clearing["count"],
+        "clearing_next_eligible_date": clearing["next_date"],
+        "clearing_final_eligible_date": clearing["final_date"],
         "balance_sources": balance_sources,
         "plus_to_student_status": plus_status,
         "parent_plus_target_term": parameters.target_term,

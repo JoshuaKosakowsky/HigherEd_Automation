@@ -132,7 +132,15 @@ class RefundAllocationTests(unittest.TestCase):
         if expected_rows == 0:
             return {}
         self.assertTrue(set(result["title_iv_balance_due_note"]).issubset({"Yes", "No"}))
-        return result.iloc[0].to_dict()
+        row = result.iloc[0].to_dict()
+        for recipient in ("student", "parent"):
+            if row[f"{recipient}_refund_amount"] is not None:
+                available = row[f"{recipient}_refund_available_amount"]
+                reserved = row[f"{recipient}_clearing_reserve_amount"]
+                self.assertGreaterEqual(available, Decimal(0))
+                self.assertGreaterEqual(reserved, Decimal(0))
+                self.assertEqual(available + reserved, row[f"{recipient}_refund_amount"])
+        return row
 
     @staticmethod
     def worked_example() -> list[Transaction]:
@@ -819,7 +827,7 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("ACHK", "P", "000", 20, -20),
             Transaction("ACHK", "P", "000", 30, -30, effective_date="2099-08-30"),
             Transaction("ACHK", "P", "000", 40, -40, effective_date="2098-08-01"),
-            Transaction("ACHK", "P", "000", 50, -50, effective_date=None),
+            Transaction("ACHK", "P", "000", 50, -50, effective_date="2099-08-01"),
             *(Transaction(code, "P", "000", 10, -10) for code in ("CRAM", "CRDS", "CRMC", "CRVC")),
             Transaction("SCHP", "P", "000", 100, -100, category="FA"),
         ])
@@ -832,11 +840,12 @@ class RefundAllocationTests(unittest.TestCase):
                 "Detail_Code_Note": "tab_review_note", "Detail_Code_Delivery": "tab_delivery",
                 "Total_Owed_to_Student": "total_refund_amount",
             }) for name, sheet in sheets.items()}
-            expected = {"ACH or CC Refunds": 60, "ACH Clearing": 30, "ACH Reviews": 90,
-                        "Direct Deposit": 100, "Refund to Parent": 70}
+            expected = {"ACH or CC Refunds": 110, "Payment Clearing": 65, "ACH Reviews": 40,
+                        "Direct Deposit": 65, "Refund to Parent": 70}
             self.assertEqual({name: frame.tab_refund_amount.sum() for name, frame in sheets.items()
                               if not frame.empty}, expected)
-            self.assertIn("09/15/2099", sheets["ACH Clearing"].iloc[0].tab_delivery)
+            self.assertEqual(pd.Timestamp(sheets["Payment Clearing"].iloc[0]["Next Clearing Date"]),
+                             pd.Timestamp("2099-09-15"))
             for code in ("CRAM", "CRDS", "CRMC", "CRVC"):
                 self.assertIn(f"{code} (Transact) 10.00", sheets["ACH or CC Refunds"].iloc[0].tab_delivery)
 
@@ -965,8 +974,11 @@ class RefundAllocationTests(unittest.TestCase):
         waiting = self.report([
             Transaction("ACHK", "P", "000", 50, -50, effective_date="2099-08-16")
         ])
-        self.assertEqual(waiting["proposed_student_delivery"], "ACHK Clearing Wait until 09/01/2099")
-        self.assertEqual(waiting["review_status"], "WAIT_ACH_CLEARING")
+        self.assertEqual(waiting["proposed_student_delivery"], "NONE")
+        self.assertEqual(waiting["student_refund_available_amount"], Decimal(0))
+        self.assertEqual(waiting["student_clearing_reserve_amount"], Decimal(50))
+        self.assertEqual(waiting["clearing_next_eligible_date"], date(2099, 9, 1))
+        self.assertEqual(waiting["review_status"], "WAIT_PAYMENT_CLEARING")
 
         old = self.report([
             Transaction("ACHK", "P", "000", 50, -50, effective_date="2099-03-03")
@@ -978,7 +990,7 @@ class RefundAllocationTests(unittest.TestCase):
         hold = self.report([Transaction("PAY0", "P", "000", 50, -50)], refund_hold=True)
         self.assertEqual(hold["proposed_student_delivery"], "Refund Hold - Student")
 
-    def test_chck_waits_through_day_15_without_changing_delivery_route(self) -> None:
+    def test_chck_waits_through_day_15_and_retains_gross_amounts(self) -> None:
         ready = self.report([
             Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-15")
         ])
@@ -990,8 +1002,11 @@ class RefundAllocationTests(unittest.TestCase):
             Transaction("CHCK", "P", "000", 30, -30, effective_date="2099-08-16"),
             Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-20"),
         ])
-        self.assertEqual(waiting["proposed_student_delivery"], "ARFD (System)")
-        self.assertEqual(waiting["review_status"], "WAIT_CHECK_CLEARING")
+        self.assertEqual(waiting["proposed_student_delivery"], "NONE")
+        self.assertEqual(waiting["student_refund_amount"], Decimal(80))
+        self.assertEqual(waiting["student_refund_available_amount"], Decimal(0))
+        self.assertEqual(waiting["clearing_insurance_amount"], Decimal(70))
+        self.assertEqual(waiting["review_status"], "WAIT_PAYMENT_CLEARING")
         self.assertIn(
             "CHCK_CLEARING_WAIT_UNTIL_09/05/2099_AMOUNT_80.00",
             waiting["review_reasons"],
@@ -1000,22 +1015,163 @@ class RefundAllocationTests(unittest.TestCase):
         check = self.report([
             Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-16")
         ], active_ed=False)
-        self.assertEqual(check["proposed_student_delivery"], "RFND (CHECK)")
-        self.assertEqual(check["review_status"], "WAIT_CHECK_CLEARING")
+        self.assertEqual(check["proposed_student_delivery"], "NONE")
+        self.assertEqual(check["review_status"], "WAIT_PAYMENT_CLEARING")
 
         held = self.report([
             Transaction("CHCK", "P", "000", 50, -50, effective_date="2099-08-16")
         ], refund_hold=True)
-        self.assertEqual(held["proposed_student_delivery"], "Refund Hold - Student")
+        self.assertEqual(held["proposed_student_delivery"], "NONE")
         self.assertEqual(held["review_status"], "HOLD")
         self.assertIn("CHCK_CLEARING_WAIT_UNTIL_09/01/2099", held["review_reasons"])
 
         invalid_date = self.report([
             Transaction("CHCK", "P", "000", 50, -50, effective_date=None)
         ])
-        self.assertEqual(invalid_date["proposed_student_delivery"], "ARFD (System)")
+        self.assertEqual(invalid_date["proposed_student_delivery"], "NONE")
         self.assertEqual(invalid_date["review_status"], "MANUAL_REVIEW")
         self.assertIn("CHCK_EFFECTIVE_DATE_MISSING_OR_FUTURE", invalid_date["review_reasons"])
+
+    def test_applied_check_and_ach_reserve_principal_plus_insurance_until_day_16(self) -> None:
+        for code in ("CHCK", "ACHK"):
+            transactions = [
+                Transaction("TUIN", "C", "899", 1000, tran_number=1),
+                Transaction(code, "P", "000", 1000, 0, effective_date="2099-08-16",
+                            feed_date="2099-08-01", tran_number=2),
+                Transaction("PELL", "P", "800", 2035, -2035, title_iv="Y", category="FA", tran_number=3),
+            ]
+            with self.subTest(code=code):
+                waiting = self.report(transactions)
+                self.assert_split(waiting, 0, 2035)
+                self.assertEqual(waiting["student_refund_available_amount"], Decimal(1000))
+                self.assertEqual(waiting["student_clearing_reserve_amount"], Decimal(1035))
+                self.assertEqual(waiting["clearing_insurance_amount"], Decimal(35))
+                self.assertEqual(waiting["clearing_next_eligible_date"], date(2099, 9, 1))
+                cleared = self.report(transactions, run_date=date(2099, 9, 1))
+                self.assertEqual(cleared["student_refund_available_amount"], Decimal(2035))
+                self.assertEqual(cleared["student_clearing_reserve_amount"], Decimal(0))
+                self.assertEqual(cleared["clearing_payment_count"], 0)
+                posted = transactions + [Transaction("ARFD", "C", "800", 1000, tran_number=4)]
+                self.assertEqual(self.report(posted)["student_refund_available_amount"], Decimal(0))
+                self.assertEqual(self.report(posted, run_date=date(2099, 9, 1))["student_refund_available_amount"], Decimal(1035))
+
+    def test_clearing_reserve_reversals_and_each_payment_release(self) -> None:
+        transactions = [
+            Transaction("TUIN", "C", "899", 600, tran_number=1),
+            Transaction("CHCK", "P", "000", 1000, 0, effective_date="2099-08-16", tran_number=2),
+            Transaction("CHCK", "P", "000", -400, 0, effective_date="2099-08-30", tran_number=3),
+            Transaction("PELL", "P", "800", 2035, -2035, title_iv="Y", category="FA", tran_number=4),
+        ]
+        partial = self.report(transactions)
+        self.assertEqual(partial["clearing_payment_amount"], Decimal(600))
+        self.assertEqual(partial["student_clearing_reserve_amount"], Decimal(635))
+        self.assertEqual(partial["student_refund_available_amount"], Decimal(1400))
+        reversed_row = self.report([
+            replace(transactions[0], amount=0), transactions[1],
+            replace(transactions[2], amount=-1000), transactions[3],
+        ])
+        self.assertEqual(reversed_row["clearing_payment_count"], 0)
+        self.assertEqual(reversed_row["student_refund_available_amount"], Decimal(2035))
+        multiple = [
+            Transaction("TUIN", "C", "899", 1000, tran_number=1),
+            Transaction("CHCK", "P", "000", 500, 0, effective_date="2099-08-16", tran_number=2),
+            Transaction("ACHK", "P", "000", 500, 0, effective_date="2099-08-20", tran_number=3),
+            transactions[3],
+        ]
+        for run_date, held, count in ((date(2099, 8, 31), 1070, 2),
+                                      (date(2099, 9, 1), 535, 1),
+                                      (date(2099, 9, 5), 0, 0)):
+            with self.subTest(run_date=run_date):
+                row = self.report(multiple, run_date=run_date)
+                self.assertEqual(row["student_clearing_reserve_amount"], Decimal(held))
+                self.assertEqual(row["clearing_payment_count"], count)
+                self.assertEqual(row["student_refund_available_amount"], Decimal(2035 - held))
+
+    def test_student_absorbs_insurance_and_principal_before_parent(self) -> None:
+        for student, insurance, parent_available in ((100, 35, 1065), (10, 10, 1000), (0, 0, 1000)):
+            with self.subTest(student=student):
+                row = self.report([
+                    Transaction("TUIN", "C", "899", 1000, tran_number=1),
+                    Transaction("CHCK", "P", "000", 1000, 0, effective_date="2099-08-16", tran_number=2),
+                    Transaction("CASH", "P", "000", student, -student, tran_number=3),
+                    Transaction("FDPL", "P", "800", 2000, -2000, title_iv="Y", category="FA", tran_number=4),
+                ])
+                self.assert_split(row, 2000, student)
+                self.assertEqual(row["clearing_insurance_amount"], Decimal(insurance))
+                self.assertEqual(row["student_refund_available_amount"], Decimal(0))
+                self.assertEqual(row["parent_refund_available_amount"], Decimal(parent_available))
+                self.assertEqual(row["parent_clearing_reserve_amount"], Decimal(2000 - parent_available))
+                self.assertEqual(row["proposed_parent_delivery"], "RFDP")
+
+    def test_recent_applied_payment_in_settled_history_still_reserves_credit(self) -> None:
+        row = self.report([
+            Transaction("TUIN", "C", "899", 1000, 0, term="209955", tran_number=1),
+            Transaction("CHCK", "P", "000", 1000, 0, term="209955", effective_date="2099-08-16", tran_number=2),
+            Transaction("PELL", "P", "800", 2035, -2035, title_iv="Y", category="FA", tran_number=3),
+        ])
+        self.assertEqual(row["student_refund_available_amount"], Decimal(1000))
+        self.assertEqual(row["student_clearing_reserve_amount"], Decimal(1035))
+
+    def test_missing_or_future_applied_payment_date_blocks_recipient_amounts(self) -> None:
+        for code in ("CHCK", "ACHK"):
+            for effective in (None, "2099-09-01"):
+                with self.subTest(code=code, effective=effective):
+                    row = self.report([
+                        Transaction("TUIN", "C", "899", 1000, tran_number=1),
+                        Transaction(code, "P", "000", 1000, 0, effective_date=effective, tran_number=2),
+                        Transaction("PELL", "P", "800", 2035, -2035, title_iv="Y", category="FA", tran_number=3),
+                    ])
+                    self.assertIsNone(row["student_refund_available_amount"])
+                    self.assertIsNone(row["parent_refund_available_amount"])
+                    self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+                    self.assertIn("CHCK_ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE", row["review_reasons"])
+
+    def test_reserve_caps_original_method_amounts_at_available_student_funds(self) -> None:
+        row = self.report([
+            Transaction("TUIN", "C", "899", 100, tran_number=1),
+            Transaction("CHCK", "P", "000", 100, 0, effective_date="2099-08-16", tran_number=2),
+            Transaction("ACHK", "P", "000", 100, -100, tran_number=3),
+            Transaction("CRVC", "P", "000", 100, -100, tran_number=4),
+            Transaction("PELL", "P", "800", 50, -50, title_iv="Y", category="FA", tran_number=5),
+        ])
+        self.assertEqual(row["student_refund_available_amount"], Decimal(115))
+        self.assertEqual(row["student_clearing_reserve_amount"], Decimal(135))
+        self.assertEqual(row["proposed_student_delivery"], "AFRD (Transact) 100.00; CRVC (Transact) 15.00")
+
+    def test_workbook_separates_reserves_and_applies_minimum_to_available_check(self) -> None:
+        transactions = [
+            Transaction("TUIN", "C", "899", 50, tran_number=1),
+            Transaction("CHCK", "P", "000", 50, 0, effective_date="2099-08-16", tran_number=2),
+            Transaction("CASH", "P", "000", 90, -90, tran_number=3),
+        ]
+        for hold, expected in ((False, {"Check Refund < 25": 5, "Payment Clearing": 85}),
+                                (True, {"Refund Holds": 90})):
+            with self.subTest(hold=hold):
+                row = self.report(transactions, active_ed=False, refund_hold=hold)
+                self.assertIn("STUDENT_CHECK_REFUND_BELOW_25", row["review_reasons"])
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual({name: frame["Detail_Code_Refund_Amt"].sum()
+                                      for name, frame in sheets.items() if not frame.empty}, expected)
+                    self.assertEqual(sum(expected.values()), row["total_refund_amount"])
+
+    def test_student_check_minimum_uses_only_the_check_portion(self) -> None:
+        for amount, expected in (("24.99", "WAIT_CHECK_MINIMUM"), ("25.00", "READY_FOR_STAFF_REVIEW")):
+            with self.subTest(amount=amount):
+                row = self.report([Transaction("CASH", "P", "000", amount, -Decimal(amount))], active_ed=False)
+                self.assertEqual(row["review_status"], expected)
+                self.assertEqual(row["student_refund_available_amount"], Decimal(amount))
+        mixed = self.report([
+            Transaction("ACHK", "P", "000", 100, -100),
+            Transaction("CASH", "P", "000", 10, -10),
+        ], active_ed=False)
+        self.assertEqual(mixed["proposed_student_delivery"], "AFRD (Transact) 100.00; RFND (CHECK) 10.00")
+        self.assertEqual(mixed["review_status"], "WAIT_CHECK_MINIMUM")
+        self.assertIn("STUDENT_CHECK_REFUND_BELOW_25", mixed["review_reasons"])
+        parent = self.report([Transaction("FDPL", "P", "800", 5, -5, title_iv="Y", category="FA")], active_ed=False)
+        self.assertNotIn("STUDENT_CHECK_REFUND_BELOW_25", parent["review_reasons"] or "")
+        self.assertEqual(parent["proposed_parent_delivery"], "RFDP")
 
     def test_rh_hold_overrides_mines_park_and_parent_delivery(self) -> None:
         row = self.report([
@@ -1659,6 +1815,15 @@ class RefundExtractTests(unittest.TestCase):
                     "full_account_balance": "Current_Total_Balance",
                     "total_refund_amount": "Total_Owed_to_Student",
                     "title_iv_balance_due_note": "Title IV Refund Leaves Balance Due",
+                    "student_refund_available_amount": "Student Available Now",
+                    "parent_refund_available_amount": "Parent Available Now",
+                    "student_clearing_reserve_amount": "Student Clearing Reserve",
+                    "parent_clearing_reserve_amount": "Parent Clearing Reserve",
+                    "clearing_payment_amount": "Uncleared Payment Principal",
+                    "clearing_insurance_amount": "Student Insurance Reserve",
+                    "clearing_payment_count": "Uncleared Payment Count",
+                    "clearing_next_eligible_date": "Next Clearing Date",
+                    "clearing_final_eligible_date": "Final Clearing Date",
                     "proposed_student_delivery": "Proposed_DetailCode&Amt",
                     "raw_delinquency_code": "Active RH",
                     "active_ed_ind": "Active ED",
@@ -1691,6 +1856,9 @@ class RefundExtractTests(unittest.TestCase):
             row = dict.fromkeys(REPORT_COLUMNS)
             row.update(cwid=cwid, first_name="Synthetic", last_name="Example",
                        student_refund_amount=Decimal(str(student)), parent_refund_amount=Decimal(str(parent)),
+                       student_refund_available_amount=Decimal(str(student)),
+                       parent_refund_available_amount=Decimal(str(parent)),
+                       student_clearing_reserve_amount=Decimal(0), parent_clearing_reserve_amount=Decimal(0),
                        total_refund_amount=Decimal(str(student)) + Decimal(str(parent)),
                        proposed_student_delivery=delivery,
                        proposed_parent_delivery="RFDP" if parent else "NONE",
@@ -1704,10 +1872,17 @@ class RefundExtractTests(unittest.TestCase):
         rows = [
             account("TEST-MIX", 150, 75,
                     "AFRD (Transact) 20.00; CRVC (Transact) 30.00; RFND (CHECK) 100.00"),
+            account("TEST-SMALL-MIX", 110, 5, "AFRD (Transact) 100.00; RFND (CHECK) 10.00"),
+            account("TEST-BELOW-MIN", "24.99", delivery="RFND (CHECK)"),
+            account("TEST-AT-MIN", 25, delivery="RFND (CHECK)"),
+            account("TEST-SMALL-CARD", 5, delivery="CRVC (Transact)"),
+            account("TEST-RESERVED", 50, delivery="NONE", student_refund_available_amount=Decimal(0),
+                    student_clearing_reserve_amount=Decimal(50)),
             account("TEST-SYS", 90, delivery="ARFD (System)",
                     active_ed_ind="Y", ed_activity_date=datetime(2099, 8, 31, 12, 30),
                     review_status="WAIT_CHECK_CLEARING",
                     review_reasons="CHCK_CLEARING_WAIT_UNTIL_09/17/2099_AMOUNT_40.00"),
+            account("TEST-SMALL-ED", 5, delivery="ARFD (System)", active_ed_ind="Y"),
             account("TEST-CHCK", 25, delivery="RFND (CHECK)",
                     review_status="WAIT_CHECK_CLEARING",
                     review_reasons="CHCK_CLEARING_WAIT_UNTIL_09/18/2099_AMOUNT_25.00"),
@@ -1728,11 +1903,13 @@ class RefundExtractTests(unittest.TestCase):
             account("TEST-MISMATCH", 50, delivery="AFRD (Transact) 20.00; RFND (CHECK) 20.00"),
         ]
         expected = {
-            "ACH or CC Refunds": {"TEST-MIX": 50},
-            "Refund by Check": {"TEST-MIX": 100, "TEST-CHCK": 25},
-            "Refund to Parent": {"TEST-MIX": 75},
-            "Direct Deposit": {"TEST-SYS": 90, "TEST-WAIT": 60},
+            "ACH or CC Refunds": {"TEST-MIX": 50, "TEST-SMALL-MIX": 100, "TEST-SMALL-CARD": 5},
+            "Refund by Check": {"TEST-MIX": 100, "TEST-CHCK": 25, "TEST-AT-MIN": 25},
+            "Check Refund < 25": {"TEST-SMALL-MIX": 10, "TEST-BELOW-MIN": 24.99},
+            "Refund to Parent": {"TEST-MIX": 75, "TEST-SMALL-MIX": 5},
+            "Direct Deposit": {"TEST-SYS": 90, "TEST-WAIT": 60, "TEST-SMALL-ED": 5},
             "Refund Holds": {"TEST-HOLD": 50},
+            "Payment Clearing": {"TEST-RESERVED": 50},
             "ACH Clearing": {"TEST-WAIT": 40},
             "ACH Reviews": {"TEST-OLD": 15, "TEST-DATE": 10},
             "Third Party Reviews": {"TEST-THIRD": 30},
@@ -1752,12 +1929,15 @@ class RefundExtractTests(unittest.TestCase):
             }) for name, sheet in sheets.items()}
             for name, amounts in expected.items():
                 self.assertEqual(dict(zip(sheets[name].cwid, sheets[name].tab_refund_amount)), amounts)
-            self.assertEqual(sum(frame.tab_refund_amount.sum() for frame in sheets.values()),
+            self.assertEqual(sum(Decimal(str(amount)) for frame in sheets.values()
+                                 for amount in frame.tab_refund_amount),
                              sum(row["total_refund_amount"] for row in rows))
             self.assertEqual(sheets["ACH or CC Refunds"].iloc[0].total_refund_amount, 225)
-            self.assertEqual(sheets["Direct Deposit"].iloc[0].review_status,
+            self.assertTrue(sheets["Check Refund < 25"].tab_review_note.str.contains("do not issue a check").all())
+            system_row = sheets["Direct Deposit"].loc[sheets["Direct Deposit"].cwid == "TEST-SYS"].iloc[0]
+            self.assertEqual(system_row.review_status,
                              "WAIT_CHECK_CLEARING")
-            self.assertEqual(sheets["Direct Deposit"].iloc[0].tab_review_note,
+            self.assertEqual(system_row.tab_review_note,
                              "CHCK clearing wait: 40.00 becomes eligible on 09/17/2099.")
             self.assertEqual(sheets["Refund by Check"].loc[
                 sheets["Refund by Check"].cwid == "TEST-CHCK", "tab_review_note"
@@ -1792,7 +1972,10 @@ class RefundExtractTests(unittest.TestCase):
                         "plus_to_student_status", "refund_hold_ind", "fdpl_aidy_code",
                     ):
                         header = "PPL to Student" if column == "plus_to_student_status" else column
-                        self.assertEqual(values[headers.index(header)], source[column],
+                        value = values[headers.index(header)]
+                        if isinstance(source[column], Decimal):
+                            value = Decimal(str(value))
+                        self.assertEqual(value, source[column],
                                          (sheet.title, source["cwid"], column))
                 for column in ("student_refund_amount", "parent_refund_amount"):
                     self.assertIn("$", sheet.cell(2, headers.index(column) + 1).number_format)

@@ -180,6 +180,13 @@ unrestricted funds can pay them. Refresh both manual downloads or start a fresh
 API extraction. Update the maintained list when Banner's flags change; the
 workflow guide includes the regeneration procedure.
 
+**0.28.4** separates uncleared CHCK/ACHK principal and the student-only $35
+per-payment reserve onto **Payment Clearing** until Effective Date +16 days.
+Available student and parent amounts retain their delivery routes, with reserved
+amounts and next/final clearing dates shown separately. Student check portions
+below $25 go to **Check Refund < 25**; exactly $25 and parent refunds retain
+their normal routes. See the [reserve examples](../../workflows/refunds/README.md#payment-clearing-reserves-0284).
+
 ## Workflow visibility
 
 ### Insights connections (administrators)

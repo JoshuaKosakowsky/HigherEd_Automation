@@ -562,7 +562,10 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         expected = """
             cwid last_name first_name full_account_balance total_refund_amount title_iv_balance_due_note
             proposed_student_delivery student_refund_amount proposed_parent_delivery
-            parent_refund_amount balance_sources plus_to_student_status
+            parent_refund_amount student_refund_available_amount parent_refund_available_amount
+            student_clearing_reserve_amount parent_clearing_reserve_amount clearing_payment_amount
+            clearing_insurance_amount clearing_payment_count clearing_next_eligible_date
+            clearing_final_eligible_date balance_sources plus_to_student_status
             parent_plus_target_term refund_split_status third_party_review_required_ind
             third_party_match_source refund_hold_ind raw_delinquency_code active_ed_ind
             raw_refund_account_ind refund_account_selected_ind fdpl_row_count
@@ -840,7 +843,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         self.assertEqual(row["unpaid_charge_amount"], 0)
         self.assertEqual(row["title_iv_applied_to_older_fiscal_years"], Decimal("200.00"))
         self.assertEqual(row["unrestricted_applied_to_older_terms"], Decimal("4550.25"))
-        self.assertNotIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"])
+        self.assertNotIn("NEGATIVE_NET_SOURCE_REQUIRES_REVIEW", row["review_reasons"] or "")
 
     def test_multiple_fdpl_aid_years_use_each_authorization(self) -> None:
         row = self.one([
@@ -874,9 +877,12 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                               effective_date="2099-08-16")
         ])
         self.assertEqual(
-            waiting["proposed_student_delivery"], "ACHK Clearing Wait until 09/01/2099"
+            waiting["proposed_student_delivery"], "NONE"
         )
-        self.assertEqual(waiting["review_status"], "WAIT_ACH_CLEARING")
+        self.assertEqual(waiting["review_status"], "WAIT_PAYMENT_CLEARING")
+        self.assertEqual(waiting["student_refund_available_amount"], 0)
+        self.assertEqual(waiting["student_clearing_reserve_amount"], 50)
+        self.assertEqual(waiting["clearing_next_eligible_date"], "2099-09-01")
 
         day_16 = self.one([
             RefundTransaction("ACHK", "P", "000", 50, balance=-50,
@@ -991,7 +997,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             # Older credits do not erase an all-history debt in the scope filter.
             RefundTransaction("PAY0", "P", "000", 20, balance=-20, pidm=11),
             RefundTransaction("OLD", "C", "899", 30, term="208980", pidm=11),
-            # Recent TPPY selects the account even when applied; day 33 does not.
+            # Recent applied TPPY qualifies; day 33 also qualifies in a credit term.
             RefundTransaction("CHG8", "C", "899", 100, term="209955", pidm=12),
             RefundTransaction("TPPY", "P", "800", 100, term="209955", pidm=12,
                               effective_date="2099-07-30"),
@@ -1006,7 +1012,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("FREE", "P", "000", 50, term="209955", pidm=14),
         ]
         root = REFUNDS_QUERY.parent
-        expected = {1, 2, 4, 8, 10, 12, 14}
+        expected = {1, 2, 4, 8, 10, 12, 13, 14}
         downloads = {}
         for name in ("transactions", "context"):
             with self.subTest(export=name):
@@ -1044,7 +1050,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             )
             expected_refunds = {
                 "TEST-2": 20, "TEST-4": 10, "TEST-10": 10,
-                "TEST-12": 50, "TEST-14": 50,
+                "TEST-12": 50, "TEST-13": 60, "TEST-14": 50,
             }
             self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), expected_refunds)
             sql_rows = self.run_report(transactions)
@@ -1078,7 +1084,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             ], ignore_index=True)
             self.assertEqual(dict(zip(workbook.cwid, workbook.tab_refund_amount)), expected_refunds)
             self.assertEqual(set(sheets["Mines Park Reviews"].cwid), {"TEST-4", "TEST-10"})
-            self.assertEqual(set(sheets["Third Party Reviews"].cwid), {"TEST-12", "TEST-14"})
+            self.assertEqual(set(sheets["Third Party Reviews"].cwid), {"TEST-12", "TEST-13", "TEST-14"})
 
     def test_sql_matches_current_python_allocation_scenarios(self) -> None:
         sql_case = self

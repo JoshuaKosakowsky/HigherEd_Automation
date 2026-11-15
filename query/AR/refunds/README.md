@@ -243,6 +243,16 @@ refund is $200, $100 remains owed, and the flag is `Yes`. Increasing LPPF
 to $200/$300 keeps the $200 refund and the `Yes` flag, with $200/$300 owed. Cash that pays
 LPPF removes the balance-due flag. Parent PLUS and holds preserve their routing.
 
+From 0.28.4, the Python workbook export places each student `RFND (CHECK)`
+portion below $25.00 on **Check Refund < 25**, even when other portions of the
+same account can be refunded by ACH/card. Exactly $25.00 meets the check
+minimum. ED/direct-deposit and Parent PLUS portions keep their normal routes.
+Both Python and standalone SQL add `STUDENT_CHECK_REFUND_BELOW_25` to the review
+reasons for a small student check portion; the status is `WAIT_CHECK_MINIMUM`
+unless an existing hold, review or clearing reserve takes precedence. Other
+available methods keep their portions and can follow their normal review process.
+See the [workbook routing rules](../../../workflows/refunds/README.md#workbook-tabs).
+
 See the [current rule, decision references and acceptance examples](../../../workflows/refunds/README.md#title-iv-refunds-that-leave-charges-owed-0280).
 The owner confirmed the common band and Non-Allowable example in the
 implementation follow-up to [issue #29](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823).
@@ -277,16 +287,28 @@ and parent delivery and every workbook review route. The entire account refund
 stays on Refund Holds while RH is active; other review reasons remain visible.
 CRAM, CRDS, CRMC, and CRVC use their own code plus (Transact), without
 a clearing delay. ACHK becomes eligible on effective date +16 days; day 180 is
-included, and older funds carry the May Be Too Old note. Waiting funds show the
-eligibility date. Multiple methods show their individual amounts.
+included, and older funds carry the May Be Too Old note. Multiple methods show
+their individual available amounts.
 
-Unused CHCK remains part of the student's ordinary `ARFD (System)` or
-`RFND (CHECK)` amount. It becomes eligible on effective date +16 days, matching
-the ACH clearing boundary. Before then, `review_status` is
-`WAIT_CHECK_CLEARING` and `review_reasons` records the waiting CHCK amount and
-exact eligibility date. A missing or future effective date requires manual
-review. RH still overrides the status and workbook route, while retaining the
-CHCK clearing information.
+From **0.28.4**, CHCK and ACHK reserve their surviving principal plus up to $35
+per payment until **Effective Date +16 calendar days**, even when already
+applied or in settled history. Reversals retain existing source grouping and
+newest-positive-first netting. Insurance reduces student funds only; payment
+principal then reduces remaining student funds before parent funds. Withholding
+is capped at those refundable amounts. Each payment releases independently.
+The owner confirmed Effective Date during implementation, superseding the
+earlier Feed Date wording in issue #31.
+
+The standalone report preserves gross refund/recipient amounts and adds
+`student_refund_available_amount`, `parent_refund_available_amount`,
+`student_clearing_reserve_amount`, `parent_clearing_reserve_amount`,
+`clearing_payment_amount`, `clearing_insurance_amount`, `clearing_payment_count`,
+`clearing_next_eligible_date` and `clearing_final_eligible_date`.
+Delivery descriptions use available amounts; the Python workbook separates
+reserved portions onto **Payment Clearing**. Known reserved funds produce
+`WAIT_PAYMENT_CLEARING`; missing/future payment dates block the split and require
+manual review. RH and other whole-account review routes still take precedence.
+See [payment reserve rules and examples](../../../workflows/refunds/README.md#payment-clearing-reserves-0284).
 
 Unused target-term C529/Z0LE sources add `Possible Third Party refund`. A
 surviving TPPY payment adds the same review when it is in the target term or was

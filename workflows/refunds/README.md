@@ -194,14 +194,70 @@ scholarship, and PLUS funds authorized for the student use the student's normal
 `ARFD (System)` or `RFND (CHECK)` route; PLUS authorized for the parent uses
 `RFDP`. `CRAM`, `CRDS`, `CRMC`, and `CRVC` display their own code plus `(Transact)`
 with no clearing wait. ACHK uses its effective date: available on day 16
-(August 1 becomes August 17), through day 180. Younger funds show the eligibility
-date; older funds show `AFRD (Transact) - May Be Too Old`. Reversals are netted
-before identifying the surviving source and its refund amount. Holds continue
-to override student delivery. Unused CHCK remains on the student's normal System
-or Check tab, but cannot be initiated until effective date +16 days. While it is
-waiting, the tab note shows the CHCK amount and exact eligibility date. Missing
-or future CHCK effective dates require manual review. RH still sends the entire
-account to Refund Holds and retains the CHCK clearing note.
+(August 1 becomes August 17), through day 180. Older funds show
+`AFRD (Transact) - May Be Too Old`. Reversals are netted before identifying
+surviving sources. From 0.28.4, both CHCK and ACHK use the payment reserve below,
+including payments already applied to charges. Available original-method
+portions retain their delivery order and are capped at available student funds;
+remaining ordinary student funds use ED or check. Holds continue to override
+every delivery route.
+
+### Payment clearing reserves (0.28.4)
+
+Each surviving positive CHCK/ACHK payment clears on **Effective Date +16
+calendar days**: it remains reserved before that date and is eligible on that
+date. Its remaining
+principal after reversals is reserved even if applied to charges or in settled
+history. Reversals use the existing term/aid-year/detail-code grouping and reduce
+the newest positive payment first. Fully reversed payments create no reserve.
+Each uncleared payment also requests a temporary **$35 insurance reserve**.
+Reserve amounts are recomputed on every run; payments release independently as
+they clear. Withholding does not add a charge or change refund ownership.
+
+Calculate the normal student/parent refund split first, retaining existing
+reconciliation and Title IV checks. Then:
+
+1. Reserve up to $35 per uncleared payment from the student's refundable amount.
+   Limit insurance to available student funds; none spills into a parent refund.
+2. Reserve the uncleared payment principal from the remaining student funds first,
+   then from parent funds, capped at their refundable amounts.
+3. Route available portions normally, with reserved portions on **Payment
+   Clearing**. No dollar appears in both payable and reserved portions.
+
+`student_refund_amount`, `parent_refund_amount`, and `total_refund_amount` retain
+the gross amounts owed. New available/reserved columns explain when those
+amounts can be issued. `clearing_payment_amount` is the full uncleared principal;
+it can exceed the amount actually reserved when credit is smaller.
+`clearing_insurance_amount` is the insurance actually reserved from student funds.
+Next/Final Clearing Date show the earliest/latest known eligibility dates;
+rerun on the next date to recompute availability. Missing or future Effective
+Dates block the recipient split and require manual review, including for applied
+payments. A valid split with reserved amounts has `WAIT_PAYMENT_CLEARING` status.
+RH and other account-level review routing retain precedence and keep the gross
+account together with its reserve context.
+
+The reserve and check minimum originate in [issue #31](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/31).
+During implementation on 2026-11-15, the owner retained **Effective Date** in
+place of the issue comment's earlier Feed Date wording, confirmed remaining
+principal after partial reversal, and specified student-first principal with
+student-only insurance. These are the implemented decisions.
+
+Synthetic acceptance cases, before the payment clears:
+
+| Student owed | Parent owed | Uncleared payments | Student available | Parent available | Total reserved |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| $2,035 | $0 | One $1,000 payment applied to $1,000 tuition | $1,000 | $0 | $1,035 |
+| $2,035 | $0 | One $1,000 payment less a $400 reversal | $1,400 | $0 | $635 |
+| $2,035 | $0 | Two separate $500 payments | $965 | $0 | $1,070 |
+| $100 | $2,000 | One $1,000 payment | $0 | $1,065 | $1,035 |
+| $10 | $2,000 | One $1,000 payment | $0 | $1,000 | $1,010 |
+| $0 | $2,000 | One $1,000 payment | $0 | $1,000 | $1,000 |
+| $20 | $0 | One $1,000 payment | $0 | $0 | $20 |
+
+For the first example, day 16 releases all $2,035 if nothing has been issued.
+If the permitted $1,000 was already issued and posted, only $1,035 remains for
+release. Two $500 payments dated four days apart release independently: after
+the first clears, the remaining reserve is $535, then zero after the second.
 
 - Surviving target-term refund sources `C529` or `Z0LE` add `Possible Third Party
   refund`. A surviving TPPY payment adds the same review when it is in the target
@@ -283,14 +339,22 @@ The workbook has these tabs, including headers when a category is empty:
 
 - **ACH or CC Refunds** (light yellow tab): available ACH and credit-card portions.
 - **Refund by Check** (light green tab): student `RFND (CHECK)` portions.
+- **Check Refund < 25:** student check portions below $25.00; do not issue a
+  check for these amounts. From 0.28.4 the minimum applies to each student check
+  portion after splitting by delivery method. Exactly $25.00 stays on Refund
+  by Check. Eligible ACH/card and direct-deposit portions retain their normal
+  tabs even when the same account has a check portion below the minimum.
 - **Refund to Parent** (light orange tab): parent `RFDP` portions.
 - **Direct Deposit** (light blue tab): student `ARFD (Direct Deposit)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
 - **Refund Holds:** the entire account refund when RH is present, including any
   student and parent portions. No portion remains on a delivery or other review
   tab while the hold is active.
-- **ACH Clearing:** ACH portions still within the clearing period, with the
-  eligibility date retained.
+- **Payment Clearing:** student/parent portions reserved for uncleared CHCK/ACHK
+  payments and student-only insurance. Do not issue these reserved amounts.
+  Available portions can appear on their normal method tabs at the same time.
+- **ACH Clearing:** retained for the earlier per-source ACH wait format; new
+  calculated CHCK/ACHK reserves appear on Payment Clearing.
 - **ACH Reviews:** ACH portions over 180 days old or requiring effective-date review.
 - **Mines Park Reviews:** the entire account refund pending housing review.
 - **Manual Reviews:** undetermined splits, unrecognized delivery methods, or
@@ -301,6 +365,20 @@ review takes precedence over Mines Park review. All applicable reasons remain
 visible so staff can address them after a hold is removed. Other existing review
 statuses and reasons stay on the applicable method tabs: a tab assignment is
 **not approval to issue a refund**.
+
+The $25 minimum does not apply to Parent PLUS refunds payable to the parent;
+those remain on Refund to Parent. Existing RH, ownership and manual-review
+routing take precedence over the small-check tab. The owner confirmed the
+minimum and parent exception in [issue #31](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/31#issuecomment-6690980646),
+then confirmed in the implementation discussion on 2026-11-15 that mixed
+refunds are separated by delivery portion. Synthetic examples: $24.99 by check
+is held on Check Refund < 25, $25.00 by check remains on Refund by Check, and
+$100 by ACH plus $10 by student check plus $5 to a parent appears as $100 on
+ACH or CC Refunds, $10 on Check Refund < 25, and $5 on Refund to Parent.
+Python and standalone SQL also flag `STUDENT_CHECK_REFUND_BELOW_25` in review
+reasons. `WAIT_CHECK_MINIMUM` is the status unless a hold, manual review or
+clearing reserve takes precedence; other available delivery portions retain
+their routes.
 
 Mixed refunds can appear on multiple tabs, but each account appears at most
 once per tab. **Detail_Code_Delivery** identifies that tab's method(s), and
@@ -323,6 +401,15 @@ and names.
 | `tab_review_note` | `Detail_Code_Note` |
 | `full_account_balance` | `Current_Total_Balance` |
 | `total_refund_amount` | `Total_Owed_to_Student` |
+| `student_refund_available_amount` | `Student Available Now` |
+| `parent_refund_available_amount` | `Parent Available Now` |
+| `student_clearing_reserve_amount` | `Student Clearing Reserve` |
+| `parent_clearing_reserve_amount` | `Parent Clearing Reserve` |
+| `clearing_payment_amount` | `Uncleared Payment Principal` |
+| `clearing_insurance_amount` | `Student Insurance Reserve` |
+| `clearing_payment_count` | `Uncleared Payment Count` |
+| `clearing_next_eligible_date` | `Next Clearing Date` |
+| `clearing_final_eligible_date` | `Final Clearing Date` |
 | `proposed_student_delivery` | `Proposed_DetailCode&Amt` |
 | `raw_delinquency_code` | `Active RH` |
 | `active_ed_ind` | `Active ED` |
@@ -336,8 +423,8 @@ Every tab includes `student_refund_amount`, `proposed_parent_delivery`,
 `parent_refund_amount`, `plus_to_student_status` (displayed as **PPL to Student**),
 `refund_hold_ind`, and `fdpl_aidy_code` as account context. These fields repeat
 when an account appears on multiple tabs; they are not the tab's refund portion.
-On **Refund to Parent**, `parent_refund_amount` repeats the parent portion in
-**Detail_Code_Refund_Amt**.
+On **Refund to Parent**, **Detail_Code_Refund_Amt** is the available parent
+portion; `parent_refund_amount` includes any amount still reserved for clearing.
 Sum **Detail_Code_Refund_Amt** when combining portions across tabs;
 **Total_Owed_to_Student** remains the account-level total.
 
