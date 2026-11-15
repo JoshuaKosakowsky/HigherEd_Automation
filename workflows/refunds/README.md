@@ -409,9 +409,28 @@ GUI log and launcher progress output.
 
 ## Recover from failures
 
-The following recovery options apply only to API/batched mode. If authentication
-or a connection fails after some batches finish, use the
-same term and batch count with `-Resume`:
+Recovery applies to API/batched mode. From **0.28.2**, the extractor retries a
+read-only partition query after connection errors, timeouts, or HTTP
+429/502/503/504 responses: at most three attempts, with 2- and 5-second waits.
+Cancellation interrupts the wait; authentication/permission errors, invalid
+SQL (including HTTP 400), and invalid results are not retried. Completeness
+checks still apply to every successful response.
+
+In the GUI, failed or cancelled SQL runs retain complete batches in the operating
+system's local user cache under `HigherEdAutomation/refunds`. Rerun the same term
+on the same day to resume automatically after reconnecting. Reuse requires the
+same authenticated Insights user, connection/database, application version, and
+SQL fingerprint, plus the existing manifest checks. The failed top-level batch
+starts again; partial children are not saved. The log identifies the cache
+directory. Delete it while no run is active to force a fresh extraction, for
+example when source records have changed. Resuming uses the original completed
+batches and is not a fresh snapshot of those accounts. Successful runs remove
+their cache; the next run for that user/database removes earlier dated caches.
+An interprocess lock prevents concurrent use of the same user's connection cache.
+Versions through 0.28.1 used a temporary directory in the GUI, so this change
+cannot restore batches already deleted by a failed older run.
+
+For the PowerShell launcher, use the same term and batch count with `-Resume`:
 
 ```powershell
 .\launcher\run_refunds.ps1 -TargetTerm 202680 -BatchCount 20 -Resume
@@ -434,8 +453,8 @@ reconciliation stops extraction
 with a descriptive error rather than accepting incomplete data.
 
 Only complete top-level batches are cached; a failed subdivided batch is
-retried in full on `-Resume`. Existing compatible complete caches remain valid.
-If a query itself times out, increase `-BatchCount` and start a fresh extraction
+retried in full when resuming. Existing compatible complete caches remain valid.
+If a query repeatedly times out, increase `-BatchCount` and start a fresh extraction
 without `-Resume`. Changing the batch count changes every PIDM partition, so
 old batches cannot safely be mixed with the new run. Manual file downloads
 still require complete exports; they cannot be automatically subdivided.

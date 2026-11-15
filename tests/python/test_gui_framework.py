@@ -34,7 +34,7 @@ from app.gui.services.access import (
 from app.gui.services.drag_drop import dropped_local_paths
 from PySide6.QtCore import QMimeData, QUrl
 from app.gui.services.population_testing import run_population_testing
-from app.gui.services.refunds import run_refund_review
+from app.gui.services.refunds import _refund_extract_cache, run_refund_review
 from app.gui.services.textbook_brokers import (
     PROJECT_ROOT as TEXTBOOK_PROJECT_ROOT,
     WORKFLOW_SCRIPT,
@@ -42,6 +42,8 @@ from app.gui.services.textbook_brokers import (
 )
 from data_processing.refunds.extract import RefundExtractError, TruncatedRefundExtractError
 from shared.cancellation import CancellationToken, WorkflowCancelled
+from shared.insights.config import InsightsSettings
+from data_processing.refunds.terms import RefundParameters
 from app.gui import theme
 from app.gui.workflow_registry import get_workflow, get_workflows
 from shared.banner.term import get_banner_term
@@ -383,6 +385,17 @@ class PopulationTestingAdapterTests(unittest.TestCase):
 
 
 class RefundReviewAdapterTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.cache_root = Path(temporary.name)
+        cache_path = patch(
+            "app.gui.services.refunds.QStandardPaths.writableLocation",
+            return_value=str(self.cache_root),
+        )
+        cache_path.start()
+        self.addCleanup(cache_path.stop)
+
     def test_adapter_builds_existing_manual_download_pipeline_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -423,7 +436,9 @@ class RefundReviewAdapterTests(unittest.TestCase):
             "output_file": Path(self._testMethodName + ".xlsx"),
         }, WorkflowMode.PRODUCTION)
         profile = MagicMock()
+        profile.settings = InsightsSettings("PROD", "https://insights.example.test", 2)
         client = MagicMock()
+        client.get_current_user.return_value.id = 7
         with (
             patch("app.gui.services.refunds.load_access_configuration") as policy,
             patch("app.gui.services.refunds.get_shared_gui_access_path"),
@@ -446,6 +461,136 @@ class RefundReviewAdapterTests(unittest.TestCase):
         authenticate.assert_called_once_with(profile.settings, browser="chrome")
         client.__exit__.assert_called_once()
         self.assertTrue(result.success)
+
+    def test_failed_sql_run_resumes_saved_batches_and_success_starts_next_run_fresh(self):
+        context = WorkflowContext("refund_review", {
+            "refund_source": "sql", "target_term": "202680",
+            "output_file": self.cache_root / "review.xlsx",
+        }, WorkflowMode.PRODUCTION)
+        profile = MagicMock()
+        profile.settings = InsightsSettings("PROD", "https://insights.example.test", 2)
+        client = MagicMock()
+        client.get_current_user.return_value.id = 7
+        runs = []
+
+        def pipeline(**kwargs):
+            settings = kwargs["extract_settings"]
+            runs.append(settings)
+            directory = settings.extract_directory
+            if len(runs) == 1:
+                self.assertFalse(settings.resume)
+                directory.mkdir(parents=True)
+                (directory / "extract_manifest.json").write_text("{}", encoding="utf-8")
+                (directory / "transactions_000.csv").write_text("synthetic completed batch", encoding="utf-8")
+                raise RefundExtractError("Synthetic interrupted run")
+            if len(runs) == 2:
+                self.assertTrue(settings.resume)
+                self.assertEqual(directory, runs[0].extract_directory)
+                self.assertTrue((directory / "transactions_000.csv").exists())
+            else:
+                self.assertFalse(settings.resume)
+                self.assertFalse(directory.exists())
+            return context.parameters["output_file"], []
+
+        with (
+            patch("app.gui.services.refunds.load_access_configuration") as policy,
+            patch("app.gui.services.refunds.get_shared_gui_access_path"),
+            patch("app.gui.services.refunds.get_current_login", return_value="ADMIN"),
+            patch("app.gui.services.refunds.load_department_profiles", return_value={"PROD": profile}),
+            patch("app.gui.services.refunds.build_authenticated_client", return_value=(client, "cached")),
+            patch("app.gui.services.refunds.run_refund_pipeline", side_effect=pipeline),
+        ):
+            policy.return_value.is_administrator.return_value = True
+            with self.assertRaisesRegex(RefundExtractError, "interrupted"):
+                run_refund_review(context)
+            self.assertTrue(runs[0].extract_directory.exists())
+            run_refund_review(context)
+            self.assertFalse(runs[0].extract_directory.exists())
+            run_refund_review(context)
+
+    def test_cache_isolates_connections_principals_terms_versions_and_dates(self):
+        settings = InsightsSettings("PROD", "https://insights.example.test", 2)
+        parameters = RefundParameters(target_term="202680", run_date=date(2026, 11, 14))
+        paths = []
+        for connection, principal, run in (
+            (settings, 7, parameters),
+            (replace(settings, database_id=3), 7, parameters),
+            (replace(settings, base_url="https://another.example.test"), 7, parameters),
+            (settings, 8, parameters),
+            (settings, 7, replace(parameters, target_term="202710")),
+        ):
+            with self.assertRaises(WorkflowCancelled):
+                with _refund_extract_cache(connection, principal, run) as directory:
+                    directory.mkdir(parents=True)
+                    paths.append(directory)
+                    raise WorkflowCancelled()
+        with patch("app.gui.services.refunds.APP_VERSION", "new-version"):
+            with _refund_extract_cache(settings, 7, parameters) as directory:
+                paths.append(directory)
+        self.assertEqual(len(set(paths)), len(paths))
+        with _refund_extract_cache(settings, 7, replace(parameters, run_date=date(2026, 11, 15))) as directory:
+            self.assertNotEqual(directory, paths[0])
+            self.assertFalse(paths[0].exists())
+            self.assertFalse(paths[4].exists())
+            self.assertTrue(paths[3].exists())  # another principal's cache is untouched
+
+    def test_cache_excludes_concurrent_runs_and_releases_lock_on_cancellation(self):
+        settings = InsightsSettings("PROD", "https://insights.example.test", 2)
+        parameters = RefundParameters(target_term="202680", run_date=date.today())
+        with self.assertRaises(WorkflowCancelled):
+            with _refund_extract_cache(settings, 7, parameters) as directory:
+                directory.mkdir(parents=True)
+                with self.assertRaisesRegex(ValueError, "Another Refund Review"):
+                    with _refund_extract_cache(settings, 7, parameters):
+                        self.fail("A second run acquired the active cache")
+                raise WorkflowCancelled()
+        self.assertTrue(directory.exists())
+        with _refund_extract_cache(settings, 7, parameters):
+            pass
+        self.assertFalse(directory.exists())
+
+    def test_sql_or_policy_edits_do_not_reuse_interrupted_batches(self):
+        settings = InsightsSettings("PROD", "https://insights.example.test", 2)
+        parameters = RefundParameters(target_term="202680", run_date=date.today())
+        queries = self.cache_root / "queries"
+        queries.mkdir()
+        for name in ("refund_transactions_extract.sql", "refund_context_extract.sql",
+                     "refund_scope.sql", "refund_non_allowable_detail_codes.sql"):
+            (queries / name).write_text("SELECT 1;", encoding="utf-8")
+        with patch("app.gui.services.refunds.QUERY_DIRECTORY", queries):
+            with self.assertRaises(WorkflowCancelled):
+                with _refund_extract_cache(settings, 7, parameters) as old:
+                    old.mkdir(parents=True)
+                    raise WorkflowCancelled()
+            for name in ("refund_non_allowable_detail_codes.sql", "refund_scope.sql"):
+                with self.subTest(name=name):
+                    (queries / name).write_text("SELECT 2;", encoding="utf-8")
+                    with _refund_extract_cache(settings, 7, parameters) as new:
+                        self.assertNotEqual(old, new)
+                        self.assertFalse(new.exists())
+                    (queries / name).write_text("SELECT 1;", encoding="utf-8")
+
+    def test_cleanup_failure_invalidates_completed_cache(self):
+        settings = InsightsSettings("PROD", "https://insights.example.test", 2)
+        parameters = RefundParameters(target_term="202680", run_date=date.today())
+        with (
+            patch("app.gui.services.refunds.shutil.rmtree", side_effect=PermissionError),
+            self.assertLogs("highered_automation.gui", level="WARNING"),
+        ):
+            with _refund_extract_cache(settings, 7, parameters) as directory:
+                directory.mkdir(parents=True)
+                (directory / "extract_manifest.json").write_text("{}", encoding="utf-8")
+                (directory / "transactions_000.csv").write_text("synthetic batch", encoding="utf-8")
+        self.assertFalse((directory / "extract_manifest.json").exists())
+        self.assertTrue((directory / "transactions_000.csv").exists())
+
+    def test_missing_principal_cannot_share_a_recovery_cache(self):
+        settings = InsightsSettings("PROD", "https://insights.example.test", 2)
+        parameters = RefundParameters(target_term="202680", run_date=date.today())
+        with self.assertRaisesRegex(ValueError, "signed-in user"):
+            with _refund_extract_cache(settings, None, parameters):
+                self.fail("Anonymous cache opened")
+        self.assertEqual(list(self.cache_root.iterdir()), [])
 
     def test_sql_rejects_non_admin_test_mode_and_missing_prod_profile(self):
         context = WorkflowContext("refund_review", {

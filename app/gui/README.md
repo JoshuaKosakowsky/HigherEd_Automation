@@ -117,10 +117,21 @@ The integrated workflows are:
   server. Cancelled runs publish no workbook. Output is staged and moved into
   place only after completion.
   SQL mode requires no input files and shows a production warning in the review
-  dialog. Temporary extracts are removed after the run. Both options calculate
+  dialog. From **0.28.2**, transient connection/time-out failures and HTTP
+  429/502/503/504 responses retry the same read-only query up to twice, after
+  2 and 5 seconds. Completed batches survive failure or cancellation in the
+  operating system's local user cache under `HigherEdAutomation/refunds`, outside
+  the repository and OneDrive. Rerunning SQL for the same term on the same day
+  automatically resumes compatible batches for the same Insights user and
+  database. Application/SQL changes start a fresh extraction. Successful runs
+  remove their extracts; the next run for that user/database removes earlier
+  dated caches. The log identifies the cache directory, which can be deleted
+  while no refund run is active to force a fresh extraction. A second app
+  instance cannot use the same active cache. Both options calculate
   and format the review in Python; neither approves or issues refunds, and
-  existing output workbooks are never overwritten. Resuming batches and
-  single-account API validation remain available through the PowerShell launcher.
+  existing output workbooks are never overwritten. Explicit resume/offline
+  options and single-account API validation remain available through the
+  PowerShell launcher.
   Zero or positive full-account balances produce no refund proposal. Cash may
   still cover other terms; proposals use only the net account credit. Applied
   aid reopened by reconstruction or source totals differing from that credit
@@ -693,10 +704,8 @@ the updater never attempts a destructive rollback. Failed checks can be retried.
 
 The next useful migration steps are:
 
-1. decide whether Refund Review batch-resume controls belong
-   in the GUI after the manual workflow has been operationally validated;
-2. explicitly approve workflows for the AR/Analyst and Cashier views;
-3. add a small structured recent-activity file now that more than one workflow is
+1. explicitly approve workflows for the AR/Analyst and Cashier views;
+2. add a small structured recent-activity file now that more than one workflow is
    available.
 
 Adding a workflow should usually require a `WorkflowDefinition` and a thin

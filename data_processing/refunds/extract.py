@@ -8,9 +8,10 @@ import json
 from pathlib import Path
 import re
 from typing import Protocol
-from time import perf_counter
+from time import perf_counter, sleep
 
 from shared.cancellation import CancellationToken
+from shared.insights.client import InsightsAPIError
 from shared.progress import ProgressReporter
 
 import pandas as pd
@@ -33,6 +34,8 @@ TEMPLATE_TOKENS = {
     "__TRANSACTION_FILTER__",
 }
 MAX_SUBDIVISION_DEPTH = 64
+QUERY_RETRY_DELAYS = (2.0, 5.0)
+TRANSIENT_HTTP_STATUSES = {429, 502, 503, 504}
 PARTITION_COLUMNS = {
     "extract_partition_row_count", "extract_pidm_min", "extract_pidm_max",
     "extract_tran_min", "extract_tran_max",
@@ -263,6 +266,54 @@ def _render_partition_sql(sql: str, label: str) -> str:
     )
 
 
+def _wait_for_query_retry(seconds: float, cancellation: CancellationToken | None) -> None:
+    deadline = perf_counter() + seconds
+    while True:
+        if cancellation:
+            cancellation.check()
+        remaining = deadline - perf_counter()
+        if remaining <= 0:
+            return
+        sleep(min(0.1, remaining))
+
+
+def _run_partition_query(
+    client: SQLClient, sql: str, label: str, location: str,
+    *, cancellation: CancellationToken | None,
+    progress: Callable[[str], None] | None,
+) -> pd.DataFrame:
+    # Retry only these read-only extracts, not authentication or arbitrary SQL.
+    for attempt in range(len(QUERY_RETRY_DELAYS) + 1):
+        if cancellation:
+            cancellation.check()
+        try:
+            return client.run_sql(sql)
+        except InsightsAPIError as error:
+            if cancellation:
+                cancellation.check()
+            transient = error.code in {"connection", "timeout"} or (
+                error.code == "http" and error.status_code in TRANSIENT_HTTP_STATUSES
+            )
+            if not transient:
+                raise
+            reason = f"HTTP {error.status_code}" if error.code == "http" else error.code
+            if attempt == len(QUERY_RETRY_DELAYS):
+                raise RefundExtractError(
+                    f"Insights {reason} failure for {label} batch/partition {location} "
+                    f"after {attempt + 1} attempts. No incomplete batch was saved. "
+                    "Completed batches remain available for a compatible resumed run."
+                ) from None
+            delay = QUERY_RETRY_DELAYS[attempt]
+            if progress:
+                progress(
+                    f"Insights {reason} failure for {label} batch/partition {location}; "
+                    f"retrying the same query in {delay:g}s "
+                    f"(attempt {attempt + 2}/{len(QUERY_RETRY_DELAYS) + 1})."
+                )
+            _wait_for_query_retry(delay, cancellation)
+    raise AssertionError("Query retry loop ended without a result or error.")
+
+
 def _complete_partition(
     client: SQLClient, template: str, label: str, batch_index: int,
     *, settings: ExtractSettings, depth: int = 0,
@@ -286,7 +337,10 @@ def _complete_partition(
             f"Extracting refund {label} — batch/partition {location}",
             completed=batch_index * 2 + (label == "context"), total=settings.batch_count * 2,
         )
-    raw = _normalized_result(client.run_sql(_render_partition_sql(sql, label)))
+    raw = _normalized_result(_run_partition_query(
+        client, _render_partition_sql(sql, label), label, location,
+        cancellation=cancellation, progress=progress,
+    ))
     if progress:
         progress(f"{label.capitalize()} batch {location} query returned {len(raw):,} rows in {perf_counter() - started:.1f}s.")
     if cancellation:

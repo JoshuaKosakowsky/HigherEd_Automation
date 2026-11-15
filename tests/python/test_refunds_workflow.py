@@ -18,6 +18,7 @@ from data_processing.refunds.export import REFUND_SHEETS, WORKBOOK_COLUMNS, expo
 from data_processing.refunds.extract import (
     ExtractSettings,
     RefundExtractError,
+    _wait_for_query_retry,
     _validate_complete_result,
     extract_refund_data,
     read_refund_extracts,
@@ -27,6 +28,7 @@ from data_processing.refunds.extract import (
 from data_processing.refunds.ingest import read_refund_download
 from data_processing.refunds.pipeline import _create_review
 from shared.cancellation import CancellationToken, WorkflowCancelled
+from shared.insights.client import InsightsAPIError
 from shared.progress import ProgressReporter
 from data_processing.refunds.terms import derive_target_term, fiscal_year_start, previous_term
 
@@ -1257,6 +1259,101 @@ class RefundSubdivisionTests(unittest.TestCase):
         self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
         transactions, _ = self.extract(client, replace(self.settings, resume=True))
         self.assert_transactions(transactions, [(i + 1, 1) for i in range(4)])
+
+    def test_transient_child_failure_retries_only_that_query_without_duplicate_rows(self):
+        rows = [(i + 1, 1) for i in range(4)]
+        client = self.client(rows, limit=2)
+        original = client.run_sql
+        failed = []
+
+        def fail_right_once(sql):
+            if "t.tbraccd_pidm >=" in sql and not failed:
+                failed.append(sql)
+                raise InsightsAPIError("Synthetic failure", code="connection")
+            return original(sql)
+
+        with (
+            patch.object(client, "run_sql", side_effect=fail_right_once) as query,
+            patch("data_processing.refunds.extract._wait_for_query_retry") as wait,
+        ):
+            transactions, _ = self.extract(client)
+        self.assert_transactions(transactions, rows)
+        self.assertEqual(query.call_count, 5)  # root, left, failed right, right, context
+        self.assertEqual(query.call_args_list[2], query.call_args_list[3])
+        wait.assert_called_once_with(2.0, None)
+
+    def test_retry_exhaustion_keeps_completed_batches_and_resume_queries_only_missing_data(self):
+        client = self.client([(1, 1)])
+        original = client.run_sql
+
+        def fail_context(sql):
+            if "context_source" in sql:
+                raise InsightsAPIError("Sensitive server text", code="timeout")
+            return original(sql)
+
+        with (
+            patch.object(client, "run_sql", side_effect=fail_context) as query,
+            patch("data_processing.refunds.extract._wait_for_query_retry") as wait,
+        ):
+            with self.assertRaisesRegex(RefundExtractError, "after 3 attempts") as raised:
+                self.extract(client)
+        self.assertNotIn("Sensitive", str(raised.exception))
+        self.assertEqual(query.call_count, 4)
+        self.assertEqual([call.args[0] for call in wait.call_args_list], [2.0, 5.0])
+        self.assertTrue((self.settings.extract_directory / "transactions_000.csv").exists())
+        self.assertFalse((self.settings.extract_directory / "context_000.csv").exists())
+        transactions, _ = self.extract(client, replace(self.settings, resume=True))
+        self.assert_transactions(transactions, [(1, 1)])
+        self.assertEqual(len(client.calls), 2)  # one transaction and one recovered context query
+
+    def test_only_transient_insights_errors_are_retried(self):
+        for code, status, expected_calls in (
+            ("connection", None, 3), ("timeout", None, 3),
+            ("http", 429, 3), ("http", 502, 3), ("http", 503, 3), ("http", 504, 3),
+            ("http", 400, 1), ("http", 401, 1), ("http", 403, 1), ("http", 500, 1),
+            ("query_failed", None, 1), ("invalid_response", None, 1),
+        ):
+            with self.subTest(code=code, status=status):
+                client = self.client([(1, 1)])
+                with (
+                    patch.object(client, "run_sql", side_effect=InsightsAPIError(
+                        "Synthetic failure", code=code, status_code=status,
+                    )) as query,
+                    patch("data_processing.refunds.extract._wait_for_query_retry"),
+                    self.assertRaises((RefundExtractError, InsightsAPIError)),
+                ):
+                    self.extract(client)
+                self.assertEqual(query.call_count, expected_calls)
+                self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+    def test_cancellation_during_retry_delay_prevents_another_request(self):
+        token = CancellationToken()
+        client = self.client([(1, 1)])
+        with (
+            patch.object(client, "run_sql", side_effect=InsightsAPIError(
+                "Synthetic failure", code="connection",
+            )) as query,
+            patch("data_processing.refunds.extract.sleep", side_effect=lambda _: token.request()),
+            self.assertRaises(WorkflowCancelled),
+        ):
+            extract_refund_data(
+                client, self.settings, transaction_template_path=self.transaction_template,
+                context_template_path=self.context_template, cancellation=token,
+            )
+        self.assertEqual(query.call_count, 1)
+        self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+    def test_retry_wait_is_bounded_and_checks_cancellation_before_sleep(self):
+        with (
+            patch("data_processing.refunds.extract.perf_counter", side_effect=[0, 0, 2]),
+            patch("data_processing.refunds.extract.sleep") as sleep,
+        ):
+            _wait_for_query_retry(2, None)
+        sleep.assert_called_once_with(0.1)
+        token = CancellationToken()
+        token.request()
+        with self.assertRaises(WorkflowCancelled):
+            _wait_for_query_retry(2, token)
 
     def test_changed_population_cannot_enter_the_cache(self):
         client = self.client([(i + 1, 1) for i in range(4)], limit=2)
