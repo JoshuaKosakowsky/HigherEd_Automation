@@ -460,6 +460,80 @@ class InsightsConnectionServiceTests(unittest.TestCase):
         self.assertIn("CAST('202655' AS varchar(6))", sql)
         self.assertNotIn("{{target_term}}", sql)
 
+    def test_late_fee_report_exports_complete_pages_from_selected_environment(self):
+        for mode in (WorkflowMode.TEST, WorkflowMode.PRODUCTION):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                client = MagicMock()
+                client.__enter__.return_value = client
+
+                def page(numbers):
+                    return pd.DataFrame({
+                        "CWID": [f"TEST-{n}" for n in numbers],
+                        "First Name": ["Synthetic"] * len(numbers),
+                        "Current Term Net Balance": [100] * len(numbers),
+                        "Population Key": [str(n) for n in numbers],
+                        "Report Row Count": [3] * len(numbers),
+                        "__Report Row Number": numbers,
+                    })
+                client.run_sql.side_effect = [page([1, 2]), page([3])]
+                output = Path(directory) / "late_fees.xlsx"
+                with patch("app.gui.services.insights.load_department_profiles", return_value={
+                    "TEST": profiles()["TEST"], "PROD": production_profile(),
+                }), patch(
+                    "app.gui.services.insights.get_shared_gui_access_path",
+                    return_value=Path(directory) / "access.json",
+                ), patch(
+                    "app.gui.services.insights.load_access_configuration"
+                ) as policy, patch(
+                    "app.gui.services.insights.build_authenticated_client", return_value=(client, "cached"),
+                ) as build:
+                    policy.return_value.is_administrator.return_value = True
+                    result = run_insights_connection(WorkflowContext("insights_query_export", {
+                        "action": "query_export", "query_id": "late_fee_student_review",
+                        "term_code": "202680", "output_path": str(output),
+                    }, mode))
+                self.assertTrue(result.success, result.message)
+                self.assertEqual(build.call_args.args[0].environment, mode.value)
+                self.assertEqual(client.run_sql.call_count, 2)
+                client.run_sql_file.assert_not_called()
+                for call in client.run_sql.call_args_list:
+                    self.assertNotIn("{{", call.args[0])
+                    self.assertIn("CAST('202680' AS varchar(6))", call.args[0])
+                book = pd.read_excel(output, dtype={"Population Key": str})
+                self.assertEqual(book["CWID"].tolist(), ["TEST-1", "TEST-2", "TEST-3"])
+                self.assertEqual(set(book["Environment"]), {mode.value})
+                self.assertNotIn("Report Row Count", book.columns)
+                self.assertNotIn("__Report Row Number", book.columns)
+
+    def test_late_fee_report_requires_admin_valid_term_and_complete_results(self):
+        cases = (
+            (False, "202680", False), (True, "2026';--", False),
+            (True, "202620", False), (True, "202680", True),
+        )
+        for administrator, term, incomplete in cases:
+            with self.subTest(administrator=administrator, term=term), tempfile.TemporaryDirectory() as directory:
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.run_sql.return_value = pd.DataFrame({"CWID": ["TEST-1"]})
+                output = Path(directory) / "late_fees.xlsx"
+                with patch(
+                    "app.gui.services.insights.get_shared_gui_access_path",
+                    return_value=Path(directory) / "access.json",
+                ), patch(
+                    "app.gui.services.insights.load_access_configuration"
+                ) as policy, patch(
+                    "app.gui.services.insights.build_authenticated_client", return_value=(client, "cached"),
+                ) as build:
+                    policy.return_value.is_administrator.return_value = administrator
+                    result = run_insights_connection(WorkflowContext("insights_query_export", {
+                        "action": "query_export", "query_id": "late_fee_student_review",
+                        "term_code": term, "output_path": str(output),
+                    }, WorkflowMode.TEST))
+                self.assertFalse(result.success)
+                self.assertFalse(output.exists())
+                if not incomplete:
+                    build.assert_not_called()
+
     def test_invalid_term_never_authenticates(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "loans.xlsx"
@@ -529,6 +603,24 @@ class ConnectionsPageTests(unittest.TestCase):
         self.assertEqual(params["end_date"], "2026-12-31")
         self.assertEqual(params["detail_codes"], "HLTH, TPDT")
         self.assertNotIn("term_code", params)
+
+    def test_late_fee_picker_requires_term_and_dispatches_without_saved_insights_question(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("late_fee_student_review"))
+        self.assertFalse(self.page.term.isHidden())
+        self.assertTrue(self.page.activity_inputs.isHidden())
+        self.page.term.clear()
+        with patch.object(QMessageBox, "warning") as warning, patch.object(QFileDialog, "getSaveFileName") as save:
+            self.page._run("query_export")
+        warning.assert_called_once()
+        save.assert_not_called()
+        self.page.term.setText("202680")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            QFileDialog, "getSaveFileName", return_value=(str(Path(directory) / "late_fees.xlsx"), "")
+        ):
+            self.page._run("query_export")
+        params = self.executor.run_async.call_args.args[1].parameters
+        self.assertEqual(params["query_id"], "late_fee_student_review")
+        self.assertEqual(params["term_code"], "202680")
 
     def test_wf_defaults_no_date_inputs_and_parameters_reach_background_task(self):
         self.page.queries.setCurrentIndex(self.page.queries.findData('wf_mines_balance_transactions'))

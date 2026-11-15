@@ -21,6 +21,7 @@ from shared.insights.browser_auth import InsightsBrowserAuthenticationError
 from shared.insights.client import InsightsAPIError
 from shared.insights.config import InsightsConfigurationError, load_department_profiles
 from shared.insights.query_catalog import get_query
+from shared.insights.paged_report import extract_paged_report
 from shared.insights.report_results import checked_report_result, prepare_excel_dates as _prepare_excel_dates
 from shared.insights.session_auth import (
     InsightsSessionError, build_authenticated_client, clear_cached_session,
@@ -157,6 +158,10 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
                     result = extract_all_date_activity(
                         client, detail_codes, sql_template=query.sql_path.read_text(encoding='utf-8'),
                     )
+                elif query.paged_report:
+                    result = extract_paged_report(client, rendered_sql, progress=context.progress)
+                    # Retain the selected environment in the saved review, not just its filename.
+                    result.insert(0, "Environment", settings.environment)
                 else:
                     result = (
                         client.run_sql(rendered_sql)
