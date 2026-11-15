@@ -11,6 +11,10 @@ WITH non_allowable_detail_codes(detail_code) AS (
 batch_scope AS MATERIALIZED (
     __REFUND_SCOPE_SQL__
 ),
+address_scope AS (
+    SELECT pidm, run_date FROM batch_scope
+),
+__STUDENT_ADDRESS_SQL__,
 current_identity AS MATERIALIZED (
     SELECT
         i.spriden_pidm AS pidm,
@@ -114,6 +118,15 @@ SELECT
     sc.sponsor_names,
     sc.sponsor_ids,
     sc.contract_numbers,
+    sa.student_address_type,
+    sa.student_address_line1,
+    sa.student_address_line2,
+    sa.student_address_line3,
+    sa.student_address_city,
+    sa.student_address_state,
+    sa.student_address_zip,
+    sa.student_address_nation,
+    sa.student_address_review,
     CASE WHEN r.rlrpapp_pidm IS NULL THEN 0 ELSE 1 END AS plus_auth_row_ind,
     r.rlrpapp_aidy_code AS plus_auth_aidy_code,
     r.rlrpapp_plus_to_student AS plus_to_student,
@@ -124,6 +137,7 @@ LEFT JOIN person_controls p ON p.pidm = s.pidm
 LEFT JOIN account_controls a ON a.pidm = s.pidm
 LEFT JOIN active_ed e ON e.pidm = s.pidm
 LEFT JOIN sponsor_context sc ON sc.pidm = s.pidm
+LEFT JOIN student_addresses sa ON sa.pidm = s.pidm
 LEFT JOIN faismgr.rlrpapp r ON r.rlrpapp_pidm = s.pidm
 ORDER BY
     s.pidm,

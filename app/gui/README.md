@@ -187,6 +187,14 @@ amounts and next/final clearing dates shown separately. Student check portions
 below $25 go to **Check Refund < 25**; exactly $25 and parent refunds retain
 their normal routes. See the [reserve examples](../../workflows/refunds/README.md#payment-clearing-reserves-0284).
 
+**0.28.5** checks student mailing addresses in PR → TX → MA → PA → BI order.
+Affected student check portions go to **Check Address Review** with red
+**UPDATE WORKDAY** or **Withhold check refund** flags and the selected address.
+Other delivery portions and parent ownership retain their routes. Parent-address
+validation remains pending. Refresh both manual downloads or use a fresh API
+extraction; older cached context lacks the required address fields. See the
+[address rules](../../workflows/refunds/README.md#student-check-address-review-0285).
+
 ## Workflow visibility
 
 ### Insights connections (administrators)

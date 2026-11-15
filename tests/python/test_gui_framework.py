@@ -555,14 +555,15 @@ class RefundReviewAdapterTests(unittest.TestCase):
         queries = self.cache_root / "queries"
         queries.mkdir()
         for name in ("refund_transactions_extract.sql", "refund_context_extract.sql",
-                     "refund_scope.sql", "refund_non_allowable_detail_codes.sql"):
+                     "refund_scope.sql", "refund_non_allowable_detail_codes.sql",
+                     "refund_student_addresses.sql"):
             (queries / name).write_text("SELECT 1;", encoding="utf-8")
         with patch("app.gui.services.refunds.QUERY_DIRECTORY", queries):
             with self.assertRaises(WorkflowCancelled):
                 with _refund_extract_cache(settings, 7, parameters) as old:
                     old.mkdir(parents=True)
                     raise WorkflowCancelled()
-            for name in ("refund_non_allowable_detail_codes.sql", "refund_scope.sql"):
+            for name in ("refund_non_allowable_detail_codes.sql", "refund_scope.sql", "refund_student_addresses.sql"):
                 with self.subTest(name=name):
                     (queries / name).write_text("SELECT 2;", encoding="utf-8")
                     with _refund_extract_cache(settings, 7, parameters) as new:

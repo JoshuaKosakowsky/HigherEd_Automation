@@ -126,7 +126,7 @@ account_balances AS MATERIALIZED (
     GROUP BY c.pidm
 )
 SELECT a.pidm, p.target_term,
-    p.current_term
+    p.current_term, p.run_date
 FROM account_balances a
 CROSS JOIN params p
 WHERE ROUND(a.full_account_balance, 2) <= 0 OR a.invalid_rows > 0

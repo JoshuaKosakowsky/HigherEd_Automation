@@ -22,6 +22,7 @@ from .terms import validate_term
 CWID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,30}$")
 QUERY_DIRECTORY = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
 TEMPLATE_TOKENS = {
+    "__STUDENT_ADDRESS_SQL__",
     "__NON_ALLOWABLE_DETAIL_CODES_SQL__",
     "__REFUND_SCOPE_SQL__",
     "__BATCH_COUNT__",
@@ -141,13 +142,25 @@ def render_manual_extract_sql(template: str) -> str:
         "/* MANUAL WEBSITE EXPORT: download the complete result as XLSX or CSV.\n"
         "Use identical run_date, target_term_override and cwid_filter in both exports.\n"
         "Defaults: today's term, entire candidate population. Never commit a CWID.\n"
-        "Generated from the extract template, refund_scope.sql and Non-Allowable code policy.\n"
+        "Generated from the extract template, refund_scope.sql and shared refund policies.\n"
         "Regenerate with: python -m data_processing.refunds.extract */\n"
     )
     # The template's API-only introduction is misleading in a runnable export.
     body = re.sub(r"\A\s*/\*.*?\*/\s*", "", template, count=1, flags=re.DOTALL)
-    return render_non_allowable_policy_sql(
+    return render_student_address_sql(render_non_allowable_policy_sql(
         header + body.replace("__REFUND_SCOPE_SQL__", scope).replace("__TRANSACTION_FILTER__", "TRUE")
+    ))
+
+
+def render_student_address_sql(sql: str) -> str:
+    """Keep the extract and standalone report on the same address-selection rule."""
+    source = (QUERY_DIRECTORY / "refund_student_addresses.sql").read_text(encoding="utf-8").strip()
+    return re.sub(
+        r"__STUDENT_ADDRESS_SQL__|/\* BEGIN GENERATED STUDENT ADDRESSES \*/.*?"
+        r"/\* END GENERATED STUDENT ADDRESSES \*/",
+        lambda _: "/* BEGIN GENERATED STUDENT ADDRESSES */\n" + source
+            + "\n/* END GENERATED STUDENT ADDRESSES */",
+        sql, flags=re.DOTALL,
     )
 
 
@@ -167,7 +180,7 @@ def render_extract_sql(
         .replace("__IDENTITY_PIDM_FILTER__", _range_filter("i.spriden_pidm", pidm_range))
         .replace("__TRANSACTION_FILTER__", _range_filter("t.tbraccd_tran_number", transaction_range))
     )
-    rendered = render_non_allowable_policy_sql(rendered)
+    rendered = render_student_address_sql(render_non_allowable_policy_sql(rendered))
     unresolved = sorted(token for token in TEMPLATE_TOKENS if token in rendered)
     if unresolved:
         raise ValueError(f"Unresolved SQL template tokens: {', '.join(unresolved)}")
@@ -191,6 +204,15 @@ def _read_cached(path: Path) -> pd.DataFrame:
             "sponsor_names": "string",
             "sponsor_ids": "string",
             "contract_numbers": "string",
+            "student_address_type": "string",
+            "student_address_line1": "string",
+            "student_address_line2": "string",
+            "student_address_line3": "string",
+            "student_address_city": "string",
+            "student_address_state": "string",
+            "student_address_zip": "string",
+            "student_address_nation": "string",
+            "student_address_review": "string",
         },
     )
 
@@ -419,7 +441,10 @@ def _complete_partition(
 
 def _manifest_values(settings: ExtractSettings) -> dict[str, object]:
     return {
-        "format_version": 7,
+        "format_version": 8,
+        "student_address_policy_sha256": sha256(
+            (QUERY_DIRECTORY / "refund_student_addresses.sql").read_bytes()
+        ).hexdigest(),
         "non_allowable_policy_sha256": sha256(
             (QUERY_DIRECTORY / "refund_non_allowable_detail_codes.sql").read_bytes()
         ).hexdigest(),
@@ -533,7 +558,9 @@ def regenerate_refund_sql() -> None:
         )
     standalone = QUERY_DIRECTORY / "Refunds.sql"
     standalone.write_text(
-        render_non_allowable_policy_sql(standalone.read_text(encoding="utf-8")), encoding="utf-8"
+        render_student_address_sql(render_non_allowable_policy_sql(
+            standalone.read_text(encoding="utf-8")
+        )), encoding="utf-8"
     )
 
 

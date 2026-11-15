@@ -23,6 +23,11 @@ ORIGINAL_PAYMENT_CODES = {"ACHK", "CRDS", "CRED", "CRVC", "CRAM", "CRMC"}
 CARD_PAYMENT_CODES = ("CRAM", "CRDS", "CRMC", "CRVC")
 THIRD_PARTY_PAYMENT_CODES = {"C529", "Z0LE", "TPPY"}
 POSTED_STUDENT_REFUND_CODES = {"ARFD", "RFND"}
+STUDENT_ADDRESS_COLUMNS = (
+    "student_address_type", "student_address_line1", "student_address_line2",
+    "student_address_line3", "student_address_city", "student_address_state",
+    "student_address_zip", "student_address_nation",
+)
 
 TRANSACTION_COLUMNS = {
     "pidm",
@@ -44,6 +49,8 @@ TRANSACTION_COLUMNS = {
 }
 
 CONTEXT_COLUMNS = {
+    *STUDENT_ADDRESS_COLUMNS,
+    "student_address_review",
     "pidm",
     "cwid",
     "last_name",
@@ -87,6 +94,8 @@ REPORT_COLUMNS = [
     "clearing_payment_count",
     "clearing_next_eligible_date",
     "clearing_final_eligible_date",
+    *STUDENT_ADDRESS_COLUMNS,
+    "student_check_address_flag",
     "balance_sources",
     "plus_to_student_status",
     "parent_plus_target_term",
@@ -563,6 +572,8 @@ def _context_for_account(context_rows: list[dict[str, Any]]) -> tuple[dict[str, 
     else:
         first = {}
     account = {
+        **{column: _text(first.get(column)) for column in STUDENT_ADDRESS_COLUMNS},
+        "student_address_review": _text(first.get("student_address_review")),
         "cwid": _text(first.get("cwid")),
         "last_name": _text(first.get("last_name")),
         "first_name": _text(first.get("first_name")),
@@ -577,6 +588,17 @@ def _context_for_account(context_rows: list[dict[str, Any]]) -> tuple[dict[str, 
         "active_ed_row_count": _integer(first.get("active_ed_row_count")),
         "ed_activity_date": _datetime(first.get("ed_activity_date")),
     }
+    # Address selection is performed once in the shared SQL before authorizations
+    # are joined. Differing copies in a downloaded context cannot be chosen safely.
+    addresses = {
+        tuple(_text(row.get(column)) for column in (*STUDENT_ADDRESS_COLUMNS, "student_address_review"))
+        for row in context_rows
+    }
+    if len(addresses) > 1 or not account["student_address_type"]:
+        account.update({column: None for column in STUDENT_ADDRESS_COLUMNS})
+        account["student_address_review"] = "Withhold check refund"
+    elif account["student_address_review"] not in {None, "UPDATE WORKDAY", "Withhold check refund"}:
+        account["student_address_review"] = "Withhold check refund"
     authorization_rows = [
         row for row in context_rows
         if _integer(row.get("plus_auth_row_ind")) == 1
@@ -1110,7 +1132,12 @@ def _allocate_account(
         for source in selected_sources
     ) or None
 
+    address_flag = (
+        account["student_address_review"]
+        if not active_ed and delivery_values["standard"] > ZERO else None
+    )
     reasons = _join_reasons([
+        "STUDENT_CHECK_ADDRESS_REVIEW" if address_flag else None,
         "CHCK_ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE" if clearing["date_review_count"] else None,
         "PAYMENT_CLEARING_RESERVE" if (student_reserved or ZERO) + (parent_reserved or ZERO) > ZERO else None,
         "STUDENT_CHECK_REFUND_BELOW_25" if delivery_values["check_below_minimum"] else None,
@@ -1165,6 +1192,8 @@ def _allocate_account(
         review_status = "MANUAL_REVIEW"
     elif (student_reserved or ZERO) + (parent_reserved or ZERO) > ZERO:
         review_status = "WAIT_PAYMENT_CLEARING"
+    elif address_flag:
+        review_status = "WAIT_CHECK_ADDRESS"
     elif delivery_values["check_below_minimum"]:
         review_status = "WAIT_CHECK_MINIMUM"
     elif original_sources:
@@ -1173,6 +1202,8 @@ def _allocate_account(
         review_status = "READY_FOR_STAFF_REVIEW"
 
     result = {
+        **{column: account[column] for column in STUDENT_ADDRESS_COLUMNS},
+        "student_check_address_flag": address_flag,
         **_third_party_details(transactions, context_rows, parameters),
         "cwid": account["cwid"],
         "last_name": account["last_name"],

@@ -45,6 +45,9 @@ CONTEXT_COLUMNS = [
     "active_ed_row_count", "ed_activity_date", "plus_auth_row_ind", "plus_auth_aidy_code",
     "plus_to_student", "plus_auth_activity_date",
     "sponsor_names", "sponsor_ids", "contract_numbers",
+    "student_address_type", "student_address_line1", "student_address_line2",
+    "student_address_line3", "student_address_city", "student_address_state",
+    "student_address_zip", "student_address_nation", "student_address_review",
 ]
 
 
@@ -78,6 +81,7 @@ class RefundAllocationTests(unittest.TestCase):
         previous_term_override: str | None = None,
         run_date: date = date(2099, 8, 31),
         sponsor_context: dict[str, str] | None = None,
+        address_context: dict[str, str | None] | None = None,
         expected_rows: int = 1,
         progress_reporter: ProgressReporter | None = None,
     ) -> dict[str, object]:
@@ -118,9 +122,12 @@ class RefundAllocationTests(unittest.TestCase):
                 "2099-08-31", 1 if active_ed else 0,
                 "2099-08-31" if active_ed else None, 0, None, None, None,
             ])
-        context_rows = [row + [None, None, None] for row in context_rows]
+        context_rows = [row + [None, None, None, "PR", "1 Synthetic Road", None, None,
+                               "Golden", "CO", "80401", "US", None] for row in context_rows]
         context_frame = pd.DataFrame(context_rows, columns=CONTEXT_COLUMNS)
         for key, value in (sponsor_context or {}).items():
+            context_frame[key] = value
+        for key, value in (address_context or {}).items():
             context_frame[key] = value
         result = allocate_refunds(
             pd.DataFrame(transaction_rows, columns=TRANSACTION_COLUMNS),
@@ -1198,6 +1205,99 @@ class RefundAllocationTests(unittest.TestCase):
         )
 
 
+class RefundAddressReviewTests(unittest.TestCase):
+    def report(self, transactions, **kwargs):
+        return RefundAllocationTests().report(transactions, **kwargs)
+
+    def workbook(self, row):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "addresses.xlsx"
+        export_refund_report(pd.DataFrame([row], columns=REPORT_COLUMNS), path)
+        workbook = load_workbook(path)
+        self.addCleanup(workbook.close)
+        return workbook
+
+    def amounts(self, workbook):
+        amounts = {}
+        for sheet in workbook:
+            headers = [cell.value for cell in sheet[1]]
+            amount_column = headers.index("Detail_Code_Refund_Amt") + 1
+            amounts[sheet.title] = sum((Decimal(str(sheet.cell(row, amount_column).value))
+                                       for row in range(2, sheet.max_row + 1)), Decimal(0))
+        return {sheet: amount for sheet, amount in amounts.items() if amount}
+
+    def test_address_review_partitions_only_check_and_formats_flag_in_red(self):
+        payments = [Transaction("FREE", "P", "000", 100, -100),
+                    Transaction("ACHK", "P", "000", 100, -100),
+                    Transaction("FDPL", "P", "800", 75, -75, category="FA", title_iv="Y")]
+        for flag in ("UPDATE WORKDAY", "Withhold check refund"):
+            with self.subTest(flag=flag):
+                row = self.report(payments, active_ed=False, address_context={
+                    "student_address_review": flag, "student_address_type": "PA",
+                    "student_address_zip": "01234",
+                })
+                self.assertEqual(row["review_status"], "WAIT_CHECK_ADDRESS")
+                self.assertEqual(row["student_refund_amount"], Decimal(200))
+                self.assertEqual(row["parent_refund_amount"], Decimal(75))
+                workbook = self.workbook(row)
+                self.assertEqual(self.amounts(workbook), {
+                    "ACH or CC Refunds": Decimal(100), "Check Address Review": Decimal(100),
+                    "Refund to Parent": Decimal(75),
+                })
+                sheet = workbook["Check Address Review"]
+                headers = [cell.value for cell in sheet[1]]
+                flag_cell = sheet.cell(2, headers.index("Student Check Address Flag") + 1)
+                self.assertEqual(flag_cell.value, flag)
+                self.assertEqual(flag_cell.font.color.rgb[-6:], "FF0000")
+                zip_cell = sheet.cell(2, headers.index("Student Address ZIP") + 1)
+                self.assertEqual(zip_cell.value, "01234")
+                self.assertEqual(zip_cell.data_type, "s")
+
+    def test_noncheck_methods_and_parent_only_do_not_get_address_flag(self):
+        for code, ed, amount, expected in (("FREE", True, 100, "Direct Deposit"),
+                ("ACHK", False, 100, "ACH or CC Refunds"),
+                ("CRVC", False, 100, "ACH or CC Refunds"),
+                ("FDPL", False, 10, "Refund to Parent")):
+            with self.subTest(code=code):
+                row = self.report([Transaction(code, "P", "800" if code == "FDPL" else "000",
+                    amount, -amount, category="FA" if code == "FDPL" else "CSH",
+                    title_iv="Y" if code == "FDPL" else "N")], active_ed=ed,
+                    address_context={"student_address_review": "Withhold check refund"})
+                self.assertIsNone(row["student_check_address_flag"])
+                self.assertEqual(self.amounts(self.workbook(row)), {expected: Decimal(amount)})
+
+    def test_small_check_stays_withheld_after_address_review(self):
+        row = self.report([Transaction("FREE", "P", "000", 10, -10)], active_ed=False,
+                          address_context={"student_address_review": "UPDATE WORKDAY"})
+        self.assertIn("STUDENT_CHECK_REFUND_BELOW_25", row["review_reasons"])
+        workbook = self.workbook(row)
+        self.assertEqual(self.amounts(workbook), {"Check Address Review": Decimal(10)})
+        self.assertIn("below $25.00", workbook["Check Address Review"]["F2"].value)
+
+    def test_address_review_preserves_clearing_reserve_and_rh_precedence(self):
+        payments = [Transaction("TUIN", "C", "899", 1000),
+                    Transaction("CHCK", "P", "000", 1000, effective_date="2099-08-16"),
+                    Transaction("PELL", "P", "800", 2035, -2035, category="FA", title_iv="Y")]
+        for hold in (False, True):
+            row = self.report(payments, active_ed=False, refund_hold=hold,
+                              address_context={"student_address_review": "Withhold check refund"})
+            self.assertEqual(row["student_clearing_reserve_amount"], Decimal(1035))
+            expected = {"Refund Holds": Decimal(2035)} if hold else {
+                "Payment Clearing": Decimal(1035), "Check Address Review": Decimal(1000),
+            }
+            self.assertEqual(self.amounts(self.workbook(row)), expected)
+
+    def test_conflicting_context_copies_do_not_select_an_arbitrary_address(self):
+        from data_processing.refunds.allocation import _context_for_account
+
+        rows = [{"student_address_type": "PR", "student_address_line1": street}
+                for street in ("1 Synthetic Road", "2 Synthetic Road")]
+        account, _ = _context_for_account(rows)
+        self.assertEqual(account["student_address_review"], "Withhold check refund")
+        self.assertIsNone(account["student_address_line1"])
+
+
 class RefundTermTests(unittest.TestCase):
     def test_mines_term_and_fiscal_year_rules(self) -> None:
         self.assertEqual(derive_target_term(date(2026, 5, 15)), "202610")
@@ -1635,6 +1735,8 @@ class RefundExtractTests(unittest.TestCase):
             allocate_refunds(transactions.drop(columns="feed_date"), context, parameters)
         with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*sponsor_ids"):
             allocate_refunds(transactions, context.drop(columns="sponsor_ids"), parameters)
+        with self.assertRaisesRegex(ValueError, "rerun the current refund export SQL.*student_address_review"):
+            allocate_refunds(transactions, context.drop(columns="student_address_review"), parameters)
 
     def test_old_cache_format_cannot_resume_without_new_source_fields(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1656,6 +1758,9 @@ class RefundExtractTests(unittest.TestCase):
                                        run_date=date(2099, 8, 31), resume=True)
             _prepare_manifest(settings)
             policy_name = "refund_non_allowable_detail_codes.sql"
+            (root / "refund_student_addresses.sql").write_text(
+                (QUERY_DIRECTORY / "refund_student_addresses.sql").read_text()
+            )
             (root / policy_name).write_text(
                 (QUERY_DIRECTORY / policy_name).read_text() + "\n/* Changed snapshot */\n"
             )
@@ -1674,6 +1779,28 @@ class RefundExtractTests(unittest.TestCase):
             row = _read_cached(path).iloc[0]
             self.assertEqual(row.sponsor_ids, "00123")
             self.assertEqual(row.contract_numbers, "0001")
+
+    def test_cached_addresses_preserve_numeric_strings_and_reject_changed_policy(self):
+        from data_processing.refunds.extract import QUERY_DIRECTORY, _prepare_manifest, _read_cached
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "context.csv"
+            path.write_text("student_address_line1,student_address_zip\n1234,01234\n")
+            row = _read_cached(path).iloc[0]
+            self.assertEqual(row.student_address_line1, "1234")
+            self.assertEqual(row.student_address_zip, "01234")
+            settings = ExtractSettings("209980", 1, root / "cache", run_date=date(2099, 8, 31), resume=True)
+            _prepare_manifest(settings)
+            for name in ("refund_non_allowable_detail_codes.sql", "refund_student_addresses.sql"):
+                (root / name).write_text((QUERY_DIRECTORY / name).read_text())
+            with (root / "refund_student_addresses.sql").open("a") as policy:
+                policy.write("\n/* changed rule */\n")
+            with patch("data_processing.refunds.extract.QUERY_DIRECTORY", root):
+                with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                    read_refund_extracts(settings)
+                with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                    _prepare_manifest(settings)
 
     def test_ed_hold_end_date_cutoff_matches_all_sql_paths(self) -> None:
         root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
@@ -1824,6 +1951,15 @@ class RefundExtractTests(unittest.TestCase):
                     "clearing_payment_count": "Uncleared Payment Count",
                     "clearing_next_eligible_date": "Next Clearing Date",
                     "clearing_final_eligible_date": "Final Clearing Date",
+                    "student_address_type": "Student Address Type",
+                    "student_address_line1": "Student Address Line 1",
+                    "student_address_line2": "Student Address Line 2",
+                    "student_address_line3": "Student Address Line 3",
+                    "student_address_city": "Student Address City",
+                    "student_address_state": "Student Address State",
+                    "student_address_zip": "Student Address ZIP",
+                    "student_address_nation": "Student Address Nation",
+                    "student_check_address_flag": "Student Check Address Flag",
                     "proposed_student_delivery": "Proposed_DetailCode&Amt",
                     "raw_delinquency_code": "Active RH",
                     "active_ed_ind": "Active ED",
@@ -1875,6 +2011,8 @@ class RefundExtractTests(unittest.TestCase):
             account("TEST-SMALL-MIX", 110, 5, "AFRD (Transact) 100.00; RFND (CHECK) 10.00"),
             account("TEST-BELOW-MIN", "24.99", delivery="RFND (CHECK)"),
             account("TEST-AT-MIN", 25, delivery="RFND (CHECK)"),
+            account("TEST-ADDRESS", 60, delivery="RFND (CHECK)",
+                    student_check_address_flag="UPDATE WORKDAY"),
             account("TEST-SMALL-CARD", 5, delivery="CRVC (Transact)"),
             account("TEST-RESERVED", 50, delivery="NONE", student_refund_available_amount=Decimal(0),
                     student_clearing_reserve_amount=Decimal(50)),

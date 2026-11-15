@@ -10,8 +10,8 @@ complete result of each as XLSX or CSV:
 
 - `refund_transactions_manual.sql` reads account transactions and current
   detail-code configuration.
-- `refund_context_manual.sql` reads identity, account controls, ED status, and
-  Parent PLUS authorization.
+- `refund_context_manual.sql` reads identity, account controls, ED status,
+  student mailing addresses, and Parent PLUS authorization.
 
 Python then performs the priority, fiscal-year, Title IV, Parent PLUS, and
 delivery calculations locally and creates an Excel workbook under
@@ -38,7 +38,23 @@ new report context and must be refreshed. Version 0.28.0 additionally requires
 `non_allowable_charge_ind` in transactions. From 0.28.1 it is derived from the
 owner-confirmed Non-Allowable detail-code list because the Banner checkbox's
 source column is unavailable in Insights. Regenerate paired downloads; API
-caches use format version 7 and the policy fingerprint to reject stale flags.
+caches use format version 8 and both policy fingerprints to reject stale flags
+and address rules.
+
+From **0.28.5**, `refund_student_addresses.sql` supplies shared SPRADDR selection
+for the context extract and `Refunds.sql`: PR → TX → MA → PA → BI, highest sequence
+per current active type before domestic classification. Nation US qualifies;
+blank nation falls back to the 50 states, DC, AS/GU/MP/PR/VI and AA/AE/AP. A later
+domestic type flags **UPDATE WORKDAY**; no domestic address flags **Withhold check
+refund**. The workbook routes only affected student check portions to **Check
+Address Review** and renders those flags in red. Parent-address validation is
+pending and existing recipient authorization is unchanged. See the
+[address rules and acceptance examples](../../../workflows/refunds/README.md#student-check-address-review-0285).
+
+Run the updated schema validator to check SPRADDR fields, then refresh both
+manual downloads or use a fresh API extraction. Regenerate runnable SQL after
+changing the shared address selection with `python -m data_processing.refunds.extract`.
+Do not edit generated address blocks independently.
 
 Maintain the current list in `refund_non_allowable_detail_codes.sql`, a SQL
 fragment containing the 11 codes confirmed on 2026-11-14. It is not a standalone
@@ -386,8 +402,8 @@ execution plan from an administrator before changing planner settings or indexes
 ## Diagnostics
 
 Run `validate_refund_schema.sql` first. It now checks the category and Title IV
-columns in addition to the existing transaction, identity, hold, and aid
-authorization columns.
+columns and SPRADDR address fields in addition to the existing transaction,
+identity, hold, and aid authorization columns.
 
 Use `Refund_allocation_diagnostic.sql` when an account disagrees with the report.
 Set its local `params.cwid`; the default `NULL` intentionally returns no rows.

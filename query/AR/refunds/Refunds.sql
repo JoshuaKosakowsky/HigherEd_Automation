@@ -49,6 +49,10 @@ CURRENT POLICY
   or future payment dates require review. The workbook separates reserved funds.
 - RH is an account-level hold and overrides every student/parent delivery and
   workbook review route. Other review reasons remain visible for later handling.
+- Student checks use current SPRADDR records in PR/TX/MA/PA/BI order, newest
+  sequence within each type. Prefer the first domestic address; a later type
+  flags UPDATE WORKDAY, and no domestic address flags Withhold check refund.
+  Student check address review does not change amounts or parent ownership.
 - Unused target-term C529/Z0LE sources and surviving TPPY payments in the target
   term or past 32 days flag Possible Third Party refund,
   plus any TPPY activity in a credit term, even fully reversed,
@@ -340,6 +344,82 @@ These small account-level lookups are deliberately materialized. PostgreSQL may
 otherwise inline them into the wide final join and repeatedly rescan the same
 Banner tables for every candidate account.
 */
+address_scope AS (
+    SELECT b.pidm, p.run_date FROM account_balances b CROSS JOIN params p
+),
+/* BEGIN GENERATED STUDENT ADDRESSES */
+/* Shared CTEs for student check addresses. address_scope supplies pidm/run_date.
+   Rank the newest added (highest sequence) current record within each type
+   BEFORE testing domestic status; an older domestic PR must not replace a newer
+   foreign PR. This is a mailing review, never a change of refund ownership.
+   Decision: issue 36, comment 6898592530 and the owner's implementation replies. */
+student_address_candidates AS (
+    SELECT a.spraddr_pidm AS pidm,
+        UPPER(TRIM(a.spraddr_atyp_code)) AS student_address_type,
+        NULLIF(TRIM(a.spraddr_street_line1), '') AS student_address_line1,
+        NULLIF(TRIM(a.spraddr_street_line2), '') AS student_address_line2,
+        NULLIF(TRIM(a.spraddr_street_line3), '') AS student_address_line3,
+        NULLIF(TRIM(a.spraddr_city), '') AS student_address_city,
+        NULLIF(UPPER(TRIM(a.spraddr_stat_code)), '') AS student_address_state,
+        NULLIF(TRIM(a.spraddr_zip), '') AS student_address_zip,
+        NULLIF(UPPER(TRIM(a.spraddr_natn_code)), '') AS student_address_nation,
+        CASE UPPER(TRIM(a.spraddr_atyp_code))
+            WHEN 'PR' THEN 1 WHEN 'TX' THEN 2 WHEN 'MA' THEN 3
+            WHEN 'PA' THEN 4 WHEN 'BI' THEN 5 END AS address_priority,
+        ROW_NUMBER() OVER (
+            PARTITION BY a.spraddr_pidm, UPPER(TRIM(a.spraddr_atyp_code))
+            ORDER BY a.spraddr_seqno DESC NULLS LAST,
+                a.spraddr_street_line1 NULLS LAST, a.spraddr_street_line2 NULLS LAST,
+                a.spraddr_street_line3 NULLS LAST, a.spraddr_city NULLS LAST,
+                a.spraddr_stat_code NULLS LAST, a.spraddr_zip NULLS LAST,
+                a.spraddr_natn_code NULLS LAST
+        ) AS type_rank
+    FROM saturn.spraddr a
+    INNER JOIN address_scope s ON s.pidm = a.spraddr_pidm
+    WHERE UPPER(TRIM(a.spraddr_atyp_code)) IN ('PR', 'TX', 'MA', 'PA', 'BI')
+      AND COALESCE(UPPER(TRIM(a.spraddr_status_ind)), 'A') <> 'I'
+      AND (a.spraddr_from_date IS NULL OR CAST(a.spraddr_from_date AS date) <= s.run_date)
+      AND (a.spraddr_to_date IS NULL OR CAST(a.spraddr_to_date AS date) >= s.run_date)
+      AND COALESCE(NULLIF(TRIM(a.spraddr_street_line1), ''),
+                   NULLIF(TRIM(a.spraddr_street_line2), ''),
+                   NULLIF(TRIM(a.spraddr_street_line3), ''),
+                   NULLIF(TRIM(a.spraddr_city), ''),
+                   NULLIF(TRIM(a.spraddr_stat_code), ''),
+                   NULLIF(TRIM(a.spraddr_zip), ''),
+                   NULLIF(TRIM(a.spraddr_natn_code), '')) IS NOT NULL
+),
+student_address_classified AS (
+    SELECT a.*,
+        CASE WHEN student_address_nation = 'US' THEN 1
+            WHEN student_address_nation IS NULL AND student_address_state IN (
+                'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+                'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+                'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+                'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+                'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+                'DC', 'AS', 'GU', 'MP', 'PR', 'VI', 'AA', 'AE', 'AP'
+            ) THEN 1 ELSE 0 END AS domestic_ind
+    FROM student_address_candidates a
+    WHERE type_rank = 1
+),
+student_address_ranked AS (
+    SELECT a.*, ROW_NUMBER() OVER (
+        PARTITION BY pidm ORDER BY domestic_ind DESC, address_priority
+    ) AS selected_rank
+    FROM student_address_classified a
+),
+student_addresses AS MATERIALIZED (
+    SELECT s.pidm,
+        a.student_address_type, a.student_address_line1, a.student_address_line2,
+        a.student_address_line3, a.student_address_city, a.student_address_state,
+        a.student_address_zip, a.student_address_nation,
+        CASE WHEN COALESCE(a.domestic_ind, 0) = 0 THEN 'Withhold check refund'
+            WHEN a.address_priority > 1 THEN 'UPDATE WORKDAY'
+        END AS student_address_review
+    FROM address_scope s
+    LEFT JOIN student_address_ranked a ON a.pidm = s.pidm AND a.selected_rank = 1
+)
+/* END GENERATED STUDENT ADDRESSES */,
 current_identity AS MATERIALIZED (
     SELECT
         s.spriden_pidm AS pidm,
@@ -1367,6 +1447,9 @@ refund_totals AS (
 joined AS (
     SELECT
         b.pidm,
+        sa.student_address_type, sa.student_address_line1, sa.student_address_line2,
+        sa.student_address_line3, sa.student_address_city, sa.student_address_state,
+        sa.student_address_zip, sa.student_address_nation, sa.student_address_review,
         i.cwid,
         i.last_name,
         i.first_name,
@@ -1499,6 +1582,7 @@ joined AS (
         COALESCE(ds.crmc_transact_amount, 0) AS crmc_transact_amount
     FROM account_balances b
     INNER JOIN refund_totals ft ON ft.pidm = b.pidm
+    LEFT JOIN student_addresses sa ON sa.pidm = b.pidm
     INNER JOIN balance_input_checks v ON v.pidm = b.pidm
     LEFT JOIN current_identity i
         ON i.pidm = b.pidm
@@ -1637,6 +1721,7 @@ delivery_components AS (
 ),
 delivery_summary AS (
     SELECT pidm,
+        BOOL_OR(delivery_label = 'RFND (CHECK)') AS has_student_check,
         BOOL_OR(delivery_label = 'RFND (CHECK)' AND amount < 25.00) AS check_below_minimum,
         CASE WHEN COUNT(*) = 1 THEN MIN(delivery_label)
             ELSE STRING_AGG(CONCAT(delivery_label, ' ', TO_CHAR(amount, 'FM999999990.00')),
@@ -1647,6 +1732,7 @@ delivery_summary AS (
 ),
 delivery AS (
     SELECT s.*,
+        CASE WHEN ds.has_student_check THEN s.student_address_review END AS student_check_address_flag,
         COALESCE(ds.check_below_minimum, FALSE) AS check_below_minimum,
         CASE
             WHEN COALESCE(s.student_refund_available_amount, 0) <= 0 THEN 'NONE'
@@ -1673,6 +1759,7 @@ final_review AS (
         d.*,
         NULLIF(CONCAT_WS(
             '; ',
+            CASE WHEN d.student_check_address_flag IS NOT NULL THEN 'STUDENT_CHECK_ADDRESS_REVIEW' END,
             CASE WHEN d.clearing_date_review_count > 0
                 THEN 'CHCK_ACHK_EFFECTIVE_DATE_MISSING_OR_FUTURE' END,
             CASE WHEN COALESCE(d.student_clearing_reserve_amount, 0)
@@ -1766,6 +1853,15 @@ SELECT
     f.clearing_payment_count,
     f.clearing_next_eligible_date,
     f.clearing_final_eligible_date,
+    f.student_address_type,
+    f.student_address_line1,
+    f.student_address_line2,
+    f.student_address_line3,
+    f.student_address_city,
+    f.student_address_state,
+    f.student_address_zip,
+    f.student_address_nation,
+    f.student_check_address_flag,
     f.balance_sources,
     f.plus_to_student_status,
     p.target_term AS parent_plus_target_term,
@@ -1820,6 +1916,7 @@ SELECT
           OR f.chck_date_review_amount > 0 THEN 'MANUAL_REVIEW'
         WHEN COALESCE(f.student_clearing_reserve_amount, 0)
            + COALESCE(f.parent_clearing_reserve_amount, 0) > 0 THEN 'WAIT_PAYMENT_CLEARING'
+        WHEN f.student_check_address_flag IS NOT NULL THEN 'WAIT_CHECK_ADDRESS'
         WHEN f.check_below_minimum THEN 'WAIT_CHECK_MINIMUM'
         WHEN f.original_payment_row_count > 0 THEN 'TRANSACT_REVIEW'
         ELSE 'READY_FOR_STAFF_REVIEW'

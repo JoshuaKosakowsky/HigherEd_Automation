@@ -21,7 +21,7 @@ from data_processing.refunds.export import (
     WORKBOOK_HEADERS, WORKBOOK_OMITTED_COLUMNS, WORKBOOK_COLUMNS, THIRD_PARTY_COLUMNS,
 )
 from data_processing.refunds.extract import (
-    ExtractSettings, render_extract_sql, render_non_allowable_policy_sql,
+    ExtractSettings, render_extract_sql, render_non_allowable_policy_sql, render_student_address_sql,
 )
 from data_processing.refunds.pipeline import run_refund_download_pipeline
 from tests.python import test_refunds_workflow as python_cases
@@ -29,6 +29,13 @@ from tests.python import test_refunds_workflow as python_cases
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 REFUNDS_QUERY = REPOSITORY_ROOT / "query" / "AR" / "refunds" / "Refunds.sql"
+
+
+def address_row(*, address_type="PR", sequence=1, nation="US", state="CO",
+                status=None, from_date=None, to_date=None, street="1 Synthetic Road",
+                zip_code="80401", pidm=1):
+    return (pidm, address_type, sequence, street, None, None, "Synthetic City",
+            state, zip_code, nation, status, from_date, to_date)
 
 
 class RefundsQueryContractTests(unittest.TestCase):
@@ -115,6 +122,10 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertEqual(self.query, render_non_allowable_policy_sql(self.query))
         self.assertNotRegex(self.query.lower(), r"tbbde(?:tc|ct)_non_allow_chg_ind")
 
+    def test_standalone_address_selection_matches_shared_source(self) -> None:
+        self.assertEqual(self.query.count("/* BEGIN GENERATED STUDENT ADDRESSES */"), 1)
+        self.assertEqual(self.query, render_student_address_sql(self.query))
+
 
 class RefundExtractSqlTests(unittest.TestCase):
     """Execute production extract SQL with only PostgreSQL dialect adapted.
@@ -154,6 +165,7 @@ class RefundExtractSqlTests(unittest.TestCase):
             "saturn.spriden": "pidm int, id text, last_name text, first_name text, change_ind text",
             "saturn.spbpers": "pidm int, dead_ind text, dead_date text, confid_ind text",
             "saturn.sprhold": "pidm int, hldd_code text, to_date text, activity_date text",
+            "saturn.spraddr": "pidm int, atyp_code text, seqno int, street_line1 text, street_line2 text, street_line3 text, city text, stat_code text, zip text, natn_code text, status_ind text, from_date text, to_date text",
             "faismgr.rlrpapp": "pidm int, aidy_code text, plus_to_student text, activity_date text",
         }
         for table, columns in schemas.items():
@@ -173,6 +185,7 @@ class RefundExtractSqlTests(unittest.TestCase):
             self.database.executemany("INSERT INTO taismgr.tbraccd VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
             self.database.execute("INSERT INTO saturn.spriden VALUES (?, ?, 'Synthetic', 'Student', NULL)", (pidm, f"TEST-{pidm}"))
             self.database.execute("INSERT INTO taismgr.tbbacct VALUES (?, NULL, 'N', '2099-08-31')", (pidm,))
+            self.database.execute("INSERT INTO saturn.spraddr VALUES (?, 'PR', 1, '1 Synthetic Road', NULL, NULL, 'Golden', 'CO', '80401', 'US', NULL, NULL, NULL)", (pidm,))
         self.database.executemany("INSERT INTO saturn.spriden VALUES (?, ?, ?, NULL, NULL)",
                                   [(101, "TPS-TEST-1", "Sponsor One"), (102, "TPS-TEST-2", "Sponsor Two")])
         self.database.executemany("INSERT INTO taismgr.tbbcstu VALUES (?, ?, ?, ?)", [
@@ -193,6 +206,8 @@ class RefundExtractSqlTests(unittest.TestCase):
         query = re.sub(r"EXTRACT\(YEAR FROM (\w+)\)", r"SUBSTR(\1, 1, 4)", query)
         query = re.sub(r"DATE '([0-9-]+)'", r"'\1'", query)
         query = query.replace("CAST(h.sprhold_to_date AS date)", "h.sprhold_to_date")
+        for column in ("spraddr_from_date", "spraddr_to_date"):
+            query = query.replace(f"CAST(a.{column} AS date)", f"a.{column}")
         for column, fallback in (("sponsor_name", "Name"), ("sponsor_id", "ID"), ("contract_number", "Number")):
             expression = f"COALESCE({column}, '[{fallback} unavailable]')"
             query = query.replace(f"STRING_AGG({expression}, ' | '\n            ORDER BY sponsor_id NULLS LAST, sponsor_pidm, contract_number NULLS LAST)",
@@ -286,6 +301,10 @@ class RefundExtractSqlTests(unittest.TestCase):
                     self.database.execute(
                         "INSERT INTO taismgr.tbbacct VALUES (?, NULL, 'N', '2099-08-31')", (pidm,),
                     )
+                    self.database.execute(
+                        "INSERT INTO saturn.spraddr VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        address_row(pidm=pidm),
+                    )
         transactions = self.extract("transactions")
         flagged = transactions.loc[transactions.non_allowable_charge_ind == "Y", "detail_code"]
         self.assertEqual(set(flagged), set(codes) - {"OKAY"})
@@ -323,6 +342,86 @@ class RefundExtractSqlTests(unittest.TestCase):
         self.assertIn("[Name unavailable]", student.iloc[0].sponsor_names)
         self.assertIn("[ID unavailable]", student.iloc[0].sponsor_ids)
         self.assertEqual(student.iloc[0].contract_numbers, "0001 | 0002")
+
+    def address_context(self, addresses):
+        self.database.execute("DELETE FROM saturn.spraddr WHERE spraddr_pidm = 1")
+        self.database.executemany(
+            "INSERT INTO saturn.spraddr VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", addresses,
+        )
+        context = self.extract("context").query("pidm == 1")
+        # The two authorization rows must remain two, regardless of address count.
+        self.assertEqual(len(context), 2)
+        self.assertEqual(context.student_address_review.nunique(dropna=False), 1)
+        return context.iloc[0]
+
+    def test_foreign_pr_selects_domestic_pa_without_mixing_address_fields(self):
+        row = self.address_context([
+            address_row(nation="DE", state="CO"),
+            address_row(address_type="PA", nation=None, state="CO", street="2 Synthetic Lane", zip_code="01234"),
+        ])
+        self.assertEqual(row.student_address_type, "PA")
+        self.assertEqual(row.student_address_line1, "2 Synthetic Lane")
+        self.assertEqual(row.student_address_zip, "01234")
+        self.assertEqual(row.student_address_review, "UPDATE WORKDAY")
+
+    def test_newest_record_per_type_precedes_domestic_selection(self):
+        row = self.address_context([
+            address_row(sequence=1), address_row(sequence=2, nation="DE"),
+            address_row(address_type="TX", street="New address"),
+        ])
+        self.assertEqual(row.student_address_type, "TX")
+        self.assertEqual(row.student_address_line1, "New address")
+        self.assertEqual(row.student_address_review, "UPDATE WORKDAY")
+
+    def test_domestic_priority_and_missing_priority_flags(self):
+        order = ("PR", "TX", "MA", "PA", "BI")
+        for position, selected in enumerate(order):
+            with self.subTest(selected=selected):
+                addresses = [address_row(address_type=code) for code in reversed(order[position:])]
+                row = self.address_context(addresses)
+                self.assertEqual(row.student_address_type, selected)
+                self.assertEqual(row.student_address_review, None if selected == "PR" else "UPDATE WORKDAY")
+
+    def test_inactive_expired_future_and_blank_records_are_skipped(self):
+        addresses = [
+            address_row(sequence=1, from_date="2099-08-31", to_date="2099-08-31"),
+            address_row(sequence=2, status=" i ", nation="DE"),
+            address_row(sequence=3, from_date="2099-09-01", nation="DE"),
+            address_row(sequence=4, to_date="2099-08-30", nation="DE"),
+            (1, "PR", 5, " ", None, None, None, None, None, None, None, None, None),
+        ]
+        row = self.address_context(addresses)
+        self.assertEqual(row.student_address_nation, "US")
+        self.assertIsNone(row.student_address_review)
+
+    def test_blank_nation_uses_confirmed_domestic_states_and_postal_codes(self):
+        for state in ("CO", "NY", "DC", "AS", "GU", "MP", "PR", "VI", "AA", "AE", "AP", " co "):
+            with self.subTest(state=state):
+                row = self.address_context([address_row(nation=" ", state=state)])
+                self.assertIsNone(row.student_address_review)
+        for nation, state in ((None, None), (None, "ON"), (None, "ZZ"), ("DE", "CO"),
+                              (None, "FM"), (None, "MH"), (None, "PW")):
+            with self.subTest(nation=nation, state=state):
+                row = self.address_context([address_row(nation=nation, state=state)])
+                self.assertEqual(row.student_address_review, "Withhold check refund")
+        row = self.address_context([address_row(nation=" us ", state=None)])
+        self.assertIsNone(row.student_address_review)
+
+    def test_foreign_unknown_and_absent_addresses_withhold_checks(self):
+        for addresses in ([], [address_row(nation="DE", state=None)],
+                          [address_row(nation=None, state=None)],
+                          [address_row(address_type="XX")]):
+            with self.subTest(addresses=addresses):
+                row = self.address_context(addresses)
+                self.assertEqual(row.student_address_review, "Withhold check refund")
+
+    def test_unknown_pr_can_fall_back_to_domestic_bi(self):
+        row = self.address_context([
+            address_row(nation=None, state=None),
+            address_row(address_type="BI"),
+        ])
+        self.assertEqual(row.student_address_type, "BI")
+        self.assertEqual(row.student_address_review, "UPDATE WORKDAY")
 
     def test_sponsor_term_follows_calendar_boundaries_not_selected_term(self) -> None:
         for run_date, term in ((date(2099, 5, 15), "209910"), (date(2099, 5, 16), "209955"),
@@ -390,6 +489,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         run_date: str = "2099-08-31",
         query: str | None = None,
         context_activity_date: str | None = None,
+        addresses: list[tuple[object, ...]] | None = None,
         explain: bool = False,
     ) -> list[dict]:
         report_query = re.sub(
@@ -419,6 +519,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             "spbpers": "pidm int, dead_ind text, dead_date date, confid_ind text, activity_date date",
             "tbbacct": "pidm int, deli_code text, refund_ind text, activity_date date",
             "sprhold": "pidm int, hldd_code text, to_date date, activity_date date",
+            "spraddr": "pidm int, atyp_code text, seqno int, street_line1 text, street_line2 text, street_line3 text, city text, stat_code text, zip text, natn_code text, status_ind text, from_date date, to_date date",
             "rlrpapp": "pidm int, aidy_code text, plus_to_student text, activity_date date",
             "tbbcstu": "stu_pidm int, contract_pidm int, contract_number text, term_code text",
         }
@@ -468,7 +569,12 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
         authorization_rows = {"9900": "N"} if authorizations is None else authorizations
         control_date = context_activity_date or run_date
+        for address in addresses or []:
+            insert("spraddr", address)
         for pidm in sorted({transaction.pidm for transaction in transactions}):
+            if addresses is None:
+                insert("spraddr", (pidm, "PR", 1, "1 Synthetic Road", None, None,
+                                   "Golden", "CO", "80401", "US", None, None, None))
             insert("spriden", (pidm, f"TEST-{pidm}", "Synthetic", "Example", None))
             insert("spbpers", (pidm, "N", None, "N", run_date))
             insert("tbbacct", (pidm, "RH" if refund_hold else None, "N", control_date))
@@ -565,7 +671,10 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             parent_refund_amount student_refund_available_amount parent_refund_available_amount
             student_clearing_reserve_amount parent_clearing_reserve_amount clearing_payment_amount
             clearing_insurance_amount clearing_payment_count clearing_next_eligible_date
-            clearing_final_eligible_date balance_sources plus_to_student_status
+            clearing_final_eligible_date student_address_type student_address_line1
+            student_address_line2 student_address_line3 student_address_city
+            student_address_state student_address_zip student_address_nation
+            student_check_address_flag balance_sources plus_to_student_status
             parent_plus_target_term refund_split_status third_party_review_required_ind
             third_party_match_source refund_hold_ind raw_delinquency_code active_ed_ind
             raw_refund_account_ind refund_account_selected_ind fdpl_row_count
@@ -1154,6 +1263,30 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                     row = self.run_report(transactions)[0]
                     self.assertEqual(Decimal(str(row["student_refund_amount"])), Decimal(200 if restricted else 125))
                     self.assertEqual(Decimal(str(row["unpaid_charge_amount"])), Decimal(75 if restricted else 0))
+
+    def test_student_address_selection_matches_python_through_real_extracts(self):
+        transactions = [RefundTransaction("FREE", "P", "000", 110, balance=-110),
+                        RefundTransaction("ACHK", "P", "000", 100, balance=-100),
+                        RefundTransaction("FDPL", "P", "800", 50, balance=-50, category="FA", title_iv="Y")]
+        for addresses, flag, selected in (
+            ([], "Withhold check refund", None),
+            ([address_row()], None, "PR"),
+            ([address_row(nation="DE"), address_row(address_type="PA", zip_code="01234")], "UPDATE WORKDAY", "PA"),
+            ([address_row(), address_row(sequence=2, nation="DE"), address_row(address_type="TX")], "UPDATE WORKDAY", "TX"),
+            ([address_row(nation=" ", state="AE")], None, "PR"),
+            ([address_row(from_date="2099-09-01")], "Withhold check refund", None),
+        ):
+            with self.subTest(addresses=addresses):
+                actual = self.one(transactions, active_ed=False, addresses=addresses)
+                self.assertEqual(actual["student_check_address_flag"], flag)
+                self.assertEqual(actual["student_address_type"], selected)
+                downloads = {}
+                for name in ("transactions", "context"):
+                    downloads[name] = pd.DataFrame(self.run_report(transactions, active_ed=False,
+                        addresses=addresses, query=REFUNDS_QUERY.with_name(f"refund_{name}_manual.sql").read_text()))
+                expected = allocate_refunds(downloads["transactions"], downloads["context"],
+                    RefundParameters("209980", date(2099, 8, 31))).iloc[0].to_dict()
+                self.assert_matches_python(actual, expected)
 
     def test_sql_matches_python_for_seeded_open_history_population(self) -> None:
         rng = random.Random(90210)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import copy
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -23,7 +24,8 @@ from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS, STUDENT_CHECK_MINIMU
 
 
 REFUND_SHEETS = (
-    "ACH or CC Refunds", "Refund by Check", "Check Refund < 25", "Refund to Parent", "Direct Deposit",
+    "ACH or CC Refunds", "Refund by Check", "Check Refund < 25", "Check Address Review",
+    "Refund to Parent", "Direct Deposit",
     "Third Party Reviews", "Refund Holds", "Payment Clearing", "ACH Clearing", "ACH Reviews",
     "Mines Park Reviews", "Manual Reviews",
 )
@@ -56,6 +58,15 @@ WORKBOOK_HEADERS = {
     "clearing_payment_count": "Uncleared Payment Count",
     "clearing_next_eligible_date": "Next Clearing Date",
     "clearing_final_eligible_date": "Final Clearing Date",
+    "student_address_type": "Student Address Type",
+    "student_address_line1": "Student Address Line 1",
+    "student_address_line2": "Student Address Line 2",
+    "student_address_line3": "Student Address Line 3",
+    "student_address_city": "Student Address City",
+    "student_address_state": "Student Address State",
+    "student_address_zip": "Student Address ZIP",
+    "student_address_nation": "Student Address Nation",
+    "student_check_address_flag": "Student Check Address Flag",
     "proposed_student_delivery": "Proposed_DetailCode&Amt",
     "raw_delinquency_code": "Active RH",
     "active_ed_ind": "Active ED",
@@ -212,7 +223,10 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
 
     by_sheet: dict[str, list[RefundPortion]] = defaultdict(list)
     for portion in portions:
-        by_sheet[portion.sheet].append(portion)
+        sheet = portion.sheet
+        if portion.delivery == "RFND (CHECK)" and row["student_check_address_flag"]:
+            sheet = "Check Address Review"
+        by_sheet[sheet].append(portion)
     rows = []
     for sheet, parts in by_sheet.items():
         note = check_wait_note if sheet != "Refund to Parent" else None
@@ -222,6 +236,14 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
             note = "Student check refund is below $25.00; do not issue a check."
             if check_wait_note:
                 note += f" {check_wait_note}"
+        elif sheet == "Check Address Review":
+            note = (
+                "Update and verify the student address in Workday before issuing this check."
+                if row["student_check_address_flag"] == "UPDATE WORKDAY"
+                else "Withhold this student check; no confirmed U.S. address is available."
+            )
+            if sum((part.amount for part in parts), Decimal(0)) < STUDENT_CHECK_MINIMUM:
+                note += " Student check is also below $25.00; do not issue a check."
         rows.append((sheet, {
             **row,
             "tab_delivery": "; ".join(f"{part.delivery} {part.amount:.2f}" for part in parts),
@@ -334,6 +356,15 @@ def export_refund_report(
         for (cell,) in worksheet.iter_rows(min_row=2, min_col=balance_flag_column,
                                           max_col=balance_flag_column):
             cell.alignment = Alignment(horizontal="center", vertical="center")
+        address_flag_column = columns.index("student_check_address_flag") + 1
+        worksheet.column_dimensions[get_column_letter(address_flag_column)].width = 28
+        for (cell,) in worksheet.iter_rows(min_row=2, min_col=address_flag_column,
+                                          max_col=address_flag_column):
+            if cell.value:
+                font = copy(cell.font)
+                font.color = "FF0000"
+                cell.font = font
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
         worksheet.auto_filter.ref = worksheet.dimensions
         for header in (
             "deceased_date", "last_ar_activity_date", "account_control_activity_date",

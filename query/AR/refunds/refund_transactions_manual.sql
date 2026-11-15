@@ -1,7 +1,7 @@
 /* MANUAL WEBSITE EXPORT: download the complete result as XLSX or CSV.
 Use identical run_date, target_term_override and cwid_filter in both exports.
 Defaults: today's term, entire candidate population. Never commit a CWID.
-Generated from the extract template, refund_scope.sql and Non-Allowable code policy.
+Generated from the extract template, refund_scope.sql and shared refund policies.
 Regenerate with: python -m data_processing.refunds.extract */
 WITH non_allowable_detail_codes(detail_code) AS (
     /* BEGIN GENERATED NON-ALLOWABLE CODES */
@@ -154,7 +154,7 @@ account_balances AS MATERIALIZED (
     GROUP BY c.pidm
 )
 SELECT a.pidm, p.target_term,
-    p.current_term
+    p.current_term, p.run_date
 FROM account_balances a
 CROSS JOIN params p
 WHERE ROUND(a.full_account_balance, 2) <= 0 OR a.invalid_rows > 0

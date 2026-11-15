@@ -13,7 +13,7 @@ report; this Python workflow adds the refund-type workbook tabs.
 
 For the normal manual process, Insights runs two flat queries. One returns
 TBRACCD rows with current TBBDETC metadata; the other returns identity, account
-controls, ED holds, and RLRPAPP Parent PLUS authorization. Each response
+controls, ED holds, selected student mailing addresses, and RLRPAPP Parent PLUS authorization. Each response
 includes a total-row guard so Python stops if the website download is truncated.
 An ED hold counts as active when its end date is December 31, 2099 or later;
 this includes the Banner and cashnet far-future dates.
@@ -322,8 +322,9 @@ Synthetic acceptance cases:
 
 **Refresh both manual downloads or start a new API extraction after upgrading.**
 Old downloads lacking Feed Date, sponsor columns, or the Non-Allowable Charge
-flag are rejected with a request to rerun the current export SQL. Caches now
-use format version 7 and reject older formats. Run `validate_refund_schema.sql` to confirm TBBCSTU fields and
+flag or student-address fields are rejected with a request to rerun the current
+export SQL. Caches now use format version 8 and include both policy fingerprints;
+older formats cannot resume. Run `validate_refund_schema.sql` to confirm SPRADDR, TBBCSTU fields and
 TBRACCD_FEED_DATE in the actual Insights schema, then compare representative
 sponsors/contracts against TSACONT before operational use. Candidate selection
 now includes historical TPPY accounts; production-size extraction timing needs
@@ -333,17 +334,88 @@ The standalone `Refunds.sql` retains its existing output columns and shares the
 new TPPY review condition. The sponsor-detail columns are produced by the Python
 workflow from the flat extracts, not by that standalone allocation report.
 
+### Student check address review (0.28.5)
+
+[Issue #36's decision comment](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/36#issuecomment-6898592530)
+defines the student address priorities and flags. In the implementation discussion
+on 2026-11-15, the owner confirmed nation code `US`, a dedicated **Check Address
+Review** tab, and domestic fallback for the 50 states, DC, territories and military
+postal states. Parent-address validation remains pending; this patch covers
+student checks only. Existing Parent PLUS authorization and recipient amounts
+remain unchanged. Student addresses are never substituted for parent addresses.
+
+The shared `query/AR/refunds/refund_student_addresses.sql` selects from
+`saturn.spraddr` for both extracts and the standalone report:
+
+1. Consider PR → TX → MA → PA → BI. Skip absent/entirely blank records, inactive
+   status `I`, future start dates and expired end dates. Start/end dates are
+   inclusive of the refund run date; NULL bounds are open-ended.
+2. Within each type, use the highest `SPRADDR_SEQNO` as the newest added record.
+   Choose that record before classifying its country. An older domestic record
+   of the same type cannot override a newer foreign record. All displayed address
+   fields come from one selected record.
+3. Nation `US` qualifies as domestic. A nonblank different nation does not,
+   even when State says CO or another domestic code. With blank nation, accept
+   the 50 state abbreviations, DC, AS/GU/MP/PR/VI, and AA/AE/AP. Other or blank
+   state codes are unknown for this purpose. Whitespace/case are normalized.
+4. Select the first domestic address in priority order. A PR selection has no
+   flag; any later type, including when PR is missing, gives **UPDATE WORKDAY**.
+   If no domestic address exists, show **Withhold check refund** and retain the
+   highest-priority current foreign/unknown address for staff context, or blank
+   fields when none exists. This check classifies geography; it does not validate
+   street deliverability or confirm Workday has the same address.
+
+The workbook adds **Student Address Type**, **Student Address Line 1/2/3**,
+**Student Address City/State/ZIP/Nation**, and **Student Check Address Flag**.
+The flag is populated only when an available student check portion exists;
+both flag values use red text. These are student/account context columns on
+every sheet, not parent mailing instructions. ZIP values retain leading zeros.
+
+Flagged check portions go to **Check Address Review**, pending the Workday
+update/verification or resolution of the missing domestic address. Eligible
+ACH/card, direct deposit and parent portions keep their existing routes; no
+refund amount is forfeited or reassigned. Clearing reserves remain on Payment
+Clearing. A flagged check below $25 also goes to Check Address Review, with the
+minimum warning retained; correcting its address does not waive the minimum.
+RH and existing whole-account ownership/manual reviews keep their precedence.
+`STUDENT_CHECK_ADDRESS_REVIEW` appears in review reasons, with status
+`WAIT_CHECK_ADDRESS` unless an existing hold/manual review or clearing reserve
+takes precedence. SQL supplies the same fields/flags; Excel routing and red
+formatting are applied by the workbook exporter.
+
+| Synthetic input | Expected result |
+| --- | --- |
+| PR nation US | PR address; normal student check route |
+| PR Germany; PA blank nation / CO | PA address; UPDATE WORKDAY; Check Address Review |
+| Older PR US; newer PR Germany; TX US | TX selected; UPDATE WORKDAY |
+| PR absent; MA US | MA selected; UPDATE WORKDAY |
+| Blank nation with DC, PR, or AE state | Domestic fallback |
+| Foreign nation with CO state; no other domestic address | Withhold check refund |
+| No address, or blank nation/state | Withhold check refund |
+| $100 ACH + $100 flagged student check + $75 parent | $100 ACH tab, $100 Check Address Review, $75 Refund to Parent |
+| $10 flagged student check | Check Address Review; also retain below-$25 warning |
+| RH plus an address flag | Entire refund stays on Refund Holds |
+
+Refresh both manual downloads or start a fresh API extraction. Run the updated
+`validate_refund_schema.sql` in the target Insights environment and resolve
+missing SPRADDR fields before the first full run. Synthetic tests do not verify
+the live replica or Workday import. Updating Workday remains a staff action.
+
 ### Workbook tabs
 
 The workbook has these tabs, including headers when a category is empty:
 
 - **ACH or CC Refunds** (light yellow tab): available ACH and credit-card portions.
-- **Refund by Check** (light green tab): student `RFND (CHECK)` portions.
+- **Refund by Check** (light green tab): student `RFND (CHECK)` portions meeting
+  the minimum and without an address-review flag.
 - **Check Refund < 25:** student check portions below $25.00; do not issue a
   check for these amounts. From 0.28.4 the minimum applies to each student check
   portion after splitting by delivery method. Exactly $25.00 stays on Refund
   by Check. Eligible ACH/card and direct-deposit portions retain their normal
   tabs even when the same account has a check portion below the minimum.
+- **Check Address Review:** flagged student check portions, with red
+  **UPDATE WORKDAY** or **Withhold check refund** in Student Check Address Flag.
+  Below-$25 portions also retain their minimum warning here.
 - **Refund to Parent** (light orange tab): parent `RFDP` portions.
 - **Direct Deposit** (light blue tab): student `ARFD (Direct Deposit)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
@@ -376,8 +448,8 @@ is held on Check Refund < 25, $25.00 by check remains on Refund by Check, and
 $100 by ACH plus $10 by student check plus $5 to a parent appears as $100 on
 ACH or CC Refunds, $10 on Check Refund < 25, and $5 on Refund to Parent.
 Python and standalone SQL also flag `STUDENT_CHECK_REFUND_BELOW_25` in review
-reasons. `WAIT_CHECK_MINIMUM` is the status unless a hold, manual review or
-clearing reserve takes precedence; other available delivery portions retain
+reasons. `WAIT_CHECK_MINIMUM` is the status unless a hold, manual review,
+clearing reserve or address review takes precedence; other available delivery portions retain
 their routes.
 
 Mixed refunds can appear on multiple tabs, but each account appears at most
@@ -410,6 +482,13 @@ and names.
 | `clearing_payment_count` | `Uncleared Payment Count` |
 | `clearing_next_eligible_date` | `Next Clearing Date` |
 | `clearing_final_eligible_date` | `Final Clearing Date` |
+| `student_address_type` | `Student Address Type` |
+| `student_address_line1` / `line2` / `line3` | `Student Address Line 1` / `2` / `3` |
+| `student_address_city` | `Student Address City` |
+| `student_address_state` | `Student Address State` |
+| `student_address_zip` | `Student Address ZIP` |
+| `student_address_nation` | `Student Address Nation` |
+| `student_check_address_flag` | `Student Check Address Flag` |
 | `proposed_student_delivery` | `Proposed_DetailCode&Amt` |
 | `raw_delinquency_code` | `Active RH` |
 | `active_ed_ind` | `Active ED` |

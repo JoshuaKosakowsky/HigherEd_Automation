@@ -59,6 +59,7 @@ def _refund_extract_cache(
         for name in (
             "refund_transactions_extract.sql", "refund_context_extract.sql",
             "refund_scope.sql", "refund_non_allowable_detail_codes.sql",
+            "refund_student_addresses.sql",
         ):
             fingerprint.update(name.encode())
             fingerprint.update((QUERY_DIRECTORY / name).read_bytes())
