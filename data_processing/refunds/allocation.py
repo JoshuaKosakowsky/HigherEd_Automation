@@ -1139,10 +1139,7 @@ def _allocate_account(
         "full_account_balance": full_balance,
         "total_refund_amount": refund_amount,
         "title_iv_balance_due_note": (
-            f"Yes - ${_format_money(full_balance + refund_amount)} in non-allowable charges "
-            "remains owed after the proposed Title IV refund."
-            if title_iv_exception > ZERO and not split_blocked
-            else "Review required" if title_iv_exception > ZERO else "No"
+            "Yes" if title_iv_exception > ZERO and not split_blocked else "No"
         ),
         "proposed_student_delivery": student_delivery,
         "student_refund_amount": student_amount,

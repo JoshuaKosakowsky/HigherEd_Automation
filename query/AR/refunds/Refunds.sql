@@ -1720,12 +1720,9 @@ SELECT
     f.first_name,
     f.full_account_balance,
     f.total_refund_amount,
-    CASE WHEN f.total_refund_amount > GREATEST(-f.full_account_balance, 0) THEN
-        CASE WHEN f.refund_split_blocked_ind = 'Y' THEN 'Review required'
-            ELSE CONCAT('Yes - $',
-                TO_CHAR(f.full_account_balance + f.total_refund_amount, 'FM999999990.00'),
-                ' in non-allowable charges remains owed after the proposed Title IV refund.')
-        END ELSE 'No' END AS title_iv_balance_due_note,
+    CASE WHEN f.total_refund_amount > GREATEST(-f.full_account_balance, 0)
+        AND f.refund_split_blocked_ind = 'N'
+        THEN 'Yes' ELSE 'No' END AS title_iv_balance_due_note,
     f.proposed_student_delivery,
     f.proposed_student_refund_amount AS student_refund_amount,
     f.proposed_parent_delivery,

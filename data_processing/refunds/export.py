@@ -286,13 +286,11 @@ def export_refund_report(
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         worksheet.row_dimensions[1].height = 48
         worksheet.column_dimensions["D"].width = 60
-        balance_note_column = columns.index("title_iv_balance_due_note") + 1
-        worksheet.column_dimensions[get_column_letter(balance_note_column)].width = 52
-        for (cell,) in worksheet.iter_rows(min_row=2, min_col=balance_note_column,
-                                          max_col=balance_note_column):
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if isinstance(cell.value, str) and cell.value.startswith("Yes - "):
-                worksheet.row_dimensions[cell.row].height = 60
+        balance_flag_column = columns.index("title_iv_balance_due_note") + 1
+        worksheet.column_dimensions[get_column_letter(balance_flag_column)].width = 26
+        for (cell,) in worksheet.iter_rows(min_row=2, min_col=balance_flag_column,
+                                          max_col=balance_flag_column):
+            cell.alignment = Alignment(horizontal="center", vertical="center")
         worksheet.auto_filter.ref = worksheet.dimensions
         for header in (
             "deceased_date", "last_ar_activity_date", "account_control_activity_date",

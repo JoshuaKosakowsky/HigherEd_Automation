@@ -87,6 +87,29 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
         self.assertNotIn("NON_ALLOW_CHG_IND", schema_query)
 
+    def test_title_iv_balance_due_display_is_binary(self) -> None:
+        # Execute the actual final-column expression without requiring a live server.
+        start = self.query.index("CASE WHEN f.total_refund_amount > GREATEST(-f.full_account_balance, 0)")
+        end = self.query.index(" AS title_iv_balance_due_note", start)
+        expression = self.query[start:end]
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.create_function("GREATEST", 2, max)
+        for refund, balance, blocked, expected in (
+            (200, -100, "N", "Yes"),
+            (200, 0, "N", "Yes"),
+            (200, 100, "N", "Yes"),
+            (200, -100, "Y", "No"),
+            (200, -200, "N", "No"),
+        ):
+            with self.subTest(refund=refund, balance=balance, blocked=blocked):
+                actual = database.execute(
+                    f"SELECT {expression} FROM (SELECT ? AS total_refund_amount, "
+                    "? AS full_account_balance, ? AS refund_split_blocked_ind) f",
+                    (refund, balance, blocked),
+                ).fetchone()[0]
+                self.assertEqual(actual, expected)
+
     def test_standalone_policy_matches_maintained_snapshot(self) -> None:
         self.assertEqual(self.query.count("/* BEGIN GENERATED NON-ALLOWABLE CODES */"), 1)
         self.assertEqual(self.query, render_non_allowable_policy_sql(self.query))
@@ -224,7 +247,7 @@ class RefundExtractSqlTests(unittest.TestCase):
             row = report.loc[report.cwid == f"TEST-{pidm}"].iloc[0]
             self.assertEqual(row.total_refund_amount, Decimal(200))
             self.assertEqual(row.full_account_balance, Decimal(late_fee - 200))
-            self.assertIn(f"${late_fee:.2f}", row.title_iv_balance_due_note)
+            self.assertEqual(row.title_iv_balance_due_note, "Yes")
 
     def test_snapshot_blocks_all_eleven_codes_by_funding_not_priority(self) -> None:
         # Owner's 2026-11-14 snapshot. Include an unlisted charge at 789 to prove
@@ -276,7 +299,7 @@ class RefundExtractSqlTests(unittest.TestCase):
                 self.assertEqual(row.student_refund_amount, Decimal(200 if restricted else 100))
                 self.assertEqual(row.unpaid_charge_amount, Decimal(100 if restricted else 0))
                 self.assertEqual(row.review_status, "READY_FOR_STAFF_REVIEW")
-                self.assertEqual(row.title_iv_balance_due_note.startswith("Yes"), restricted)
+                self.assertEqual(row.title_iv_balance_due_note, "Yes" if restricted else "No")
 
     def test_missing_detail_metadata_is_not_assumed_allowable(self) -> None:
         self.database.execute(

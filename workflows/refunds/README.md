@@ -164,13 +164,15 @@ whether the Title IV payment priority is `800` or `000`. The same account with
 non-Title-IV funds at either priority can pay the fee, leaving refund $100 and
 no unpaid fee. An unlisted allowable charge at `789` can be paid by Title IV.
 
-Every workbook tab adds **Title IV Refund Leaves Balance Due**, immediately
-after **Total_Owed_to_Student**. A calculated exception displays `Yes` with the
-total non-allowable balance remaining after the proposed account refund, not
-just the increase in balance or that tab's portion. An unresolved exception
-displays `Review required`; other cases display `No`. Holds and sponsor/parent
-review routing still apply. The column supports staff follow-up; it neither
-confirms issuance nor sends email.
+Every workbook tab includes **Title IV Refund Leaves Balance Due**, immediately
+after **Total_Owed_to_Student**. From **0.28.3**, it contains only `Yes` or `No`:
+`Yes` means a calculated Title IV refund would leave non-allowable charges owed;
+all other cases, including an unresolved recipient split, display `No`. A `No`
+does not clear a review requirement: unresolved cases retain their existing
+`review_status`, `refund_split_status`, and `review_reasons`. The flag describes
+the account-level proposal, including when portions appear on separate tabs.
+Holds and sponsor/parent review routing still apply. The column supports staff
+follow-up; it neither confirms issuance nor sends email.
 
 This implements the explicit Non-Allowable exclusion only. Institutional-charge
 authorization (`TBBDETC_INST_CHG_IND` and the student's authorization records)

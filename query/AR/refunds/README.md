@@ -231,13 +231,16 @@ stays unknown and blocks recipient assignment. Reversals net within payment term
 term/priority/Non-Allowable flag; differently restricted charges never pool.
 Negative net source groups still require review.
 
-The new `title_iv_balance_due_note` appears as **Title IV Refund Leaves Balance
-Due** on every workbook tab and is also returned by the standalone SQL. It
-reports the total non-allowable balance after the proposed account refund;
-`Review required` denotes unresolved ownership, and `No` denotes no exception.
+The `title_iv_balance_due_note` field appears as **Title IV Refund Leaves Balance
+Due** on every workbook tab and is also returned by the standalone SQL. From
+**0.28.3**, it returns only `Yes` for a calculated Title IV refund that leaves
+non-allowable charges owed, or `No` otherwise. Unresolved recipient splits also
+return `No`; their existing review status, split status, and reasons remain.
+The field name is retained for compatibility, but its value has no sentence or
+dollar amount. A `No` does not indicate that an account is cleared for refund.
 For tuition $1,000, flagged LPPF $100, and Pell $1,200 with $200 unapplied, the
-refund is $200 and the new column reports $100 remaining owed. Increasing LPPF
-to $200/$300 keeps the $200 refund and reports $200/$300 owed. Cash that pays
+refund is $200, $100 remains owed, and the flag is `Yes`. Increasing LPPF
+to $200/$300 keeps the $200 refund and the `Yes` flag, with $200/$300 owed. Cash that pays
 LPPF removes the balance-due flag. Parent PLUS and holds preserve their routing.
 
 See the [current rule, decision references and acceptance examples](../../../workflows/refunds/README.md#title-iv-refunds-that-leave-charges-owed-0280).

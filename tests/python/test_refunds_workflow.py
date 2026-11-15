@@ -131,6 +131,7 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertEqual(len(result), expected_rows)
         if expected_rows == 0:
             return {}
+        self.assertTrue(set(result["title_iv_balance_due_note"]).issubset({"Yes", "No"}))
         return result.iloc[0].to_dict()
 
     @staticmethod
@@ -255,9 +256,7 @@ class RefundAllocationTests(unittest.TestCase):
                 self.assertEqual(row["full_account_balance"], Decimal(late_fee - 200))
                 self.assertEqual(row["unpaid_charge_amount"], Decimal(late_fee))
                 self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
-                self.assertEqual(row["title_iv_balance_due_note"],
-                    f"Yes - ${late_fee:.2f} in non-allowable charges remains owed "
-                    "after the proposed Title IV refund.")
+                self.assertEqual(row["title_iv_balance_due_note"], "Yes")
 
     def test_cash_can_pay_non_allowable_charges(self) -> None:
         row = self.report([
@@ -279,7 +278,7 @@ class RefundAllocationTests(unittest.TestCase):
         ])
         self.assert_split(row, "0.00", "200.00")
         self.assertEqual(row["unpaid_charge_amount"], Decimal("75.00"))
-        self.assertIn("$75.00", row["title_iv_balance_due_note"])
+        self.assertEqual(row["title_iv_balance_due_note"], "Yes")
 
     def test_non_allowable_exception_requires_title_iv_and_marked_charge(self) -> None:
         for title_iv, flag in (("N", "Y"), ("Y", "N")):
@@ -312,7 +311,9 @@ class RefundAllocationTests(unittest.TestCase):
         ]
         row = self.report(base)
         self.assertIsNone(row["student_refund_amount"])
-        self.assertEqual(row["title_iv_balance_due_note"], "Review required")
+        self.assertEqual(row["title_iv_balance_due_note"], "No")
+        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+        self.assertEqual(row["refund_split_status"], "UNDETERMINED_SEE_REVIEW_REASONS")
         self.assertIn("APPLIED_AID_REOPENED_BY_RECONSTRUCTION", row["review_reasons"])
         other_debt = self.report([
             Transaction("OLD", "C", "899", 500, 300, term="209880"),
@@ -332,7 +333,7 @@ class RefundAllocationTests(unittest.TestCase):
         self.assert_split(row, "0.00", "200.00")
         self.report(base + [Transaction("RFND", "C", "800", 200, tran_number=5)], expected_rows=0)
 
-    def test_title_iv_balance_note_survives_parent_hold_and_workbook_routing(self) -> None:
+    def test_title_iv_balance_flag_survives_parent_hold_and_workbook_routing(self) -> None:
         base = [
             Transaction("TUIN", "C", "899", 1000),
             Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y"),
@@ -350,9 +351,8 @@ class RefundAllocationTests(unittest.TestCase):
                     workbook = load_workbook(output)
                     ws = workbook[sheet]
                     headers = [cell.value for cell in ws[1]]
-                    note = ws.cell(2, headers.index("Title IV Refund Leaves Balance Due") + 1).value
-                    self.assertIn("$100.00", note)
-                    self.assertIn("proposed", note)
+                    flag = ws.cell(2, headers.index("Title IV Refund Leaves Balance Due") + 1).value
+                    self.assertEqual(flag, "Yes")
                     self.assertEqual(ws.cell(2, headers.index("Detail_Code_Refund_Amt") + 1).value, 200)
                     workbook.close()
 
