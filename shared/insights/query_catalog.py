@@ -24,6 +24,7 @@ class InsightsQuery:
     result_count_column: str | None = None
     allowed_term_suffixes: tuple[str, ...] = ()
     default_detail_codes: tuple[str, ...] = ()
+    paged_report: bool = False
 
     @property
     def sql_path(self) -> Path:
@@ -69,6 +70,16 @@ class InsightsQuery:
 
 
 QUERIES: tuple[InsightsQuery, ...] = (
+    InsightsQuery(
+        "late_fee_student_review", "Late fees", "Student detail and population verification",
+        "AR/late_fees/late_fee_student_review.sql",
+        "All stored late-fee populations and staff waiver lists, with CWIDs, names, Mines email, "
+        "selected-term and account balances, posted LPPF amounts, hold history and waiver owners. "
+        "Enter the term for current financial context. Filter Application, Selection ID, Creator ID and Run User ID "
+        "in Excel to review a specific run. Amounts repeat across populations; do not total all rows.",
+        term_variable="review_term", allowed_term_suffixes=("10", "55", "80"),
+        administrator_only=True, result_count_column="Report Row Count", paged_report=True,
+    ),
     InsightsQuery(
         "term_balances_no_au", "Holds", "Term balances > 0 and no AU hold",
         "AR/holds/term_balances_no_au.sql",

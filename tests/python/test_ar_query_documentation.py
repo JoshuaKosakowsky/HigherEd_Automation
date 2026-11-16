@@ -21,6 +21,7 @@ class AccountsReceivableQueryDocumentationTests(unittest.TestCase):
             "holds": "validate_hold_schema.sql",
             "term_corrections": "validate_term_corrections_schema.sql",
             "canadian_tax": "validate_canadian_tax_schema.sql",
+            "late_fees": "validate_late_fee_schema.sql",
         }
 
         self.assertTrue((AR_QUERY_ROOT / "README.md").is_file())

@@ -285,6 +285,25 @@ source-count check rejects incomplete API results before saving. See
 [loan selection rules](../../query/AR/loans/README.md). The term is validated and inserted as a quoted SQL
 literal; no raw free-form SQL is accepted from the interface.
 
+In **0.29.0**, **Connections → Late fees — Student detail and population
+verification** exports all stored late-fee populations and shared staff-waiver
+lists directly through the existing Insights connection. Choose TEST or PROD,
+enter a six-digit Spring `10`, Summer `55` or Fall `80` term, and click **Run
+selected query and save Excel**. No saved Insights question or manual SQL upload
+is required. The report includes CWID, names, Mines email, selected-term and
+all-term balances, posted/remaining LPPF amounts, hold history, waiver owners,
+population scopes and dates, environment and review flags. It preserves members
+with missing identities and includes every staff waiver list.
+
+Filter the workbook by application, selection, creator and run user to review a
+specific stored result. Amounts repeat across memberships; do not total the
+entire workbook. The term selects current financial context, not historical
+eligibility. The app reads capped API results in pages and validates counts and
+row continuity before saving. It cannot guarantee an atomic database snapshot
+across pages. This report does not post fees or prove that a fresh three-step
+Banner run equals a seven-step run. See the [late-fee technical guide](../../query/AR/late_fees/README.md)
+for field meanings, source requirements and comparison evidence.
+
 In 0.11.0, **Activity — Banner Activity by Date & Detail Code** uses the same
 `query/AR/activity/tgiaccd_transactions.sql` template as the staff Insights
 question. Select inclusive start/end feed dates with the calendars and enter
