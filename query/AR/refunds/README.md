@@ -214,8 +214,8 @@ cumulative raw balance is zero and every stored transaction balance in that
 prefix is known zero. A zero account total with unresolved row balances does
 not count as settlement. All remaining historical charges retain their actual
 term and priority; no fiscal-year deficit becomes an unrestricted synthetic
-charge. Stored balances provide settlement evidence and diagnostics. They also
-limit which reconstructed aid sources can support a refund recipient split.
+charge. Stored balances provide settlement evidence and diagnostics. They
+do not cap reconstructed aid-source remainders or determine refund ownership.
 
 ### Classification and priority
 
@@ -344,13 +344,17 @@ delivery are blocked; the permitted amount remains visible for manual review. No
 `total_unused_payment_amount`, unused-source subtotals, and `balance_sources`
 remain reconstruction diagnostics, not additional amounts to refund.
 
-For Title IV and non-Title-IV `FA%` aid, reconstructed unused principal cannot
-exceed the surviving source's stored unapplied credit. An excess or missing
-aid balance adds `APPLIED_AID_REOPENED_BY_RECONSTRUCTION` and blocks the split
-and delivery. Cash can still cross terms with the existing priority matching;
-cash stored-balance differences retain their review flag. Allocation metadata
-problems, negative source groups, authorization problems, and ledger mismatches
-also block unreliable splits. Existing account controls and columns are preserved.
+From **0.29.1**, reconstructed priorities determine each source's unused principal,
+including Title IV and non-Title-IV `FA%` aid. Known stored unapplied balances do
+not limit the recipient split. `STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION`
+remains informational and alone does not set Manual Review status or change
+delivery. Missing balances retain data-quality review; a missing selected aid
+balance still blocks the split. Historical settlement evidence remains unchanged.
+Allocation metadata problems, negative source groups, authorization problems,
+and ledger/net-credit mismatches still block unreliable splits. Existing account
+controls and columns are preserved. See the [source-allocation rule and synthetic
+acceptance examples](../../../workflows/refunds/README.md#population-and-refund-amounts)
+for PLUS N/Y and ED routing.
 The full rules and workbook presentation are also described in the
 [workflow guide](../../../workflows/refunds/README.md).
 

@@ -82,7 +82,7 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("UC.UNPAID_CHARGE_AMOUNT = UC.NON_ALLOWABLE_BALANCE", totals)
         self.assertIn("BS.UNUSED_TITLE_IV_AMOUNT", totals)
         split = self.section("joined AS", "parent_plus_calculation AS")
-        self.assertIn("COALESCE(SC.APPLIED_AID_REOPENED_COUNT, 0) > 0", split)
+        self.assertIn("COALESCE(SC.MISSING_AID_BALANCE_COUNT, 0) > 0", split)
         self.assertIn("<> FT.TOTAL_REFUND_AMOUNT", split)
 
     def test_schema_inventory_requires_new_metadata(self) -> None:
@@ -93,6 +93,68 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("('TAISMGR', 'TBBDETC', 'DCAT_CODE')", schema_query)
         self.assertIn("('TAISMGR', 'TBBDETC', 'TIV_IND')", schema_query)
         self.assertNotIn("NON_ALLOW_CHG_IND", schema_query)
+
+    def test_stored_aid_comparison_only_blocks_missing_source_data(self) -> None:
+        start = self.query.index("stored_balance_comparison AS MATERIALIZED (")
+        start = self.query.index("SELECT", start)
+        comparison = self.query[start:self.query.index("\n),", start)]
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.executescript("""
+            CREATE TABLE account_balances (pidm int);
+            INSERT INTO account_balances VALUES (1);
+            CREATE TABLE numbered_payment_sources (
+                pidm int, payment_key int, stored_unused_amount numeric,
+                fund_type text, stored_balance_missing bool);
+            CREATE TABLE selected_balance_sources (
+                pidm int, payment_key int, source_credit_amount numeric);
+            INSERT INTO selected_balance_sources VALUES (1, 1, 100);
+        """)
+        for fund_type in ("TITLE_IV", "NON_TITLE_IV_FA", "CASH"):
+            for unused, missing in ((0, False), (50, False), (150, False), (0, True)):
+                with self.subTest(fund_type=fund_type, unused=unused, missing=missing):
+                    database.execute("DELETE FROM numbered_payment_sources")
+                    database.execute("INSERT INTO numbered_payment_sources VALUES (1, 1, ?, ?, ?)",
+                                     (unused, fund_type, missing))
+                    pidm, differences, missing_aid = database.execute(comparison).fetchone()
+                    self.assertEqual(pidm, 1)
+                    self.assertEqual(differences, 1)
+                    self.assertEqual(missing_aid, int(missing and fund_type != "CASH"))
+
+    def test_recipient_and_review_gates_preserve_reconciliation_and_authorization(self) -> None:
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.create_function("GREATEST", 2, max)
+        for label, start_marker, end_marker, base, blockers in (
+            ("recipient", "CASE WHEN v.invalid_priority_count > 0", " AS refund_split_blocked_ind",
+             {"ft.total_refund_amount": 100, "bs.balance_source_credit_total": 100,
+              "al.included_balance": -100},
+             {"fr.missing_fdpl_auth_count": 1, "fr.conflicting_fdpl_auth_count": 1,
+              "sc.missing_aid_balance_count": 1, "bs.balance_source_credit_total": 101,
+              "al.included_balance": -99, "v.invalid_charge_flag_count": 1}),
+            ("review", "CASE WHEN j.refund_split_blocked_ind = 'Y'", " AS allocation_review_required_ind",
+             {"j.refund_split_blocked_ind": "N", "j.total_refund_amount": 100,
+              "j.balance_source_credit_total": 100, "j.full_account_balance": -100},
+             {"j.refund_split_blocked_ind": "Y", "j.missing_transaction_balance_count": 1,
+              "j.balance_source_credit_total": 101, "j.unpaid_charge_amount": 1}),
+        ):
+            start = self.query.index(start_marker)
+            expression = self.query[start:self.query.index(end_marker, start)]
+            fields = dict.fromkeys(re.findall(r"\b\w+\.\w+\b", expression), 0)
+            fields.update(base)
+            # Include the diagnostic count even when the gate does not read it.
+            fields[f"{'sc' if label == 'recipient' else 'j'}.stored_balance_difference_count"] = 2
+            for changed, value in [(None, None), *blockers.items()]:
+                with self.subTest(gate=label, blocker=changed):
+                    values = fields | ({changed: value} if changed else {})
+                    aliases = sorted({key.split('.')[0] for key in values})
+                    sources, parameters = [], []
+                    for alias in aliases:
+                        columns = [key for key in values if key.startswith(alias + '.')]
+                        sources.append("(SELECT " + ", ".join(f"? AS {key.split('.')[1]}" for key in columns) + f") {alias}")
+                        parameters.extend(values[key] for key in columns)
+                    result = database.execute(f"SELECT {expression} FROM " + " CROSS JOIN ".join(sources), parameters).fetchone()[0]
+                    self.assertEqual(result, "Y" if changed else "N")
 
     def test_title_iv_balance_due_display_is_binary(self) -> None:
         # Execute the actual final-column expression without requiring a live server.
@@ -1046,7 +1108,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         transactions[-1] = replace(transactions[-1], balance=0)
         row = self.one(transactions)
         self.assert_split(row, 0, 2000)
-        self.assertEqual(row["allocation_review_required_ind"], "Y")
+        self.assertEqual(row["allocation_review_required_ind"], "N")
+        self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
         self.assertIn("STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION", row["review_reasons"])
 
     def test_missing_transaction_amount_blocks_the_split(self) -> None:

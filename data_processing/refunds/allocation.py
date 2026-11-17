@@ -932,12 +932,11 @@ def _allocate_account(
     if refund_amount <= ZERO:
         return None
     policy_credit_mismatch = policy_unused_total != refund_amount
-    # Reallocation may change cash applications, but must not present aid that
-    # Banner already consumed as a newly available refund source.
-    applied_aid_reopened = any(
+    # Policy allocation determines the source even when Banner applied aid
+    # differently. Missing aid balances still require source-data review.
+    missing_aid_balance = any(
         source["fund_type"] in {"TITLE_IV", "NON_TITLE_IV_FA"}
-        and (source["stored_balance"] is None
-             or source["source_credit_amount"] > source["stored_unused_amount"])
+        and source["stored_balance"] is None
         for source in selected_sources
     )
 
@@ -1050,7 +1049,7 @@ def _allocate_account(
         conflicting_auth_count,
         ledger_residual != ZERO,
         policy_credit_mismatch,
-        applied_aid_reopened,
+        missing_aid_balance,
     ))
     if split_blocked:
         parent_amount = None
@@ -1110,7 +1109,6 @@ def _allocate_account(
     allocation_review = (
         split_blocked
         or missing_balance_count > 0
-        or stored_difference_count > 0
         or (unpaid_charges > 0 and title_iv_exception <= ZERO)
         or policy_credit_mismatch
         or ledger_residual != ZERO
@@ -1145,7 +1143,6 @@ def _allocate_account(
         "MISSING_TRANSACTION_AMOUNT" if missing_amount_count else None,
         "MISSING_TRANSACTION_BALANCE" if missing_balance_count else None,
         "STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION" if stored_difference_count else None,
-        "APPLIED_AID_REOPENED_BY_RECONSTRUCTION" if applied_aid_reopened else None,
         "UNRECOGNIZED_TERM_CODE" if invalid_term_count else None,
         "FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION" if future_term_count else None,
         "MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG" if invalid_charge_flag_count else None,

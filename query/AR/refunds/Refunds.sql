@@ -1153,9 +1153,8 @@ stored_balance_comparison AS MATERIALIZED (
         COUNT(s.payment_key) FILTER (
             WHERE s.fund_type IN ('TITLE_IV', 'NON_TITLE_IV_FA')
               AND COALESCE(r.source_credit_amount, 0) > 0
-              AND (s.stored_balance_missing
-                   OR r.source_credit_amount > s.stored_unused_amount)
-        ) AS applied_aid_reopened_count
+              AND s.stored_balance_missing
+        ) AS missing_aid_balance_count
     FROM account_balances b
     LEFT JOIN numbered_payment_sources s ON s.pidm = b.pidm
     LEFT JOIN selected_balance_sources r
@@ -1494,7 +1493,7 @@ joined AS (
         COALESCE(n.negative_net_source_count, 0) AS negative_net_source_count,
         COALESCE(sc.stored_balance_difference_count, 0)
             AS stored_balance_difference_count,
-        COALESCE(sc.applied_aid_reopened_count, 0) AS applied_aid_reopened_count,
+        COALESCE(sc.missing_aid_balance_count, 0) AS missing_aid_balance_count,
         COALESCE(uc.unpaid_charge_amount, 0) AS unpaid_charge_amount,
         COALESCE(uc.ordinary_unpaid_charge_amount, 0) AS ordinary_unpaid_charge_amount,
         COALESCE(bs.ambiguous_source_pool_count, 0) AS ambiguous_source_pool_count,
@@ -1514,7 +1513,7 @@ joined AS (
                OR COALESCE(n.negative_net_source_count, 0) > 0
                OR COALESCE(fr.missing_fdpl_auth_count, 0) > 0
                OR COALESCE(fr.conflicting_fdpl_auth_count, 0) > 0
-               OR COALESCE(sc.applied_aid_reopened_count, 0) > 0
+               OR COALESCE(sc.missing_aid_balance_count, 0) > 0
                OR COALESCE(bs.balance_source_credit_total, 0)
                     <> ft.total_refund_amount
                OR COALESCE(al.included_balance, 0)
@@ -1624,7 +1623,6 @@ parent_plus_calculation AS (
         /* Preserve review gates except debt explicitly allowed by the Title IV rule. */
         CASE WHEN j.refund_split_blocked_ind = 'Y'
                OR j.missing_transaction_balance_count > 0
-               OR j.stored_balance_difference_count > 0
                OR (j.unpaid_charge_amount > 0
                    AND j.total_refund_amount <= GREATEST(-j.full_account_balance, 0))
                OR j.balance_source_credit_total
@@ -1774,8 +1772,6 @@ final_review AS (
                 THEN 'MISSING_TRANSACTION_BALANCE' END,
             CASE WHEN d.stored_balance_difference_count > 0
                 THEN 'STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION' END,
-            CASE WHEN d.applied_aid_reopened_count > 0
-                THEN 'APPLIED_AID_REOPENED_BY_RECONSTRUCTION' END,
             CASE WHEN d.invalid_term_count > 0
                 THEN 'UNRECOGNIZED_TERM_CODE' END,
             CASE WHEN d.future_term_count > 0

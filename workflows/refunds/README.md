@@ -64,14 +64,23 @@ remainders must equal this permitted refund; otherwise ownership and delivery
 remain blocked, without arbitrarily trimming a source. Other unpaid charges,
 including fiscal-year cap mismatches, do not qualify for this exception.
 
-Reconstructed unused Title IV or non-Title-IV `FA%` aid must not exceed the
-surviving source's stored unapplied credit. A missing aid balance or an excess
-adds `APPLIED_AID_REOPENED_BY_RECONSTRUCTION` and blocks the recipient split and
-delivery. This prevents money Banner shows as used from becoming a proposed aid
-refund. Cash may still be reallocated across terms; cash stored-balance
-differences retain their existing review flag. Other input and ownership checks
-continue to block unreliable splits. These rules replace the former behavior
-that proposed restricted refunds alongside offsetting unpaid charges.
+From **0.29.1**, recalculated priorities determine the refund source for both aid
+and cash. A known Banner stored balance does not cap that source's refundable
+remainder. A difference adds `STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION`
+as an informational note; the difference alone does not block the split, set
+Manual Review status, or change the delivery tab. Missing balances retain their
+data-quality review, and a missing balance on a selected aid source still blocks
+the split. Known-zero stored balances remain necessary to establish a settled
+historical prefix; closed history is not reopened by this correction.
+
+This follows the [priority and recipient decision in issue #29](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823)
+and the owner's implementation clarification: recalculated priorities determine
+the source even when Banner's existing applications leave the credit on a
+different payment. The permitted-refund/net-credit reconciliation above, aid-year
+PLUS authorization, funding restrictions, holds, and other delivery checks remain.
+Unused FDPL authorized `N` goes to **Refund to Parent**, regardless of student ED.
+Authorization `Y` uses **Direct Deposit** with active ED, otherwise **Refund by
+Check**, subject to the existing address, clearing, and check-minimum rules.
 
 `HIWR` (Health Insurance Waiver/Offset) directly reduces `HLTH` (Health Insurance)
 within the same term and charge-priority pool (`879` for both in the supplied
@@ -88,6 +97,9 @@ Synthetic acceptance examples:
 | Summer cash $5,500; Fall charges $5,000 | $500 refund after cash covers Fall. |
 | Same-term HLTH $1,000 and HIWR -$1,000 at priority 879; unapplied cash $100 | Insurance nets to $0 before allocation; the $100 cash credit remains available. |
 | Summer tuition $1,000 and applied Title IV aid $1,200; Fall tuition $500 and scholarship $600 with $300 unapplied | Earlier aid applies first; $300 of Fall scholarship remains, without reopening Summer aid. |
+| Prior-term charges $200; current charges $1,000; current scholarship $500 at 000 followed by PLUS $800 at 800; Banner shows $100 unused on scholarship and $0 on PLUS | Recalculation leaves $100 on PLUS. Authorization N routes $100 to Refund to Parent with or without ED; Y routes it to Direct Deposit with ED, otherwise Refund by Check. Stored-balance difference is informational. |
+| Same example with missing, conflicting, or wrong-aid-year PLUS authorization | $100 net credit remains on Manual Reviews with recipient amounts undetermined. |
+| Same example with an RH hold | The entire $100 stays on Refund Holds for either authorized recipient. |
 | Old-FY charges $1,000; newer Title IV payment $1,200, of which the configured cap applies $200 | Net credit $200 goes to manual review with no recipient/delivery; reconstructed unused $1,000 is diagnostic only. |
 | Tuition $1,000; LPPF $100 marked Non-Allowable; Pell $1,200 with $200 unapplied | Refund $200; $100 remains owed; new column identifies the balance. |
 | Same example with LPPF $200 or $300 | Refund $200 even though the starting account balance is zero or positive; $200 or $300 remains owed. |

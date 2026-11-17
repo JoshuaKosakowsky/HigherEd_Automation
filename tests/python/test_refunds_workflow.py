@@ -318,18 +318,18 @@ class RefundAllocationTests(unittest.TestCase):
                 self.assertEqual(row["unpaid_charge_amount"], Decimal(100))
                 self.assertIn("MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG", row["review_reasons"])
 
-    def test_title_iv_exception_preserves_aid_balance_and_other_debt_checks(self) -> None:
+    def test_title_iv_exception_uses_reconstructed_aid_and_preserves_other_debt_checks(self) -> None:
         base = [
             Transaction("TUIN", "C", "899", 1000),
             Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y"),
             Transaction("PELL", "P", "800", 1200, 0, category="FA", title_iv="Y"),
         ]
         row = self.report(base)
-        self.assertIsNone(row["student_refund_amount"])
-        self.assertEqual(row["title_iv_balance_due_note"], "No")
-        self.assertEqual(row["review_status"], "MANUAL_REVIEW")
-        self.assertEqual(row["refund_split_status"], "UNDETERMINED_SEE_REVIEW_REASONS")
-        self.assertIn("APPLIED_AID_REOPENED_BY_RECONSTRUCTION", row["review_reasons"])
+        self.assert_split(row, "0.00", "200.00")
+        self.assertEqual(row["title_iv_balance_due_note"], "Yes")
+        self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal(100))
+        self.assertIn("STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION", row["review_reasons"])
         other_debt = self.report([
             Transaction("OLD", "C", "899", 500, 300, term="209880"),
             Transaction("LPPF", "C", "789", 100, 100, non_allowable="Y"),
@@ -528,9 +528,9 @@ class RefundAllocationTests(unittest.TestCase):
                 self.assert_split(row, "0.00", "500.00")
                 self.assertEqual(row["unpaid_charge_amount"], Decimal("0.00"))
 
-    def test_applied_or_unknown_aid_cannot_be_assigned_as_a_refund(self) -> None:
+    def test_known_aid_balances_do_not_limit_reconstructed_refunds(self) -> None:
         for title_iv in ("Y", "N"):
-            for stored in (0, None, "-99.99"):
+            for stored in (0, "-99.99", "-150.00"):
                 with self.subTest(title_iv=title_iv, stored=stored):
                     row = self.report([
                         Transaction("CHG7", "C", "700", 100),
@@ -538,8 +538,81 @@ class RefundAllocationTests(unittest.TestCase):
                                     category="FA", title_iv=title_iv, tran_number=3),
                         Transaction("CASH", "P", "000", 100, -100, tran_number=2),
                     ])
-                    self.assert_unassigned_credit(row, "100.00")
-                    self.assertIn("APPLIED_AID_REOPENED_BY_RECONSTRUCTION", row["review_reasons"])
+                    self.assert_split(row, "0.00", "100.00")
+                    self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+                    self.assertIn("AID", row["balance_sources"])
+                    self.assertIn("STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION", row["review_reasons"])
+
+    def test_missing_aid_balance_still_requires_source_data_review(self) -> None:
+        for title_iv in ("Y", "N"):
+            with self.subTest(title_iv=title_iv):
+                row = self.report([
+                    Transaction("CHG7", "C", "700", 100),
+                    Transaction("CASH", "P", "000", 100, -100),
+                    Transaction("AID", "P", "800", 100, None,
+                                category="FA", title_iv=title_iv),
+                ])
+                self.assert_unassigned_credit(row, "100.00")
+                self.assertIn("MISSING_TRANSACTION_BALANCE", row["review_reasons"])
+
+    @staticmethod
+    def reallocated_plus_example() -> list[Transaction]:
+        # Stored scholarship credit moves to PLUS under the common 800/000
+        # priority. Current payments first cover the prior term's debt.
+        return [
+            Transaction("OLD", "C", "899", 200, term="209910"),
+            Transaction("TUIN", "C", "899", 1000),
+            Transaction("SCHL", "P", "000", 500, -100, category="FAS"),
+            Transaction("FDPL", "P", "800", 800, 0, category="PPL", title_iv="Y"),
+        ]
+
+    def test_reallocated_plus_uses_authorization_and_ed_for_workbook_route(self) -> None:
+        for authorization, active_ed, sheet, parent, student in (
+            ("N", True, "Refund to Parent", "100.00", "0.00"),
+            ("N", False, "Refund to Parent", "100.00", "0.00"),
+            ("Y", True, "Direct Deposit", "0.00", "100.00"),
+            ("Y", False, "Refund by Check", "0.00", "100.00"),
+        ):
+            with self.subTest(authorization=authorization, active_ed=active_ed):
+                row = self.report(self.reallocated_plus_example(),
+                                  authorizations={"9900": authorization}, active_ed=active_ed)
+                self.assert_split(row, parent, student)
+                self.assertEqual(row["unused_fdpl_amount"], Decimal(100))
+                self.assertEqual(row["unused_non_fdpl_amount"], Decimal(0))
+                self.assertEqual(row["unpaid_charge_amount"], Decimal(0))
+                self.assertEqual(row["allocation_review_required_ind"], "N")
+                self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+                self.assertIn("STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION", row["review_reasons"])
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual([name for name, frame in sheets.items() if not frame.empty], [sheet])
+                    self.assertEqual(sheets[sheet].Detail_Code_Refund_Amt.sum(), 100)
+
+    def test_reallocated_plus_preserves_authorization_and_hold_checks(self) -> None:
+        for authorizations, reason in (
+            ({}, "PLUS_AUTH_RECORD_MISSING"),
+            ({"9899": "N"}, "PLUS_AUTH_RECORD_MISSING"),
+            ({"9900": ["Y", "N"]}, "PLUS_AUTH_VALUES_CONFLICT"),
+            ({"9900": "?"}, "PLUS_AUTH_VALUES_CONFLICT"),
+        ):
+            with self.subTest(authorizations=authorizations):
+                row = self.report(self.reallocated_plus_example(), authorizations=authorizations)
+                self.assert_unassigned_credit(row, "100.00")
+                self.assertIn(reason, row["review_reasons"])
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Manual Reviews"])
+        for authorization in ("Y", "N"):
+            with self.subTest(held_authorization=authorization):
+                row = self.report(self.reallocated_plus_example(),
+                                  authorizations={"9900": authorization}, refund_hold=True)
+                self.assertEqual(row["review_status"], "HOLD")
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Refund Holds"])
 
     def test_reconstructed_excess_goes_to_manual_review_at_net_credit_only(self) -> None:
         row = self.report([
@@ -956,7 +1029,8 @@ class RefundAllocationTests(unittest.TestCase):
         transactions[-1] = Transaction("PAYC", "P", "000", 2000, 0)
         row = self.report(transactions)
         self.assert_split(row, "0.00", "2000.00")
-        self.assertEqual(row["allocation_review_required_ind"], "Y")
+        self.assertEqual(row["allocation_review_required_ind"], "N")
+        self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
         self.assertIn(
             "STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION",
             str(row["review_reasons"]),
