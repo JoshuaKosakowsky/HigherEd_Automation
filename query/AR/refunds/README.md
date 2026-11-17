@@ -292,14 +292,35 @@ charge-priority pool before any aid or cash is used. Equal positive HLTH and
 negative HIWR amounts cancel the insurance charge. HIWR remains a charge
 adjustment, not a payment or an additional refund source.
 
-Posted `ARFD` and `RFND` student refunds are reconciled after ordinary charges,
-so the normal oldest-term-first charge allocation remains intact. Each surviving
-posted refund can consume only unused payment sources with a lower transaction
-number, across the complete account, and bypasses priority matching because the
-money has already been issued. Partial matches reduce only the remaining refund
-proposal and add `POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_...` to the review
-reasons. Refund reversals are netted within term/detail before reconciliation.
-`RFDP` is deliberately excluded and continues through normal charge allocation.
+From **0.29.3**, posted `ARFD`/`RFND` student refunds reconcile once after ordinary
+oldest-term-first charge allocation. Same-code reversals are netted first. A
+refund whose stored balance is known zero can consume current source remainders
+when complete transaction history shows sufficient credit before posting, or
+the refund belongs to a cumulatively zero transaction prefix with every balance
+known zero and no missing amounts. This is settlement evidence only: it does not
+remove additional history or alter priorities, charge eligibility or FY caps.
+Other refunds retain the lower-payment-transaction-number requirement. Matching
+bypasses priority because money was already issued; residuals still block splits.
+`POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_...` reports only the amount reconciled.
+
+`RFDV` is kept outside ordinary charge pools. Only a unique same-term, exact
+surviving-amount pair with an earlier `ARFD`/`RFND` and both stored balances known
+zero cancels; uniqueness is required for both refund and void, including possible
+parent matches and other student matches with unknown/unsettled balances. A later reissue
+is still deducted once. Unmatched, partial, duplicate/ambiguous, positive,
+cross-term, parent, or unsettled voids produce `REFUND_VOID_REQUIRES_REVIEW` and
+block recipient assignment. `RFDP` retains ordinary charge handling. Future-term
+activity continues to block the split even when its effective date is earlier.
+
+This implements the owner's 2026-11-17 request for the observed prior-refund and
+check/void/reissue failures. Related decisions/discussion are in
+[allocation issue #29](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823)
+and [void issue #33](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/33).
+Current reasoning and synthetic acceptance examples are in the
+[workflow rule](../../../workflows/refunds/README.md#previously-issued-refunds-and-voids-0293).
+For example, an issued $1,000 refund followed by a $500 grant and $300 adjustment
+leaves $200 after reconciliation; a $2,000 check, -$2,000 void, and $2,000 ACH
+reissue consumes $2,000, not $4,000. Existing ownership/delivery controls remain.
 
 ### Ownership, delivery, and review
 

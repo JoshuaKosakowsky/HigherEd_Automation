@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import math
@@ -23,6 +24,7 @@ ORIGINAL_PAYMENT_CODES = {"ACHK", "CRDS", "CRED", "CRVC", "CRAM", "CRMC"}
 CARD_PAYMENT_CODES = ("CRAM", "CRDS", "CRMC", "CRVC")
 THIRD_PARTY_PAYMENT_CODES = {"C529", "Z0LE", "TPPY"}
 POSTED_STUDENT_REFUND_CODES = {"ARFD", "RFND"}
+STUDENT_REFUND_ACTIVITY_CODES = POSTED_STUDENT_REFUND_CODES | {"RFDV"}
 STUDENT_ADDRESS_COLUMNS = (
     "student_address_type", "student_address_line1", "student_address_line2",
     "student_address_line3", "student_address_city", "student_address_state",
@@ -360,7 +362,7 @@ def _charge_sources(
     rows = [
         row for row in transactions
         if row["type_ind"] == "C"
-        and row["detail_code"] not in POSTED_STUDENT_REFUND_CODES
+        and row["detail_code"] not in STUDENT_REFUND_ACTIVITY_CODES
         and row["term_sort"] is not None
         and row["term_sort"] <= target_term_sort
     ]
@@ -400,10 +402,24 @@ def _charge_sources(
     return charges, negative_groups
 
 
+@dataclass(frozen=True)
+class PostedStudentRefunds:
+    refunds: list[dict[str, Any]]
+    negative_group_count: int
+    void_review_count: int
+
+
 def _posted_student_refunds(
     transactions: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], int]:
-    """Net posted ARFD/RFND rows separately from priority-based charges."""
+    history: list[dict[str, Any]],
+) -> PostedStudentRefunds:
+    """Recognize issued student refunds without reopening settled disbursements.
+
+    Keep the full allocation history and its priority/FY restrictions. A settled
+    refund may reconcile against today's sources when it was funded at posting
+    or belongs to a cumulatively settled transaction prefix. Otherwise only
+    earlier remaining payments may explain it, as before.
+    """
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in transactions:
         if row["type_ind"] == "C" and row["detail_code"] in POSTED_STUDENT_REFUND_CODES:
@@ -423,8 +439,59 @@ def _posted_student_refunds(
             prior_positive += row["raw_amount"]
             if amount > ZERO:
                 refunds.append({**row, "refund_amount": amount})
+    # RFDV has no original-refund link in the extract. Cancel only a unique,
+    # same-term, equal-amount, settled pair in the correct transaction order.
+    # Partial, repeated/ambiguous, parent, and unpaired voids require review.
+    voids = [row for row in transactions
+             if row["type_ind"] == "C" and row["detail_code"] == "RFDV"
+             and row["raw_amount"] != ZERO]
+    candidates: dict[int, list[int]] = defaultdict(list)
+    refund_matches: dict[int, int] = defaultdict(int)
+    settled_pairs: set[tuple[int, int]] = set()
+    for void in voids:
+        parent_candidate = any(
+            row["type_ind"] == "C" and row["detail_code"] == "RFDP"
+            and row["term_code"] == void["term_code"]
+            and row["tran_number"] < void["tran_number"]
+            and row["raw_amount"] > ZERO and row["raw_amount"] == -void["raw_amount"]
+            for row in transactions
+        )
+        for refund in refunds:
+            if (void["raw_amount"] < ZERO
+                    and refund["term_code"] == void["term_code"]
+                    and refund["tran_number"] < void["tran_number"]
+                    and refund["refund_amount"] == -void["raw_amount"]):
+                candidates[void["source_id"]].append(refund["source_id"])
+                refund_matches[refund["source_id"]] += 1
+                if (void["stored_balance"] == ZERO and refund["stored_balance"] == ZERO
+                        and not parent_candidate):
+                    settled_pairs.add((void["source_id"], refund["source_id"]))
+    cancelled = {
+        matches[0] for void_id, matches in candidates.items()
+        if len(matches) == 1 and refund_matches[matches[0]] == 1
+        and (void_id, matches[0]) in settled_pairs
+    }
+    refunds = [row for row in refunds if row["source_id"] not in cancelled]
+    balance = ZERO
+    amounts_known = True
+    prefix_settled = True
+    settled_through = -1
+    credit_before: dict[int, Decimal] = {}
+    for row in sorted(history, key=lambda item: item["tran_number"]) if refunds else []:
+        if amounts_known:
+            credit_before[row["source_id"]] = max(-balance, ZERO)
+        amounts_known = amounts_known and not row["amount_missing"]
+        balance += row["accounting_amount"] or ZERO
+        prefix_settled = prefix_settled and amounts_known and row["stored_balance"] == ZERO
+        if prefix_settled and _money(balance) == ZERO:
+            settled_through = row["tran_number"]
+    for refund in refunds:
+        refund["settled_history"] = refund["stored_balance"] == ZERO and (
+            refund["tran_number"] <= settled_through
+            or credit_before.get(refund["source_id"], ZERO) >= refund["refund_amount"]
+        )
     refunds.sort(key=lambda row: row["tran_number"])
-    return refunds, negative_groups
+    return PostedStudentRefunds(refunds, negative_groups, len(voids) - len(cancelled))
 
 
 def _payment_sort_key(source: dict[str, Any]) -> tuple[object, ...]:
@@ -540,11 +607,13 @@ def _apply_posted_student_refunds(
     sources: list[dict[str, Any]],
     payment_remaining: dict[int, Decimal],
 ) -> tuple[Decimal, Decimal]:
-    """Consume unused earlier payments with later posted student refunds.
+    """Deduct issued refunds from the current policy reconstruction once.
 
     Normal charges have already been handled oldest-term first. ARFD/RFND then
     bypass priority matching because they document money already returned. A
-    refund can never consume a payment posted later in the account chronology.
+    settled refund with historical funding/settlement evidence may use current
+    sources after later charges displaced its original funding. Unproved refunds
+    retain the earlier-payment restriction; deficits still block recipient splits.
     """
     applied_total = ZERO
     unmatched_total = ZERO
@@ -553,7 +622,8 @@ def _apply_posted_student_refunds(
         for source in sources:
             if refund_remaining <= ZERO:
                 break
-            if source["tran_number"] >= refund["tran_number"]:
+            if (source["tran_number"] >= refund["tran_number"]
+                    and not refund["settled_history"]):
                 continue
             available = payment_remaining[source["source_id"]]
             if available <= ZERO:
@@ -842,7 +912,7 @@ def _allocate_account(
     invalid_priority_count = sum(
         row["raw_amount"] != 0
         and row["priority_code"] is None
-        and row["detail_code"] not in POSTED_STUDENT_REFUND_CODES
+        and row["detail_code"] not in STUDENT_REFUND_ACTIVITY_CODES
         for row in transactions
     )
     missing_amount_count = sum(row["amount_missing"] for row in transactions)
@@ -859,7 +929,7 @@ def _allocate_account(
     )
     invalid_charge_flag_count = sum(
         row["type_ind"] == "C" and row["raw_amount"] != 0
-        and row["detail_code"] not in POSTED_STUDENT_REFUND_CODES
+        and row["detail_code"] not in STUDENT_REFUND_ACTIVITY_CODES
         and row["non_allowable_charge_ind"] not in {"Y", "N"}
         for row in transactions
     )
@@ -880,8 +950,8 @@ def _allocate_account(
         allocation_transactions,
         target_sort,
     )
-    posted_refunds, negative_posted_refund_groups = _posted_student_refunds(
-        allocation_transactions
+    posted = _posted_student_refunds(
+        allocation_transactions, eligible_transactions
     )
 
     # Preserve every payment source and every term/priority charge pool. Charges
@@ -902,7 +972,7 @@ def _allocate_account(
         title_iv_cap=cap,
     )
     posted_refund_applied, unmatched_posted_refunds = _apply_posted_student_refunds(
-        posted_refunds,
+        posted.refunds,
         staged_sources,
         payment_remaining,
     )
@@ -955,7 +1025,7 @@ def _allocate_account(
         for source in staged_sources
     )
     negative_net_source_count = (
-        negative_payment_groups + negative_charge_groups + negative_posted_refund_groups
+        negative_payment_groups + negative_charge_groups + posted.negative_group_count
     )
 
     title_iv_to_older = _money(sum((
@@ -1050,6 +1120,7 @@ def _allocate_account(
         future_term_count,
         invalid_charge_flag_count,
         negative_net_source_count,
+        posted.void_review_count,
         missing_auth_count,
         conflicting_auth_count,
         ledger_residual != ZERO,
@@ -1152,6 +1223,7 @@ def _allocate_account(
         "FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION" if future_term_count else None,
         "MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG" if invalid_charge_flag_count else None,
         "NEGATIVE_NET_SOURCE_REQUIRES_REVIEW" if negative_net_source_count else None,
+        "REFUND_VOID_REQUIRES_REVIEW" if posted.void_review_count else None,
         "UNPAID_CHARGES_AFTER_POLICY_ALLOCATION" if unpaid_charges > 0 and title_iv_exception <= ZERO else None,
         "POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT" if policy_credit_mismatch else None,
         "ALLOCATION_LEDGER_DOES_NOT_RECONCILE_TO_INCLUDED_TRANSACTIONS" if ledger_residual != ZERO else None,

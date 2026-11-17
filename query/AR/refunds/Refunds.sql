@@ -13,8 +13,8 @@ CURRENT POLICY
   charges are explicitly Non-Allowable, add the lesser of their unpaid balance
   and unused Title IV principal. This can include zero/positive accounts.
   Source remainders differing from this permitted refund block ownership.
-  Unused aid exceeding Banner's unapplied source credit also blocks ownership;
-  already-applied aid cannot become a proposed recipient's refund.
+  Known stored balances are diagnostic; missing selected aid balances block
+  ownership. Recalculated priorities determine the source of an open credit.
 - Keep every term and charge priority. Oldest charge terms apply first, then
   descending charge priority. Payment zero digits are positional wildcards;
   899/869 only pay their exact priorities in any term. Payments apply by oldest
@@ -24,9 +24,11 @@ CURRENT POLICY
   Non-Allowable codes use the owner-confirmed 2026-11-14 Banner snapshot in
   refund_non_allowable_detail_codes.sql; regenerate this query when it changes.
   Other nonzero priorities remain unchanged. No payment-method preference.
-- After normal charges are allocated oldest-term first, posted ARFD/RFND student
-  refunds consume remaining payment sources with lower transaction numbers
-  across the account, regardless of priority. RFDP is not part of this rule.
+- After normal charge allocation, posted ARFD/RFND refunds reconcile once against
+  current sources. Settled refunds with historical funding or completed-prefix
+  evidence can reconcile displaced sources; otherwise only earlier payments are
+  eligible. Only unique settled same-term full RFDV pairs cancel earlier student
+  refunds. Other voids require review. RFDP is excluded from both exceptions.
 - A completed historical prefix is settled only when its cumulative raw total
   and every stored transaction balance are known zero. Other history is replayed.
 - Reversals reduce newest positive payment rows within term/aid year/detail and
@@ -622,7 +624,7 @@ balance_input_checks AS MATERIALIZED (
         COUNT(*) FILTER (
             WHERE x.raw_amount <> 0
               AND x.priority_code IS NULL
-              AND x.detail_code NOT IN ('ARFD', 'RFND')
+              AND x.detail_code NOT IN ('ARFD', 'RFND', 'RFDV')
         ) AS invalid_priority_count,
         COUNT(*) FILTER (WHERE x.amount_missing_ind = 1)
             AS missing_transaction_amount_count,
@@ -636,7 +638,7 @@ balance_input_checks AS MATERIALIZED (
         ) AS future_term_count,
         COUNT(*) FILTER (
             WHERE x.raw_amount <> 0
-              AND x.is_charge AND x.detail_code NOT IN ('ARFD', 'RFND')
+              AND x.is_charge AND x.detail_code NOT IN ('ARFD', 'RFND', 'RFDV')
               AND COALESCE(x.non_allowable_charge_ind, '') NOT IN ('Y', 'N')
         ) AS invalid_charge_flag_count,
         COUNT(*) FILTER (WHERE x.raw_transaction_balance IS NULL)
@@ -731,7 +733,7 @@ charge_rows AS (
     FROM allocation_transactions x
     CROSS JOIN params p
     WHERE x.is_charge
-      AND x.detail_code NOT IN ('ARFD', 'RFND')
+      AND x.detail_code NOT IN ('ARFD', 'RFND', 'RFDV')
       AND x.term_sort IS NOT NULL
       AND x.term_sort <= CAST(p.target_term AS integer)
 ),
@@ -782,6 +784,35 @@ charge_sources AS (
         r.non_allowable_charge_ind
 ),
 
+/* Evidence only: retain all open history for normal priority/FY allocation. */
+refund_history_balances AS MATERIALIZED (
+    SELECT x.pidm, x.tran_number,
+        COALESCE(SUM(x.accounting_amount) OVER (
+            PARTITION BY x.pidm ORDER BY x.tran_number
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        ), 0) AS balance_before,
+        ROUND(SUM(x.accounting_amount) OVER history, 2) AS cumulative_balance,
+        SUM(x.amount_missing_ind) OVER history AS missing_amounts_through,
+        SUM(CASE WHEN x.raw_transaction_balance IS DISTINCT FROM 0
+                    OR x.amount_missing_ind = 1 THEN 1 ELSE 0 END)
+            OVER history AS unresolved_prefix
+    FROM candidate_transactions x
+    CROSS JOIN params p
+    WHERE x.term_sort <= p.target_term::integer
+      AND EXISTS (
+          SELECT 1 FROM allocation_transactions r
+          WHERE r.pidm = x.pidm AND r.is_charge
+            AND r.detail_code IN ('ARFD', 'RFND') AND r.raw_amount > 0
+      )
+    WINDOW history AS (PARTITION BY x.pidm ORDER BY x.tran_number
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+),
+settled_refund_history AS (
+    SELECT pidm, MAX(tran_number) AS settled_through
+    FROM refund_history_balances
+    WHERE cumulative_balance = 0 AND unresolved_prefix = 0
+    GROUP BY pidm
+),
 /* Posted student refunds reconcile after normal oldest-term charge allocation. */
 posted_refund_rows AS (
     SELECT x.*,
@@ -798,13 +829,14 @@ posted_refund_rows AS (
     WHERE x.is_charge
       AND x.detail_code IN ('ARFD', 'RFND')
 ),
-posted_refund_sources AS (
+posted_refund_netted AS MATERIALIZED (
     SELECT
         r.pidm,
         r.term_code,
         r.term_sort,
         r.tran_number,
         r.detail_code,
+        r.raw_transaction_balance,
         ROUND(LEAST(
             r.raw_amount,
             GREATEST(r.refund_group_net - r.prior_positive_refund_amount, 0)
@@ -816,6 +848,53 @@ posted_refund_sources AS (
           GREATEST(r.refund_group_net - r.prior_positive_refund_amount, 0)
       ) > 0
 ),
+/* No link identifies the original refund: require a unique settled full pair. */
+refund_void_candidates AS (
+    SELECT v.pidm, v.tran_number AS void_tran_number,
+        r.tran_number AS refund_tran_number,
+        COUNT(*) OVER (PARTITION BY v.pidm, v.tran_number) AS void_matches,
+        COUNT(*) OVER (PARTITION BY r.pidm, r.tran_number) AS refund_matches,
+        v.raw_transaction_balance = 0 AND r.raw_transaction_balance = 0 AS settled_pair,
+        EXISTS (
+            SELECT 1 FROM allocation_transactions parent
+            WHERE parent.pidm = v.pidm AND parent.is_charge AND parent.detail_code = 'RFDP'
+              AND parent.term_code = v.term_code AND parent.tran_number < v.tran_number
+              AND parent.raw_amount = -v.raw_amount
+        ) AS parent_candidate
+    FROM allocation_transactions v
+    JOIN posted_refund_netted r ON r.pidm = v.pidm
+        AND r.term_code = v.term_code AND r.tran_number < v.tran_number
+        AND r.refund_amount = -v.raw_amount
+    WHERE v.is_charge AND v.detail_code = 'RFDV' AND v.raw_amount < 0
+),
+matched_refund_voids AS MATERIALIZED (
+    SELECT pidm, void_tran_number, refund_tran_number
+    FROM refund_void_candidates
+    WHERE void_matches = 1 AND refund_matches = 1 AND settled_pair AND NOT parent_candidate
+),
+refund_void_checks AS (
+    SELECT v.pidm, COUNT(*) AS void_review_count
+    FROM allocation_transactions v
+    LEFT JOIN matched_refund_voids m
+        ON m.pidm = v.pidm AND m.void_tran_number = v.tran_number
+    WHERE v.is_charge AND v.detail_code = 'RFDV' AND v.raw_amount <> 0
+      AND m.void_tran_number IS NULL
+    GROUP BY v.pidm
+),
+posted_refund_sources AS (
+    SELECT r.*,
+        COALESCE(r.raw_transaction_balance = 0 AND (
+            r.tran_number <= s.settled_through
+            OR (h.missing_amounts_through = 0 AND -h.balance_before >= r.refund_amount)
+        ), FALSE) AS settled_history
+    FROM posted_refund_netted r
+    JOIN refund_history_balances h
+        ON h.pidm = r.pidm AND h.tran_number = r.tran_number
+    LEFT JOIN settled_refund_history s ON s.pidm = r.pidm
+    LEFT JOIN matched_refund_voids m
+        ON m.pidm = r.pidm AND m.refund_tran_number = r.tran_number
+    WHERE m.refund_tran_number IS NULL
+),
 
 net_source_checks AS MATERIALIZED (
     SELECT
@@ -823,7 +902,8 @@ net_source_checks AS MATERIALIZED (
         COALESCE(p.negative_payment_group_count, 0)
             + COALESCE(c.negative_charge_group_count, 0)
             + COALESCE(r.negative_posted_refund_group_count, 0)
-            AS negative_net_source_count
+            AS negative_net_source_count,
+        COALESCE(v.void_review_count, 0) AS void_review_count
     FROM account_balances b
     LEFT JOIN (
         SELECT pidm, COUNT(*) AS negative_payment_group_count
@@ -855,6 +935,7 @@ net_source_checks AS MATERIALIZED (
         ) g
         GROUP BY pidm
     ) r ON r.pidm = b.pidm
+    LEFT JOIN refund_void_checks v ON v.pidm = b.pidm
 ),
 
 /*
@@ -934,7 +1015,8 @@ charge_vectors AS MATERIALIZED (
 posted_refund_vectors AS MATERIALIZED (
     SELECT pidm,
         ARRAY_AGG(refund_amount ORDER BY refund_sequence) AS amounts,
-        ARRAY_AGG(tran_number ORDER BY refund_sequence) AS transaction_numbers
+        ARRAY_AGG(tran_number ORDER BY refund_sequence) AS transaction_numbers,
+        ARRAY_AGG(settled_history ORDER BY refund_sequence) AS settled_history_flags
     FROM numbered_posted_refunds
     GROUP BY pidm
 ),
@@ -950,7 +1032,8 @@ allocation_inputs AS MATERIALIZED (
         c.terms AS charge_terms,
         c.non_allowable_flags AS charge_non_allowable,
         COALESCE(r.amounts, ARRAY[]::numeric[]) AS posted_refunds,
-        r.transaction_numbers AS posted_refund_transaction_numbers
+        r.transaction_numbers AS posted_refund_transaction_numbers,
+        r.settled_history_flags AS posted_refund_settled_history
     FROM account_balances b
     LEFT JOIN priority_vectors v USING (pidm)
     LEFT JOIN payment_vectors p USING (pidm)
@@ -1060,9 +1143,10 @@ allocation_final AS MATERIALIZED (
     ) a
 ),
 /*
-After normal charges are paid oldest-term first, reconcile ARFD/RFND already
-issued to the student. A refund may consume only an earlier payment source;
-priority matching and Title IV cross-FY caps do not apply to money already sent.
+Deduct issued ARFD/RFND once after current priority allocation. Settled refunds
+with historical funding/settlement evidence reconcile current source attribution;
+unproved refunds retain the earlier-payment restriction. No charge eligibility
+or Title IV cap is changed by this reconciliation of money already issued.
 */
 posted_refund_final AS MATERIALIZED (
     SELECT i.pidm, r.*
@@ -1098,8 +1182,9 @@ posted_refund_final AS MATERIALIZED (
                 SELECT MIN(source_index.s) AS s
                 FROM GENERATE_SUBSCRIPTS(r.payment_remaining, 1) AS source_index(s)
                 WHERE r.payment_remaining[source_index.s] > 0
-                  AND i.payment_transaction_numbers[source_index.s]
-                        < i.posted_refund_transaction_numbers[r.refund_index]
+                  AND (i.posted_refund_settled_history[r.refund_index]
+                       OR i.payment_transaction_numbers[source_index.s]
+                            < i.posted_refund_transaction_numbers[r.refund_index])
             ) e
             CROSS JOIN LATERAL (
                 SELECT CASE WHEN e.s IS NULL THEN 0::numeric ELSE ROUND(LEAST(
@@ -1496,6 +1581,7 @@ joined AS (
         cp.clearing_final_eligible_date,
         v.missing_transaction_balance_count,
         COALESCE(n.negative_net_source_count, 0) AS negative_net_source_count,
+        COALESCE(n.void_review_count, 0) AS void_review_count,
         COALESCE(sc.stored_balance_difference_count, 0)
             AS stored_balance_difference_count,
         COALESCE(sc.missing_aid_balance_count, 0) AS missing_aid_balance_count,
@@ -1516,6 +1602,7 @@ joined AS (
                OR v.invalid_charge_flag_count > 0
                OR COALESCE(cp.clearing_date_review_count, 0) > 0
                OR COALESCE(n.negative_net_source_count, 0) > 0
+               OR COALESCE(n.void_review_count, 0) > 0
                OR COALESCE(fr.missing_fdpl_auth_count, 0) > 0
                OR COALESCE(fr.conflicting_fdpl_auth_count, 0) > 0
                OR COALESCE(sc.missing_aid_balance_count, 0) > 0
@@ -1785,6 +1872,8 @@ final_review AS (
                 THEN 'MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG' END,
             CASE WHEN d.negative_net_source_count > 0
                 THEN 'NEGATIVE_NET_SOURCE_REQUIRES_REVIEW' END,
+            CASE WHEN d.void_review_count > 0
+                THEN 'REFUND_VOID_REQUIRES_REVIEW' END,
             CASE WHEN d.unpaid_charge_amount > 0
                        AND d.total_refund_amount <= GREATEST(-d.full_account_balance, 0)
                 THEN 'UNPAID_CHARGES_AFTER_POLICY_ALLOCATION' END,

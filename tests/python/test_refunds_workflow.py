@@ -1066,6 +1066,182 @@ class RefundAllocationTests(unittest.TestCase):
             row["review_reasons"],
         )
 
+    @staticmethod
+    def issued_refund_then_adjustment() -> list[Transaction]:
+        return [
+            Transaction("TUIN", "C", "899", 1000, tran_number=1),
+            Transaction("OLDP", "P", "000", 2000, tran_number=2),
+            Transaction("ARFD", "C", "800", 1000, tran_number=3),
+            Transaction("NEWG", "P", "000", 500, -200, tran_number=4),
+            Transaction("ADJT", "C", "877", 300, tran_number=5),
+        ]
+
+    def test_settled_issued_refund_reconciles_after_later_charge(self) -> None:
+        for refund_code in ("ARFD", "RFND"):
+            with self.subTest(refund_code=refund_code):
+                transactions = self.issued_refund_then_adjustment()
+                transactions[2] = replace(transactions[2], detail_code=refund_code)
+                row = self.report(transactions)
+                self.assert_split(row, "0.00", "200.00")
+                self.assertEqual(row["unpaid_charge_amount"], Decimal("0.00"))
+                self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+                self.assertIn("NEWG", row["balance_sources"])
+                self.assertNotIn("OLDP", row["balance_sources"])
+                self.assertIn("POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_1000.00", row["review_reasons"])
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "review.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertTrue(sheets["Manual Reviews"].empty)
+                    self.assertEqual(sheets["Direct Deposit"].Detail_Code_Refund_Amt.sum(), 200)
+
+    def test_unsettled_or_missing_refund_balance_retains_chronology(self) -> None:
+        for balance in (1000, None):
+            with self.subTest(balance=balance):
+                transactions = self.issued_refund_then_adjustment()
+                transactions[2] = replace(transactions[2], stored_balance=balance)
+                row = self.report(transactions)
+                self.assert_unassigned_credit(row, "200.00")
+                self.assertIn("POLICY_REFUND_DIFFERS_FROM_FULL_ACCOUNT_CREDIT", row["review_reasons"])
+
+    def test_later_payment_cannot_prove_an_unfunded_unsettled_history(self) -> None:
+        row = self.report([
+            Transaction("ARFD", "C", "800", 100, 0, tran_number=1),
+            Transaction("PAY0", "P", "000", 150, -50, tran_number=2),
+        ])
+        self.assert_unassigned_credit(row, "50.00")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal("100.00"))
+
+    def test_completed_transaction_prefix_proves_later_refund_settlement(self) -> None:
+        transactions = [
+            Transaction("ARFD", "C", "800", 100, 0, tran_number=1),
+            Transaction("PAY0", "P", "000", 100, 0, tran_number=2),
+            Transaction("NEWG", "P", "000", 50, -20, tran_number=3),
+            Transaction("ADJT", "C", "877", 30, 0, tran_number=4),
+        ]
+        self.assert_split(self.report(transactions), "0.00", "20.00")
+        # Aggregate zero alone, or an unknown balance, must not establish settlement.
+        for refund_balance, payment_balance in ((10, -10), (0, None)):
+            with self.subTest(refund_balance=refund_balance, payment_balance=payment_balance):
+                unresolved = transactions.copy()
+                unresolved[0] = replace(unresolved[0], stored_balance=refund_balance)
+                unresolved[1] = replace(unresolved[1], stored_balance=payment_balance)
+                self.assert_unassigned_credit(self.report(unresolved), "20.00")
+
+    def test_multiple_issued_refunds_are_deducted_once(self) -> None:
+        row = self.report([
+            Transaction("TUIN", "C", "899", 1000, tran_number=1),
+            Transaction("OLDP", "P", "000", 2500, tran_number=2),
+            Transaction("ARFD", "C", "800", 600, tran_number=3),
+            Transaction("ARFD", "C", "800", 900, tran_number=4),
+            Transaction("NEWG", "P", "000", 500, -200, tran_number=5),
+            Transaction("ADJT", "C", "877", 300, tran_number=6),
+        ])
+        self.assert_split(row, "0.00", "200.00")
+        self.assertIn("POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_1500.00", row["review_reasons"])
+
+    def test_issued_refund_fix_retains_parent_authorization_and_hold_routes(self) -> None:
+        transactions = self.issued_refund_then_adjustment()
+        transactions[3] = replace(transactions[3], detail_code="FDPL", category="FA", title_iv="Y")
+        for auth, parent, student in (("N", "200.00", "0.00"), ("Y", "0.00", "200.00")):
+            for ed in (True, False):
+                with self.subTest(auth=auth, ed=ed):
+                    row = self.report(transactions, authorizations={"9900": auth}, active_ed=ed)
+                    self.assert_split(row, parent, student)
+                    self.assertEqual(row["proposed_parent_delivery"], "RFDP" if auth == "N" else "NONE")
+                    held = self.report(transactions, authorizations={"9900": auth},
+                                       active_ed=ed, refund_hold=True)
+                    with TemporaryDirectory() as directory:
+                        output = export_refund_report(pd.DataFrame([held]), Path(directory) / "hold.xlsx")
+                        sheets = pd.read_excel(output, sheet_name=None)
+                        self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Refund Holds"])
+        for authorizations in ({}, {"9900": ["Y", "N"]}, {"9899": "Y"}):
+            with self.subTest(authorizations=authorizations):
+                self.assert_unassigned_credit(self.report(transactions, authorizations=authorizations), "200.00")
+
+    def test_issued_refund_fix_retains_clearing_and_future_term_review(self) -> None:
+        transactions = self.issued_refund_then_adjustment()
+        transactions[3] = replace(transactions[3], detail_code="CHCK", effective_date="2099-08-30")
+        row = self.report(transactions)
+        self.assert_split(row, "0.00", "200.00")
+        self.assertEqual(row["student_refund_available_amount"], Decimal("0.00"))
+        self.assertEqual(row["student_clearing_reserve_amount"], Decimal("200.00"))
+        transactions[3] = replace(transactions[3], detail_code="CRVC", term="210010")
+        future = self.report(transactions)
+        self.assert_unassigned_credit(future, "200.00")
+        self.assertIn("FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION", future["review_reasons"])
+        with TemporaryDirectory() as directory:
+            output = export_refund_report(pd.DataFrame([future]), Path(directory) / "future.xlsx")
+            sheets = pd.read_excel(output, sheet_name=None)
+            self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Manual Reviews"])
+
+    @staticmethod
+    def voided_check_and_reissue() -> list[Transaction]:
+        return [
+            Transaction("TUIN", "C", "899", 100, tran_number=1),
+            Transaction("SCHP", "P", "890", 2100, tran_number=2),
+            Transaction("RFND", "C", "800", 2000, tran_number=3),
+            Transaction("RFDV", "C", "800", -2000, tran_number=4),
+            Transaction("ARFD", "C", "800", 2000, tran_number=5),
+            Transaction("NEWG", "P", "000", 200, -200, tran_number=6),
+        ]
+
+    def test_unique_settled_void_cancels_check_before_ach_reissue(self) -> None:
+        row = self.report(self.voided_check_and_reissue())
+        self.assert_split(row, "0.00", "200.00")
+        self.assertEqual(row["review_status"], "READY_FOR_STAFF_REVIEW")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal("0.00"))
+        self.assertIn("POSTED_STUDENT_REFUND_RECONCILED_AMOUNT_2000.00", row["review_reasons"])
+        self.assertNotIn("REFUND_VOID_REQUIRES_REVIEW", row["review_reasons"])
+
+    def test_unique_void_without_reissue_restores_only_actual_account_credit(self) -> None:
+        transactions = [row for row in self.voided_check_and_reissue() if row.detail_code != "ARFD"]
+        row = self.report(transactions)
+        self.assert_split(row, "0.00", "2200.00")
+        self.assertNotIn("POSTED_STUDENT_REFUND_RECONCILED", row["review_reasons"] or "")
+
+    def test_unproved_refund_voids_keep_recipient_split_blocked(self) -> None:
+        for label, original, void in (
+            ("orphan", None, Transaction("RFDV", "C", "800", -200, tran_number=3)),
+            ("partial", Transaction("RFND", "C", "800", 200, tran_number=2),
+             Transaction("RFDV", "C", "800", -100, tran_number=3)),
+            ("future refund", Transaction("RFND", "C", "800", 200, tran_number=4),
+             Transaction("RFDV", "C", "800", -200, tran_number=3)),
+            ("other term", Transaction("RFND", "C", "800", 200, term="209955", tran_number=2),
+             Transaction("RFDV", "C", "800", -200, tran_number=3)),
+            ("parent", Transaction("RFDP", "C", "800", 200, tran_number=2),
+             Transaction("RFDV", "C", "800", -200, tran_number=3)),
+            ("unknown balance", Transaction("RFND", "C", "800", 200, tran_number=2),
+             Transaction("RFDV", "C", "800", -200, None, tran_number=3)),
+            ("unsettled", Transaction("RFND", "C", "800", 200, 200, tran_number=2),
+             Transaction("RFDV", "C", "800", -200, -200, tran_number=3)),
+            ("positive void", Transaction("RFND", "C", "800", 200, tran_number=2),
+             Transaction("RFDV", "C", "800", 200, tran_number=3)),
+        ):
+            with self.subTest(case=label):
+                transactions = [Transaction("PAY0", "P", "000", 1000, -1000, tran_number=1), void]
+                if original:
+                    transactions.append(original)
+                row = self.report(transactions)
+                self.assertIsNone(row["student_refund_amount"])
+                self.assertIn("REFUND_VOID_REQUIRES_REVIEW", row["review_reasons"])
+
+    def test_ambiguous_or_duplicate_void_pairs_cannot_cancel_twice(self) -> None:
+        for duplicate in (
+            Transaction("ARFD", "C", "800", 200, tran_number=3),
+            Transaction("ARFD", "C", "800", 200, None, tran_number=3),
+            Transaction("RFDP", "C", "800", 200, tran_number=3),
+            Transaction("RFDV", "C", "800", -200, tran_number=5),
+        ):
+            with self.subTest(duplicate=duplicate.detail_code):
+                row = self.report([
+                    Transaction("PAY0", "P", "000", 1000, -1000, tran_number=1),
+                    Transaction("RFND", "C", "800", 200, tran_number=2),
+                    duplicate,
+                    Transaction("RFDV", "C", "800", -200, tran_number=4),
+                ])
+                self.assertIsNone(row["student_refund_amount"])
+                self.assertIn("REFUND_VOID_REQUIRES_REVIEW", row["review_reasons"])
+
     def test_bad_inputs_block_split_without_displaying_zero(self) -> None:
         missing_amount = self.report(
             self.worked_example() + [Transaction("NULL", "C", "700", None)]

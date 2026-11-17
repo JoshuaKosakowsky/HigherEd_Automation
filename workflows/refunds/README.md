@@ -212,14 +212,59 @@ is not inferred; its extraction and rules remain a separate unresolved scope.
 Before operational use, compare representative Banner accounts with fresh
 extracts, including the `889` BIKE exception and unrestricted payments.
 
-After all ordinary charges are allocated oldest-term first, posted student
-refunds with detail code `ARFD` or `RFND` reconcile against still-unused payment
-sources across the account. The refund transaction must have a higher transaction
-number than the payment it consumes. This final reconciliation bypasses priority
-matching because the money has already been issued, preventing restrictive
-payment remnants from being proposed repeatedly. Partial reconciliation is
-identified in `review_reasons`. Refund reversals are netted first. `RFDP` is not
-included in this exception.
+### Previously issued refunds and voids (0.29.3)
+
+After ordinary charges are allocated oldest-term first, posted `ARFD`/`RFND`
+student refunds are deducted once from the remaining payment sources. This
+reconciliation bypasses priority matching because the money has already been
+issued. Same-code reversals are netted first. `RFDP` remains an ordinary charge.
+
+The owner requested the 2026-11-17 correction after later charges displaced the
+funding of settled refunds in diagnostic extracts. This retains the
+[priority/recipient decision](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823)
+and addresses the observed check/void/ACH-reissue case from the
+[void-handling topic](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/33).
+The broader void cases in that issue are not all resolved by this correction.
+
+A refund may reconcile against current source remainders, including later
+payments, only when its stored balance is known zero and either:
+
+- Complete amounts show sufficient account credit immediately before it was
+  posted, ordered by transaction number; or
+- It belongs to a transaction prefix with zero cumulative charges-minus-payments,
+  all amounts present, and every individual stored balance known zero.
+
+The second condition recognizes a refund that was subsequently settled. Neither
+an aggregate zero with offsetting balances nor a missing balance proves this.
+This evidence does **not** remove additional history from allocation or change
+charge priorities, Title IV eligibility or fiscal-year caps. Unproved refunds
+retain the earlier-payment restriction. Any residual/source mismatch still
+blocks recipient assignment; the existing matched-amount review note remains.
+
+`RFDV` is excluded from ordinary charge pools. A negative void cancels only a
+unique earlier `ARFD`/`RFND` with the same term and exact surviving amount, with
+both stored balances known zero. The match must be unique in both directions.
+A possible equal-amount parent refund or another matching student refund with an
+unknown/unsettled balance prevents automatic pairing. A later reissue remains a
+separate issued refund. Partial, unmatched, ambiguous,
+duplicate, positive, cross-term, parent, or unsettled voids block the split with
+`REFUND_VOID_REQUIRES_REVIEW`; no original-refund link is inferred.
+
+Synthetic acceptance examples (all balances known zero unless specified):
+
+| Transactions in posting order | Expected result |
+| --- | --- |
+| Tuition $1,000; payment $2,000; issued refund $1,000; new grant $500 with -$200 stored balance; later charge $300 | Student credit $200 from the new grant; the prior refund is deducted once. |
+| Same history, but the issued refund balance is missing or $1,000 | Recipient amounts remain undetermined; later payment does not bypass the unresolved refund. |
+| Refund $100; payment $100, both settled; new grant $50 with -$20 balance; charge $30 | Completed transaction prefix proves settlement; student credit $20. Offsetting/unknown prefix balances do not qualify. |
+| Tuition $100; scholarship $2,100; RFND $2,000; RFDV -$2,000; ARFD $2,000; new grant $200 with -$200 balance | Cancel the unique check/void pair, count the ACH reissue once, and propose $200. |
+| Same check with an RFDV of only -$1,000, or two possible matching refunds | Manual Reviews; no guessed cancellation. |
+| New credit depends on a payment assigned to a term after the target term | Manual Reviews with future-term activity excluded, regardless of its effective date. |
+
+Parent PLUS authorization, RH/third-party/housing controls, missing-data checks,
+net-credit and Title IV exceptions, clearing reserves, check minimums, addresses,
+and original-method delivery rules remain in force. Active ED selects DD only
+for an otherwise determined student portion.
 
 Only each unused ACH/card source remainder routes to Transact. Remaining aid,
 scholarship, and PLUS funds authorized for the student use the student's normal

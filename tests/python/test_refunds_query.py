@@ -168,7 +168,8 @@ class RefundsQueryContractTests(unittest.TestCase):
               "al.included_balance": -100},
              {"fr.missing_fdpl_auth_count": 1, "fr.conflicting_fdpl_auth_count": 1,
               "sc.missing_aid_balance_count": 1, "bs.balance_source_credit_total": 101,
-              "al.included_balance": -99, "v.invalid_charge_flag_count": 1}),
+              "al.included_balance": -99, "v.invalid_charge_flag_count": 1,
+              "v.future_term_count": 1, "n.void_review_count": 1}),
             ("review", "CASE WHEN j.refund_split_blocked_ind = 'Y'", " AS allocation_review_required_ind",
              {"j.refund_split_blocked_ind": "N", "j.total_refund_amount": 100,
               "j.balance_source_credit_total": 100, "j.full_account_balance": -100},
@@ -215,6 +216,54 @@ class RefundsQueryContractTests(unittest.TestCase):
                     (refund, balance, blocked),
                 ).fetchone()[0]
                 self.assertEqual(actual, expected)
+
+    def test_posted_refund_history_and_void_matching_execute_without_server(self) -> None:
+        start = self.query.index("refund_history_balances AS MATERIALIZED (")
+        end = self.query.index("net_source_checks AS MATERIALIZED (", start)
+        fragment = self.query[start:end].rstrip().removesuffix(",")
+        fragment = fragment.replace("p.target_term::integer", "CAST(p.target_term AS integer)")
+        statement = """WITH params AS (SELECT '209980' AS target_term),
+            allocation_transactions AS (
+                SELECT * FROM candidate_transactions WHERE term_sort <= 209980
+            ), """ + fragment
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.create_function("GREATEST", 2, max)
+        database.create_function("LEAST", 2, min)
+        database.execute("""CREATE TABLE candidate_transactions (
+            pidm int, term_code text, term_sort int, tran_number int,
+            detail_code text, raw_amount numeric, raw_transaction_balance numeric,
+            accounting_amount numeric, amount_missing_ind int, is_charge bool
+        )""")
+        normal = python_cases.RefundAllocationTests.issued_refund_then_adjustment()
+        voided = python_cases.RefundAllocationTests.voided_check_and_reissue()
+        cases = [
+            ("funded", normal, [(3, 1000, 1)], []),
+            ("void/reissue", voided, [(5, 2000, 1)], []),
+            ("unsettled", [replace(t, stored_balance=1000) if t.tran_number == 3 else t
+                           for t in normal], [(3, 1000, 0)], []),
+            ("unfunded", [python_cases.Transaction("ARFD", "C", "800", 100, tran_number=1),
+                          python_cases.Transaction("PAY0", "P", "000", 150, -50, tran_number=2)],
+             [(1, 100, 0)], []),
+            ("later settled", [python_cases.Transaction("ARFD", "C", "800", 100, tran_number=1),
+                               python_cases.Transaction("PAY0", "P", "000", 100, tran_number=2),
+                               python_cases.Transaction("NEWG", "P", "000", 50, -50, tran_number=3)],
+             [(1, 100, 1)], []),
+            ("partial void", [replace(t, amount=-1000) if t.detail_code == "RFDV" else t
+                              for t in voided], [(3, 2000, 1), (5, 2000, 0)], [(1, 1)]),
+        ]
+        for label, transactions, expected, void_checks in cases:
+            with self.subTest(case=label):
+                database.execute("DELETE FROM candidate_transactions")
+                database.executemany("INSERT INTO candidate_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+                    (1, t.term, int(t.term), t.tran_number, t.detail_code, t.amount,
+                     t.stored_balance, -t.amount if t.type_ind == "P" else t.amount,
+                     int(t.amount is None), t.type_ind == "C") for t in transactions
+                ])
+                actual = database.execute(statement + " SELECT tran_number, refund_amount, settled_history "
+                                          "FROM posted_refund_sources ORDER BY tran_number").fetchall()
+                self.assertEqual(actual, expected)
+                self.assertEqual(database.execute(statement + " SELECT * FROM refund_void_checks").fetchall(), void_checks)
 
     def test_standalone_policy_matches_maintained_snapshot(self) -> None:
         self.assertEqual(self.query.count("/* BEGIN GENERATED NON-ALLOWABLE CODES */"), 1)
