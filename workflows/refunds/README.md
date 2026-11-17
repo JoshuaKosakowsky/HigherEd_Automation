@@ -55,6 +55,23 @@ refund proposal. The exception is unused Title IV funding with confirmed
 Non-Allowable Charges still owed, as described below. These accounts may have
 a negative, zero, or positive full-account balance.
 
+From **0.29.2**, a fully settled account is excluded before allocation when
+charges minus payments across its complete history equal zero, all transaction
+amounts are present, and **every individual stored transaction balance is present
+and zero**. This includes the current term and respects completed manual cash
+applications instead of reconstructing an already resolved late-fee refund.
+Offsetting balances such as a $40 fee and a -$40 aid balance do not qualify,
+even when they occur within the same detail-code group. A real account credit,
+missing amount, or missing balance also cannot satisfy the settlement check.
+
+The owner confirmed this settlement rule and that Trans Paid is sparse and not
+required evidence of the staff correction. The check uses the resulting balances;
+it does not require a Trans Paid value or date and does not validate application
+links. Use fresh, complete extracts after corrections have reached Insights.
+Existing extraction completeness checks remain in place. For accounts that are
+not fully settled, the [priority and recipient rules](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823)
+continue to determine the proposed refund and its recipient.
+
 `full_account_balance` remains charges minus payments across all history,
 including refunds already posted. Normally `total_refund_amount` is the account's
 net credit. If all remaining unpaid charges are explicitly Non-Allowable, add
@@ -100,6 +117,9 @@ Synthetic acceptance examples:
 | Prior-term charges $200; current charges $1,000; current scholarship $500 at 000 followed by PLUS $800 at 800; Banner shows $100 unused on scholarship and $0 on PLUS | Recalculation leaves $100 on PLUS. Authorization N routes $100 to Refund to Parent with or without ED; Y routes it to Direct Deposit with ED, otherwise Refund by Check. Stored-balance difference is informational. |
 | Same example with missing, conflicting, or wrong-aid-year PLUS authorization | $100 net credit remains on Manual Reviews with recipient amounts undetermined. |
 | Same example with an RH hold | The entire $100 stays on Refund Holds for either authorized recipient. |
+| Earlier charges/cash $200 each; current tuition $1,000, LPPF $40 and Title IV $1,040; all individual balances zero after staff applications | Exclude the fully settled account, including current-term activity; no refund row on any tab. Trans Paid is not required. |
+| Same example with LPPF balance $40 and aid balance -$40 | Keep the account for allocation: proposed Title IV refund $40 and unpaid LPPF $40, subject to existing delivery/review rules. |
+| Same example with a missing transaction balance or amount | Do not treat the account as fully settled; retain existing missing-data checks. |
 | Old-FY charges $1,000; newer Title IV payment $1,200, of which the configured cap applies $200 | Net credit $200 goes to manual review with no recipient/delivery; reconstructed unused $1,000 is diagnostic only. |
 | Tuition $1,000; LPPF $100 marked Non-Allowable; Pell $1,200 with $200 unapplied | Refund $200; $100 remains owed; new column identifies the balance. |
 | Same example with LPPF $200 or $300 | Refund $200 even though the starting account balance is zero or positive; $200 or $300 remains owed. |

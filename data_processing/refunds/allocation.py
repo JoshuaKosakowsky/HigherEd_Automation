@@ -846,6 +846,11 @@ def _allocate_account(
         for row in transactions
     )
     missing_amount_count = sum(row["amount_missing"] for row in transactions)
+    # Respect completed applications across the whole account, including the
+    # current term. Offsetting nonzero row balances do not prove settlement.
+    if (full_balance == ZERO and not missing_amount_count
+            and all(row["stored_balance"] == ZERO for row in transactions)):
+        return None
     negative_source_count = sum(row["raw_amount"] < 0 for row in transactions)
     invalid_term_count = sum(row["raw_amount"] != 0 and row["term_sort"] is None for row in transactions)
     future_term_count = sum(

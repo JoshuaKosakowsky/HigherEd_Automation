@@ -77,6 +77,43 @@ class RefundsQueryContractTests(unittest.TestCase):
         self.assertIn("RAW_TRANSACTION_BALANCE IS DISTINCT FROM 0", history)
         self.assertIn("CUMULATIVE_BALANCE = 0 AND UNRESOLVED_PREFIX = 0", history)
 
+    def test_whole_account_settlement_uses_individual_balances_and_known_amounts(self) -> None:
+        start = self.query.index("account_balance_rollup AS (")
+        end = self.query.index("\n/*", start)
+        # Execute the production account screening CTEs. MAX of boolean inputs
+        # is SQLite's equivalent of PostgreSQL BOOL_OR for these non-null flags.
+        query = "WITH " + self.query[start:end].rstrip().removesuffix(",")
+        query = query.replace("BOOL_OR(", "MAX(")
+        query += " SELECT pidm FROM account_balances ORDER BY pidm"
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.execute("""CREATE TABLE screening_transactions (
+            pidm int, accounting_amount numeric, type_ind text, is_payment bool,
+            is_title_iv int, raw_amount numeric, is_charge bool,
+            non_allowable_charge_ind text, raw_transaction_balance numeric,
+            amount_missing_ind int, activity_date text)
+        """)
+        for pidm, fee_balance, aid_balance, aid_amount in (
+            (1, 0, 0, 1040),       # Fully settled, including the current term.
+            (2, 40, -40, 1040),    # Zero total, two unresolved transactions.
+            (3, None, 0, 1040),    # Missing charge balance.
+            (4, 0, None, 1040),    # Missing aid balance.
+            (5, 0, 0, 1050),       # Real net credit despite zero row balances.
+            (6, 0, 0, 1040),       # Additional missing amount below.
+            (7, 0, 0, 1040),       # Additional offsetting rows below.
+        ):
+            database.executemany("INSERT INTO screening_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+                (pidm, 1000, "C", False, 0, 1000, True, "N", 0, 0, "2099-08-31"),
+                (pidm, 40, "C", False, 0, 40, True, "Y", fee_balance, 0, "2099-08-31"),
+                (pidm, -aid_amount, "P", True, 1, aid_amount, False, None, aid_balance, 0, "2099-08-31"),
+            ])
+        database.executemany("INSERT INTO screening_transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+            (6, 0, "C", False, 0, 0, True, "N", 0, 1, "2099-08-31"),
+            (7, 40, "C", False, 0, 40, True, "Y", 40, 0, "2099-08-31"),
+            (7, -40, "C", False, 0, -40, True, "Y", -40, 0, "2099-08-31"),
+        ])
+        self.assertEqual([row[0] for row in database.execute(query)], [2, 3, 4, 5, 6, 7])
+
     def test_title_iv_exception_retains_source_reconciliation(self) -> None:
         totals = self.section("refund_totals AS", "joined AS")
         self.assertIn("UC.UNPAID_CHARGE_AMOUNT = UC.NON_ALLOWABLE_BALANCE", totals)

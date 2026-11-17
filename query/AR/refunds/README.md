@@ -217,6 +217,17 @@ term and priority; no fiscal-year deficit becomes an unrestricted synthetic
 charge. Stored balances provide settlement evidence and diagnostics. They
 do not cap reconstructed aid-source remainders or determine refund ownership.
 
+From **0.29.2**, both Python and the standalone report first exclude fully settled
+accounts: the full-history charges-minus-payments total must be zero, every amount
+must be present, and every individual stored balance must be present and zero.
+This check includes the current term. A zero sum of offsetting nonzero balances
+does not qualify, and a real net credit is not excluded merely because all stored
+balances are zero. Trans Paid values/dates are not required. This honors the
+owner-confirmed completed staff applications; use refreshed complete source data
+after corrections. The [workflow rule and synthetic examples](../../../workflows/refunds/README.md#population-and-refund-amounts)
+document the settlement decision. The extracts still retain complete histories
+for candidate accounts; Python applies the final exclusion locally.
+
 ### Classification and priority
 
 `TBBDETC_TIV_IND = 'Y'` classifies Title IV and overrides category. Non-Title-IV

@@ -476,6 +476,66 @@ class RefundAllocationTests(unittest.TestCase):
         self.assertIn("P000", str(row["balance_sources"]))
         self.assertNotIn("P899", str(row["balance_sources"]))
 
+    @staticmethod
+    def settled_late_fee_example() -> list[Transaction]:
+        # Earlier cash was manually applied to the late fee. The resulting
+        # settled row balances are authoritative; Trans Paid is not required.
+        return [
+            Transaction("OLD", "C", "899", 200, term="209910"),
+            Transaction("CASH", "P", "000", 200, term="209910"),
+            Transaction("TUIN", "C", "899", 1000),
+            Transaction("LPPF", "C", "789", 40, non_allowable="Y"),
+            Transaction("PELL", "P", "800", 1040, category="FAG", title_iv="Y"),
+        ]
+
+    def test_fully_settled_account_including_current_term_is_excluded(self) -> None:
+        for term in ("209980", "209910"):
+            with self.subTest(term=term):
+                rows = [replace(t, term=term) for t in self.settled_late_fee_example()]
+                self.report(rows, expected_rows=0)
+        self.report(self.settled_late_fee_example(), expected_rows=0)
+
+    def test_offsetting_row_balances_keep_zero_net_account_in_review(self) -> None:
+        rows = self.settled_late_fee_example()
+        rows[-2] = replace(rows[-2], stored_balance=40)
+        rows[-1] = replace(rows[-1], stored_balance=-40)
+        row = self.report(rows)
+        self.assertEqual(row["full_account_balance"], Decimal(0))
+        self.assert_split(row, "0.00", "40.00")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal(40))
+        self.assertEqual(row["title_iv_balance_due_note"], "Yes")
+
+    def test_settlement_checks_rows_before_detail_code_balances_are_netted(self) -> None:
+        rows = self.settled_late_fee_example() + [
+            Transaction("LPPF", "C", "789", 40, 40, non_allowable="Y"),
+            Transaction("LPPF", "C", "789", -40, -40, non_allowable="Y"),
+        ]
+        row = self.report(rows)
+        self.assertEqual(row["total_refund_amount"], Decimal(40))
+        self.assertEqual(row["unpaid_charge_amount"], Decimal(40))
+
+    def test_missing_balances_or_amounts_do_not_prove_settlement(self) -> None:
+        for index in (0, -2, -1):
+            with self.subTest(missing_balance_index=index):
+                rows = self.settled_late_fee_example()
+                rows[index] = replace(rows[index], stored_balance=None)
+                row = self.report(rows)
+                self.assertEqual(row["review_status"], "MANUAL_REVIEW")
+                self.assertIn("MISSING_TRANSACTION_BALANCE", row["review_reasons"])
+        row = self.report(self.settled_late_fee_example() + [
+            Transaction("MISS", "C", "899", None),
+        ])
+        self.assert_unassigned_credit(row, "40.00")
+        self.assertIn("MISSING_TRANSACTION_AMOUNT", row["review_reasons"])
+
+    def test_zero_stored_balances_do_not_hide_actual_account_credit(self) -> None:
+        rows = self.settled_late_fee_example()
+        rows[-1] = replace(rows[-1], amount=1050)
+        row = self.report(rows)
+        self.assertEqual(row["full_account_balance"], Decimal(-10))
+        self.assert_split(row, "0.00", "50.00")
+        self.assertEqual(row["unpaid_charge_amount"], Decimal(40))
+
     def test_exact_priority_offsets_on_zero_account_are_excluded(self) -> None:
         for term in ("209980", "209880"):
             with self.subTest(term=term):

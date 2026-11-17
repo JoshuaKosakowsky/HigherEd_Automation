@@ -327,6 +327,8 @@ account_balance_rollup AS (
             AS title_iv_payment_count,
         COUNT(*) FILTER (WHERE is_charge AND non_allowable_charge_ind = 'Y' AND raw_amount > 0)
             AS non_allowable_charge_count,
+        COUNT(*) FILTER (WHERE raw_transaction_balance IS DISTINCT FROM 0
+                            OR amount_missing_ind = 1) AS unsettled_transaction_count,
         MAX(activity_date) AS last_ar_activity_date
     FROM screening_transactions
     GROUP BY pidm
@@ -335,6 +337,9 @@ account_balances AS MATERIALIZED (
     SELECT pidm, full_account_balance, last_ar_activity_date
     FROM account_balance_rollup
     WHERE NOT has_unclassified_detail_type
+      /* Respect completed applications, including current-term settlement.
+         A zero SUM of offsetting row balances is not sufficient. */
+      AND NOT (full_account_balance = 0 AND unsettled_transaction_count = 0)
       AND (full_account_balance < 0
            OR (title_iv_payment_count > 0 AND non_allowable_charge_count > 0))
 ),
