@@ -14,6 +14,7 @@ from data_processing.population_testing.config import (
 
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode
 from app.gui.services.canadian_tax import run_canadian_tax
+from app.gui.services.csmf_loans import run_csmf_loans
 from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
 from app.gui.services.wf_mines_balance_recon import run_wf_mines_balance_recon
 from app.gui.services.population_testing import run_population_testing
@@ -42,6 +43,28 @@ def _last_completed_fiscal_year() -> str:
 
 
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
+    WorkflowDefinition(
+        workflow_id="csmf_loans", name="CSMF Loans — R1",
+        description="Build loan activity worksheets from Workday uploads and saved FY opening balances. Includes all uploaded months; 1621 classification and full Current Recon calculations are deferred.",
+        category="Accounts Receivable", runner=run_csmf_loans, cancellable=True,
+        parameters=(
+            ParameterDefinition(key="fiscal_year", label="Fiscal year (ending year)", kind=ParameterKind.INTEGER,
+                minimum=1900, maximum=9998,
+                default_factory=lambda: _previous_month_end().year + (_previous_month_end().month >= 7),
+                help_text="FY2027 means July 2026–June 2027. Upload all months you want displayed for this FY; previous output workbooks are not used."),
+            ParameterDefinition(key="journal_file", label="Find Journal Lines - GA", kind=ParameterKind.INPUT_FILE,
+                file_types=(("Workday exports", "*.xlsx *.xlsm *.csv"),),
+                help_text="The source for all current and prior-period activity. Accounting Date identifies each transaction's month."),
+            ParameterDefinition(key="trial_balance_file", label="Trial Balance (new or replacement opening balances)",
+                kind=ParameterKind.INPUT_FILE, required=False,
+                file_types=(("Workday exports", "*.xlsx *.xlsm *.csv"),),
+                help_text="Required only if this FY has no saved opening balances. A replacement updates the shared balances and timestamp after a successful run. Review & run shows the values before saving."),
+            ParameterDefinition(key="output_file", label="Save CSMF workbook as", kind=ParameterKind.OUTPUT_FILE,
+                default_factory=lambda: PROJECT_ROOT / "data" / f"CSMF_R1_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
+                help_text="Choose an existing output folder and a new filename. Sources and existing output are never overwritten."),
+        ),
+    ),
     WorkflowDefinition(
         workflow_id="refresh_detail_codes", name="Refresh Banner Detail Codes",
         description="Refresh the shared charge/payment classifications and categories used by Historical Trends directly from Banner. Validates the complete result before replacing the shared reference.",

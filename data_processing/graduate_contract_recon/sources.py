@@ -2,24 +2,21 @@
 
 from __future__ import annotations
 
-import csv
-import math
 import re
-from dataclasses import dataclass, field
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import load_workbook
-from openpyxl.utils.datetime import from_excel
 
-from data_processing.shared.tgiaccd import clean_tgiaccd_header
+from data_processing.shared.source_exports import (
+    CENT, ZERO, SourceData, fiscal_scope, header_key, match_columns, money,
+    parse_date, read_source_table, text,
+)
 from shared.insights.banner_activity import BannerActivityParameters
 
 
-ZERO = Decimal("0.00")
-CENT = Decimal("0.01")
 STUDENT_PATTERN = re.compile(r"(?<!\d)10\d{6}(?!\d)")
 ALIASES = {
     "date": ("Accounting Date",), "kind": ("Journal Source", "Source"),
@@ -42,68 +39,12 @@ REQUIRED = {
 }
 
 
-def header_key(value: object) -> str:
-    return re.sub(r"[^a-z0-9]", "", clean_tgiaccd_header(value).casefold())
-
-
-def text(value: object) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    if isinstance(value, (float, Decimal)) and math.isfinite(value) and value == int(value):
-        return str(int(value))
-    return str(value).strip()
-
-
 def reference(value: object) -> str:
     value = text(value)
     # Numeric export cells and text such as 12345.0 represent the same document.
     if re.fullmatch(r"[0-9]+\.0+", value):
         value = value.split(".")[0]
     return " ".join(value.split()).upper()
-
-
-def fiscal_scope(day: date) -> tuple[int, str, str]:
-    """Match shared/fiscal_period.ps1: July P01, June P12, ending-year FY."""
-    year = day.year + (day.month >= 7)
-    period = (day.month + 5) % 12 + 1
-    return year, f"P{period:02d}", f"Q{(period - 1) // 3 + 1}"
-
-
-def parse_date(value: object) -> date:
-    if isinstance(value, datetime):
-        return value.date()
-    if type(value) is date:
-        return value
-    if isinstance(value, (float, int)) and not isinstance(value, bool):
-        if not 1 <= value <= 2958465:
-            raise ValueError("Invalid date")
-        return from_excel(value).date()
-    value = text(value)
-    try:
-        # Preserve the source calendar date rather than shifting time zones.
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
-    except ValueError:
-        for pattern in ("%m/%d/%Y", "%m/%d/%y", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p"):
-            try:
-                return datetime.strptime(value, pattern).date()
-            except ValueError:
-                continue
-    raise ValueError("Invalid date")
-
-
-def money(value: object, *, blank_zero: bool = False) -> Decimal:
-    value = text(value)
-    if not value and blank_zero:
-        return ZERO
-    if value.startswith("(") and value.endswith(")"):
-        value = "-" + value[1:-1]
-    try:
-        amount = Decimal(value.replace(",", "").replace("$", ""))
-        if not amount.is_finite() or amount != amount.quantize(CENT):
-            raise ValueError("Amount must have cents precision")
-        return amount.quantize(CENT)
-    except (InvalidOperation, ValueError):
-        raise ValueError("Invalid amount or cents precision") from None
 
 
 def student_id(value: object) -> str:
@@ -116,77 +57,14 @@ def leading_student(value: object) -> str:
     return match[1] if match else ""
 
 
-@dataclass
-class SourceData:
-    source: str
-    label: str
-    headers: list[str]
-    rows: list[tuple[int, list[object]]]
-    columns: dict[str, int]
-    dispositions: dict[int, str] = field(default_factory=dict)
-
-    def value(self, row: list[object], name: str) -> object:
-        col = self.columns.get(name)
-        return row[col] if col is not None and col < len(row) else None
-
-
 def _columns(headers: list[object], source: str) -> dict[str, int] | None:
-    keys = [header_key(value) for value in headers]
-    columns = {}
-    for name, choices in ALIASES.items():
-        matches = [keys.index(header_key(choice)) for choice in choices if header_key(choice) in keys]
-        if matches:
-            # Two financial aliases in one source could mean pre-manipulated data.
-            if name in REQUIRED[source] and len(set(matches)) > 1:
-                raise ValueError(f"{source} has ambiguous columns for {choices[0]}.")
-            columns[name] = matches[0]
-    if not all(name in columns for name in REQUIRED[source]):
-        return None
-    populated = [key for key in keys if key]
-    if len(populated) != len(set(populated)):
-        raise ValueError(f"{source} has duplicate column headers.")
-    return columns
+    return match_columns(headers, source, ALIASES, REQUIRED[source])
 
 
 def read_source(path: Path, source: str) -> SourceData:
-    """Locate one matching source sheet, including exports with title rows."""
     if source not in REQUIRED:
         raise ValueError("Unknown reconciliation source.")
-    candidates = []
-
-    def inspect(name, values):
-        iterator = iter(values)
-        for row_number, row in enumerate(iterator, 1):
-            if row_number > 30:
-                break
-            columns = _columns(list(row), source)
-            if columns is not None:
-                headers = [text(value) for value in row]
-                candidates.append(SourceData(source, f"{path.name} / {name}", headers,
-                    [(number, list(values)) for number, values in enumerate(iterator, row_number + 1)], columns))
-                break
-
-    if path.suffix.lower() == ".csv":
-        with path.open(encoding="utf-8-sig", newline="") as handle:
-            inspect("CSV", csv.reader(handle))
-    elif path.suffix.lower() in {".xlsx", ".xlsm"}:
-        book = load_workbook(path, read_only=True, data_only=False)
-        try:
-            for sheet in book:
-                # Some Workday exports declare A1 as the used range despite
-                # containing a full report. Read actual cells, not that metadata.
-                sheet.reset_dimensions()
-                inspect(sheet.title, sheet.iter_rows(values_only=True))
-        finally:
-            book.close()
-    else:
-        raise ValueError(f"{source} must be an XLSX, XLSM, or CSV export.")
-    if not candidates:
-        needed = ", ".join(ALIASES[name][0] for name in REQUIRED[source])
-        raise ValueError(f"No {source} source sheet with the required headers: {needed}. Upload the original export.")
-    if len(candidates) != 1:
-        raise ValueError(f"Multiple {source} source sheets found. Upload a workbook with only one matching source sheet.")
-    return candidates[0]
+    return read_source_table(path, source, ALIASES, REQUIRED[source])
 
 
 def banner_from_frame(frame: pd.DataFrame) -> SourceData:
