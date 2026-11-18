@@ -576,14 +576,28 @@ recent_tppy_review AS MATERIALIZED (
     GROUP BY x.pidm
 ),
 
+/* Full-history term balances support ownership and future-credit review. */
+account_term_balances AS MATERIALIZED (
+    SELECT pidm, term_code, MAX(term_sort) AS term_sort,
+        ROUND(SUM(accounting_amount), 2) AS term_balance,
+        BOOL_OR(amount_missing_ind = 1 OR accounting_amount IS NULL) AS amount_unknown,
+        BOOL_OR(detail_code = 'TPPY') AS has_tppy
+    FROM candidate_transactions
+    GROUP BY pidm, term_code
+),
 /* Any TPPY history with a same-term credit is reviewed, even fully reversed. */
 tppy_credit_term_review AS MATERIALIZED (
     SELECT pidm
-    FROM candidate_transactions
-    GROUP BY pidm, term_code
-    HAVING BOOL_OR(detail_code = 'TPPY')
-       AND (ROUND(SUM(accounting_amount), 2) < 0
-            OR BOOL_OR(amount_missing_ind = 1 OR accounting_amount IS NULL))
+    FROM account_term_balances
+    WHERE has_tppy AND (term_balance < 0 OR amount_unknown)
+),
+future_term_credit_review AS MATERIALIZED (
+    SELECT DISTINCT t.pidm
+    FROM account_term_balances t
+    CROSS JOIN params p
+    WHERE t.term_sort > CAST(p.target_term AS integer)
+      AND NOT t.amount_unknown
+      AND t.term_balance < 0
 ),
 
 /* Clearing uses original surviving payments, including applied/settled history. */
@@ -1573,6 +1587,7 @@ joined AS (
         v.negative_source_count,
         v.invalid_term_count,
         v.future_term_count,
+        fc.pidm IS NOT NULL AS future_term_credit,
         v.invalid_charge_flag_count,
         COALESCE(cp.clearing_payment_amount, 0) AS clearing_payment_amount,
         COALESCE(cp.clearing_payment_count, 0) AS clearing_payment_count,
@@ -1693,6 +1708,7 @@ joined AS (
     LEFT JOIN net_source_checks n ON n.pidm = b.pidm
     LEFT JOIN stored_balance_comparison sc ON sc.pidm = b.pidm
     LEFT JOIN term_balance_summary tb ON tb.pidm = b.pidm
+    LEFT JOIN future_term_credit_review fc ON fc.pidm = b.pidm
     LEFT JOIN allocation_transfer_summary ts ON ts.pidm = b.pidm
     LEFT JOIN posted_refund_summary pr ON pr.pidm = b.pidm
     LEFT JOIN allocation_ledger al ON al.pidm = b.pidm
@@ -1868,6 +1884,7 @@ final_review AS (
                 THEN 'UNRECOGNIZED_TERM_CODE' END,
             CASE WHEN d.future_term_count > 0
                 THEN 'FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION' END,
+            CASE WHEN d.future_term_credit THEN 'FUTURE_TERM_CREDIT' END,
             CASE WHEN d.invalid_charge_flag_count > 0
                 THEN 'MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG' END,
             CASE WHEN d.negative_net_source_count > 0

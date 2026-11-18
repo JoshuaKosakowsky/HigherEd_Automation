@@ -1172,7 +1172,74 @@ class RefundAllocationTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             output = export_refund_report(pd.DataFrame([future]), Path(directory) / "future.xlsx")
             sheets = pd.read_excel(output, sheet_name=None)
-            self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Manual Reviews"])
+            self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Future Term"])
+
+    def test_future_term_credit_is_withheld_even_with_backdated_payment(self) -> None:
+        transactions = [
+            Transaction("TUIN", "C", "899", 1000),
+            Transaction("PAY0", "P", "000", 1000),
+            Transaction("ACHK", "P", "000", 500, -500, term="210010"),
+        ]
+        for active_ed in (False, True):
+            with self.subTest(active_ed=active_ed):
+                row = self.report(transactions, active_ed=active_ed)
+                self.assert_unassigned_credit(row, "500.00")
+                self.assertIn("FUTURE_TERM_CREDIT", row["review_reasons"].split("; "))
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "future.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual([name for name, frame in sheets.items() if not frame.empty], ["Future Term"])
+                    future = sheets["Future Term"].iloc[0]
+                    self.assertEqual(future["Detail_Code_Delivery"], "REVIEW REQUIRED")
+                    self.assertEqual(future["Detail_Code_Refund_Amt"], 500)
+                    self.assertIn("do not issue any refund", future["Detail_Code_Note"])
+
+    def test_future_term_credit_nets_each_term_without_treating_debt_as_credit(self) -> None:
+        current = [Transaction("PAY0", "P", "000", 200, -200)]
+        payment = Transaction("PAY1", "P", "000", 100, -100, term="210010")
+        charge = Transaction("TUIN", "C", "899", 100, 100, term="210010")
+        cases = [
+            ("current only", [], False, "Direct Deposit"),
+            ("future debt", [charge], False, "Manual Reviews"),
+            ("future zero", [charge, payment], False, "Manual Reviews"),
+            ("reversed payment", [payment, replace(payment, amount=-100, stored_balance=100)], False, "Manual Reviews"),
+            ("one cent credit", [replace(charge, amount="99.99"), payment], True, "Future Term"),
+            ("one cent debt", [replace(charge, amount="100.01"), payment], False, "Manual Reviews"),
+            ("separate future terms", [payment, replace(charge, term="210055")], True, "Future Term"),
+            ("unknown future amount", [payment, replace(charge, amount=None)], False, "Manual Reviews"),
+            ("unknown future balance", [replace(payment, stored_balance=None)], True, "Future Term"),
+            ("invalid term", [replace(payment, term="210099")], False, "Manual Reviews"),
+        ]
+        for label, future, flagged, expected_sheet in cases:
+            with self.subTest(case=label):
+                row = self.report(current + future)
+                self.assertEqual("FUTURE_TERM_CREDIT" in str(row["review_reasons"]).split("; "), flagged)
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "terms.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual([name for name, frame in sheets.items() if not frame.empty], [expected_sheet])
+                    self.assertEqual(Decimal(str(sheets[expected_sheet].iloc[0]["Detail_Code_Refund_Amt"])),
+                                     row["total_refund_amount"])
+
+    def test_future_term_withholds_whole_account_and_preserves_hold_and_review_reasons(self) -> None:
+        transactions = [
+            Transaction("FDPL", "P", "800", 100, -100, category="FA", title_iv="Y"),
+            Transaction("HOMP", "C", "000", 50, 50),
+            Transaction("TPPY", "P", "000", 500, -500, term="210010"),
+        ]
+        for held, expected_sheet in ((False, "Future Term"), (True, "Refund Holds")):
+            with self.subTest(held=held):
+                row = self.report(transactions, refund_hold=held)
+                self.assertIsNone(row["student_refund_amount"])
+                self.assertIsNone(row["parent_refund_amount"])
+                self.assertEqual(row["third_party_review_required_ind"], "Y")
+                self.assertIn("Mines Park Charge - Review", row["review_reasons"])
+                self.assertIn("FUTURE_TERM_CREDIT", row["review_reasons"].split("; "))
+                with TemporaryDirectory() as directory:
+                    output = export_refund_report(pd.DataFrame([row]), Path(directory) / "reviews.xlsx")
+                    sheets = pd.read_excel(output, sheet_name=None)
+                    self.assertEqual([name for name, frame in sheets.items() if not frame.empty], [expected_sheet])
+                    self.assertEqual(sheets[expected_sheet].iloc[0]["Detail_Code_Refund_Amt"], 550)
 
     @staticmethod
     def voided_check_and_reissue() -> list[Transaction]:
@@ -2326,6 +2393,9 @@ class RefundExtractTests(unittest.TestCase):
             account("TEST-SMALL-CARD", 5, delivery="CRVC (Transact)"),
             account("TEST-RESERVED", 50, delivery="NONE", student_refund_available_amount=Decimal(0),
                     student_clearing_reserve_amount=Decimal(50)),
+            account("TEST-FUTURE", total_refund_amount=Decimal(100),
+                    student_refund_amount=None, parent_refund_amount=None,
+                    review_reasons="FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION; FUTURE_TERM_CREDIT"),
             account("TEST-SYS", 90, delivery="ARFD (System)",
                     active_ed_ind="Y", ed_activity_date=datetime(2099, 8, 31, 12, 30),
                     review_status="WAIT_CHECK_CLEARING",
@@ -2357,6 +2427,7 @@ class RefundExtractTests(unittest.TestCase):
             "Refund to Parent": {"TEST-MIX": 75, "TEST-SMALL-MIX": 5},
             "Direct Deposit": {"TEST-SYS": 90, "TEST-WAIT": 60, "TEST-SMALL-ED": 5},
             "Refund Holds": {"TEST-HOLD": 50},
+            "Future Term": {"TEST-FUTURE": 100},
             "Payment Clearing": {"TEST-RESERVED": 50},
             "ACH Clearing": {"TEST-WAIT": 40},
             "ACH Reviews": {"TEST-OLD": 15, "TEST-DATE": 10},

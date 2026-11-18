@@ -194,6 +194,42 @@ class RefundsQueryContractTests(unittest.TestCase):
                     result = database.execute(f"SELECT {expression} FROM " + " CROSS JOIN ".join(sources), parameters).fetchone()[0]
                     self.assertEqual(result, "Y" if changed else "N")
 
+    def test_future_credit_and_tppy_term_balances_execute_without_server(self) -> None:
+        start = self.query.index("account_term_balances AS MATERIALIZED (")
+        end = self.query.index("/* Clearing uses original surviving payments", start)
+        fragment = self.query[start:end].rstrip().removesuffix(",")
+        # SQLite MAX is equivalent to BOOL_OR for these non-null test flags.
+        statement = "WITH params AS (SELECT '209980' AS target_term), " + fragment.replace("BOOL_OR(", "MAX(")
+        database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
+        database.execute("""CREATE TABLE candidate_transactions (
+            pidm int, term_code text, term_sort int, accounting_amount numeric,
+            amount_missing_ind int, detail_code text)
+        """)
+        database.executemany("INSERT INTO candidate_transactions VALUES (?, ?, ?, ?, ?, ?)", [
+            (1, "210010", 210010, -100, 0, "PAY0"),  # Credit in a future term.
+            (2, "210010", 210010, 100, 0, "TUIN"),   # Debt is not credit.
+            (3, "210010", 210010, -100, 0, "PAY0"),
+            (3, "210010", 210010, 100, 0, "TUIN"),   # Same-term net zero.
+            (4, "209980", 209980, -100, 0, "PAY0"),  # Current-term credit.
+            (5, "210010", 210010, -100, 0, "PAY0"),
+            (5, "210055", 210055, 100, 0, "TUIN"),   # Other terms do not offset.
+            (6, "210010", 210010, -100, 0, "TPPY"),
+            (6, "210010", 210010, 0, 1, "TUIN"),     # Unknown: sponsor review only.
+            (7, "210099", None, -100, 0, "PAY0"),    # Unsupported term.
+            (8, "210010", 210010, -100, 0, "TPPY"),
+            (8, "210010", 210010, 100, 0, "TPPY"),
+            (8, "210010", 210010, -1, 0, "PAY0"),    # Reversed TPPY, net credit.
+            (9, "210010", 210010, -100, 0, "TPPY"),
+            (9, "210010", 210010, 100, 0, "TUIN"),   # Paid sponsor term.
+            (10, "210010", 210010, -100, 0, "PAY0"),
+            (10, "210055", 210055, -100, 0, "PAY0"), # One result per account.
+        ])
+        self.assertEqual(database.execute(statement + " SELECT pidm FROM future_term_credit_review ORDER BY pidm").fetchall(),
+                         [(1,), (5,), (8,), (10,)])
+        self.assertEqual(database.execute(statement + " SELECT pidm FROM tppy_credit_term_review ORDER BY pidm").fetchall(),
+                         [(6,), (8,)])
+
     def test_title_iv_balance_due_display_is_binary(self) -> None:
         # Execute the actual final-column expression without requiring a live server.
         start = self.query.index("CASE WHEN f.total_refund_amount > GREATEST(-f.full_account_balance, 0)")

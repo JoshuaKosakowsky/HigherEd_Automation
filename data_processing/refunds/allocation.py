@@ -713,13 +713,8 @@ def _mines_park_review(transactions: list[dict[str, Any]], parameters: RefundPar
     return False
 
 
-def _tppy_credit_term_review(transactions: list[dict[str, Any]]) -> bool:
-    """Any TPPY history requires review when that same term has a net credit.
-
-    A reversal does not remove the need to review sponsor ownership. Use full
-    history, not allocation remnants or the selected term's payment sources.
-    """
-    tppy_terms = {row["term_code"] for row in transactions if row["detail_code"] == "TPPY"}
+def _account_term_balances(transactions: list[dict[str, Any]]) -> dict[str, Decimal | None]:
+    """Net full-history charges minus payments by term; unknown amounts stay unknown."""
     balances: dict[str, Decimal] = defaultdict(lambda: ZERO)
     unknown_terms: set[str] = set()
     for row in transactions:
@@ -727,7 +722,22 @@ def _tppy_credit_term_review(transactions: list[dict[str, Any]]) -> bool:
             unknown_terms.add(row["term_code"])
         else:
             balances[row["term_code"]] += row["accounting_amount"]
-    return any(term in unknown_terms or _money(balances[term]) < ZERO for term in tppy_terms)
+    return {
+        term: None if term in unknown_terms else _money(balances[term])
+        for term in balances.keys() | unknown_terms
+    }
+
+
+def _tppy_credit_term_review(
+    transactions: list[dict[str, Any]], term_balances: dict[str, Decimal | None],
+) -> bool:
+    """Any TPPY history requires review for a same-term credit or unknown balance.
+
+    A reversal does not remove the need to review sponsor ownership. Use full
+    history, not allocation remnants or the selected term's payment sources.
+    """
+    tppy_terms = {row["term_code"] for row in transactions if row["detail_code"] == "TPPY"}
+    return any(term_balances[term] is None or term_balances[term] < ZERO for term in tppy_terms)
 
 
 def _third_party_details(
@@ -926,6 +936,12 @@ def _allocate_account(
     future_term_count = sum(
         row["raw_amount"] != 0 and row["term_sort"] is not None and row["term_sort"] > target_sort
         for row in transactions
+    )
+    term_balances = _account_term_balances(transactions)
+    future_term_credit = any(
+        balance is not None and balance < ZERO
+        and fiscal_year_start(term) is not None and int(term) > target_sort
+        for term, balance in term_balances.items()
     )
     invalid_charge_flag_count = sum(
         row["type_ind"] == "C" and row["raw_amount"] != 0
@@ -1156,7 +1172,7 @@ def _allocate_account(
         and source["detail_code"] in THIRD_PARTY_PAYMENT_CODES
     })
     recent_tppy_review = _recent_tppy_review(transactions, parameters)
-    if (recent_tppy_review or _tppy_credit_term_review(transactions)) and "TPPY" not in third_party_codes:
+    if (recent_tppy_review or _tppy_credit_term_review(transactions, term_balances)) and "TPPY" not in third_party_codes:
         third_party_codes.append("TPPY")
     third_party_matches.extend(third_party_codes)
     third_party = bool(third_party_matches)
@@ -1221,6 +1237,7 @@ def _allocate_account(
         "STORED_BALANCE_DIFFERS_FROM_RECONSTRUCTED_ALLOCATION" if stored_difference_count else None,
         "UNRECOGNIZED_TERM_CODE" if invalid_term_count else None,
         "FUTURE_TERM_ACTIVITY_EXCLUDED_FROM_ALLOCATION" if future_term_count else None,
+        "FUTURE_TERM_CREDIT" if future_term_credit else None,
         "MISSING_OR_INVALID_NON_ALLOWABLE_CHARGE_FLAG" if invalid_charge_flag_count else None,
         "NEGATIVE_NET_SOURCE_REQUIRES_REVIEW" if negative_net_source_count else None,
         "REFUND_VOID_REQUIRES_REVIEW" if posted.void_review_count else None,

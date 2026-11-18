@@ -322,6 +322,17 @@ For example, an issued $1,000 refund followed by a $500 grant and $300 adjustmen
 leaves $200 after reconciliation; a $2,000 check, -$2,000 void, and $2,000 ACH
 reissue consumes $2,000, not $4,000. Existing ownership/delivery controls remain.
 
+From **0.29.5**, a known net credit (charges minus payments) in any supported
+term after the target term additionally produces `FUTURE_TERM_CREDIT`. The
+workbook holds the entire account on **Future Term**, with RH taking precedence
+on Refund Holds. Future debt, a fully reversed payment, or a paid future term
+does not select this tab. Each term is checked separately; an unknown amount
+prevents confirming that term's credit and retains existing missing-data review.
+Allocation, amounts, extraction scope and recipient safeguards are unchanged.
+This follows the owner's 2026-11-18 clarification that advance **credits**, not
+future amounts students owe, should be held. See the
+[current rule and synthetic examples](../../../workflows/refunds/README.md#future-term-credits-0295).
+
 ### Ownership, delivery, and review
 
 Each unused FDPL source uses its own aid year's PLUS authorization. N assigns

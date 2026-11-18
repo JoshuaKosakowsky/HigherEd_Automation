@@ -259,7 +259,7 @@ Synthetic acceptance examples (all balances known zero unless specified):
 | Refund $100; payment $100, both settled; new grant $50 with -$20 balance; charge $30 | Completed transaction prefix proves settlement; student credit $20. Offsetting/unknown prefix balances do not qualify. |
 | Tuition $100; scholarship $2,100; RFND $2,000; RFDV -$2,000; ARFD $2,000; new grant $200 with -$200 balance | Cancel the unique check/void pair, count the ACH reissue once, and propose $200. |
 | Same check with an RFDV of only -$1,000, or two possible matching refunds | Manual Reviews; no guessed cancellation. |
-| New credit depends on a payment assigned to a term after the target term | Manual Reviews with future-term activity excluded, regardless of its effective date. |
+| New credit depends on a payment assigned to a term after the target term | Future Term when that future term has a net credit; allocation still excludes future activity, regardless of its effective date. |
 
 Parent PLUS authorization, RH/third-party/housing controls, missing-data checks,
 net-credit and Title IV exceptions, clearing reserves, check minimums, addresses,
@@ -278,6 +278,43 @@ including payments already applied to charges. Available original-method
 portions retain their delivery order and are capped at available student funds;
 remaining ordinary student funds use ED or check. Holds continue to override
 every delivery route.
+
+### Future-term credits (0.29.5)
+
+The owner clarified on 2026-11-18 that advance payments creating a **credit in
+a future term** must be withheld on **Future Term**. This is a credit owed to the
+student, not a future charge owed by the student. The purpose is to keep money
+paid toward a later term out of the current refund queues.
+
+For each existing refund candidate, Python and the standalone SQL net all
+charges minus payments separately within each term. A known negative balance
+in any supported term after the run's target term adds `FUTURE_TERM_CREDIT`.
+Reversals participate in that same-term net. A debit in another term does not
+erase the future credit. A term with a missing amount is unknown, not a confirmed
+credit, and retains the existing missing-data safeguards. Stored balances do
+not replace the existing charges-minus-payments calculation.
+
+The workbook places the **entire account** on Future Term, including any current
+credit, with `REVIEW REQUIRED` and a do-not-refund note. No student or parent
+portion appears on a payment tab. RH retains first priority on Refund Holds;
+other applicable reasons, including sponsor and housing reviews, remain visible.
+Future-term activity still blocks recipient assignment. This change only
+classifies that existing review population: it does not expand extraction,
+recalculate refund amounts, apply current funds to future charges, or release
+future payments based on their effective dates. The existing
+[allocation and ownership decision](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6690742823)
+continues to apply.
+
+Synthetic acceptance examples with target term `209980`:
+
+| Account activity | Expected result |
+| --- | --- |
+| Current term settled; payment $500 in `210010`, with no charges there | Entire $500 review on Future Term, even if the payment's effective date is in the current term. |
+| Current credit $200; future charge $100 | Existing Manual Reviews behavior; future debt alone does not select Future Term. |
+| Current credit $200; future charge $100 and payment $100, or payment $100 fully reversed | Existing Manual Reviews behavior; the future term has no net credit. |
+| Current credit $200; future charge $99.99 and payment $100 | Entire $200.01 review on Future Term. |
+| Current credit $200; credit $100 in `210010` and debt $100 in `210055` | Entire $200 review on Future Term; check each term separately. |
+| Future credit plus RH, sponsor or housing review | RH stays on Refund Holds; otherwise Future Term. All applicable review reasons remain. |
 
 ### Payment clearing reserves (0.28.4)
 
@@ -499,6 +536,8 @@ The workbook has these tabs, including headers when a category is empty:
 - **Refund Holds:** the entire account refund when RH is present, including any
   student and parent portions. No portion remains on a delivery or other review
   tab while the hold is active.
+- **Future Term:** the entire account when any term after the target term has a
+  known net credit. Do not issue any refund; funds are held for the future term.
 - **Payment Clearing:** student/parent portions reserved for uncleared CHCK/ACHK
   payments and student-only insurance. Do not issue these reserved amounts.
   Available portions can appear on their normal method tabs at the same time.
@@ -509,10 +548,11 @@ The workbook has these tabs, including headers when a category is empty:
 - **Manual Reviews:** undetermined splits, unrecognized delivery methods, or
   delivery components that do not reconcile to recipient amounts.
 
-RH takes precedence over every delivery and review tab. Without RH, third-party
-review takes precedence over Mines Park review. All applicable reasons remain
-visible so staff can address them after a hold is removed. Other existing review
-statuses and reasons stay on the applicable method tabs: a tab assignment is
+RH takes precedence over every delivery and review tab, followed by Future Term.
+Otherwise, third-party review takes precedence over Mines Park review. All
+applicable reasons remain visible so staff can address them after a hold is
+removed. Other existing review statuses and reasons stay on the applicable
+method tabs: a tab assignment is
 **not approval to issue a refund**.
 
 The $25 minimum does not apply to Parent PLUS refunds payable to the parent;

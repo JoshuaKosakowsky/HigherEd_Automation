@@ -26,7 +26,7 @@ from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS, STUDENT_CHECK_MINIMU
 REFUND_SHEETS = (
     "ACH or CC Refunds", "Refund by Check", "Check Refund < 25", "Check Address Review",
     "Refund to Parent", "Direct Deposit",
-    "Third Party Reviews", "Refund Holds", "Payment Clearing", "ACH Clearing", "ACH Reviews",
+    "Third Party Reviews", "Refund Holds", "Future Term", "Payment Clearing", "ACH Clearing", "ACH Reviews",
     "Mines Park Reviews", "Manual Reviews",
 )
 REFUND_TAB_COLORS = {
@@ -183,6 +183,9 @@ def _tab_rows(row: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
     # portion together on the hold tab even when another review reason also applies.
     if row["refund_hold_ind"] == "Y":
         return review("Refund Holds", "RH account hold: do not issue any refund.")
+
+    if "FUTURE_TERM_CREDIT" in str(row["review_reasons"] or "").split("; "):
+        return review("Future Term", "Future term credit: do not issue any refund.")
 
     # Other account-level reviews stay together rather than appearing in payment queues.
     if row["third_party_review_required_ind"] == "Y":

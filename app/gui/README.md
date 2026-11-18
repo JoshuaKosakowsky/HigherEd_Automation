@@ -195,6 +195,12 @@ validation remains pending. Refresh both manual downloads or use a fresh API
 extraction; older cached context lacks the required address fields. See the
 [address rules](../../workflows/refunds/README.md#student-check-address-review-0285).
 
+**0.29.5** routes accounts with a net credit in a term after the refund target
+term to **Future Term**, keeping the entire account out of payment tabs. RH
+continues to take precedence on Refund Holds. Refund calculations and existing
+recipient safeguards are unchanged. See the
+[future-term rule](../../workflows/refunds/README.md#future-term-credits-0295).
+
 ## Workflow visibility
 
 ### Insights connections (administrators)
