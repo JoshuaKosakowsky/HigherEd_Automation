@@ -1,4 +1,4 @@
-"""R1 loan worksheets with confirmed amount adjustments; no full reconciliation."""
+"""R1 loan worksheets and the evolving Current Month Recon summary."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ from decimal import Decimal
 from math import ceil
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from data_processing.shared.source_exports import SourceData
 from data_processing.shared.xlsx_output_format import (
@@ -25,6 +26,132 @@ PRIOR_YEAR_FOOTNOTES = (
     ("2100", "*", "Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year."),
     ("1382", "**", "Footnote** — Prior fiscal year accounts receivable activity recorded in the current fiscal year."),
 )
+# Keep the reference summary's order without changing the existing loan tabs.
+RECON_LOAN_ORDER = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
+
+
+def _current_recon_sheet(
+    sheet: Worksheet, activity: LoanActivity, subtotal_rows: dict[str, dict[str, int]],
+) -> None:
+    """Link completed loan subtotals; leave unconfirmed reconciliation rules pending."""
+    sheet.sheet_view.showGridLines = False
+    sheet["A1"] = "Donor Restricted Student Loans - Administered by School"
+    sheet["A2"] = f"FY{activity.fiscal_year} — All uploaded activity"
+    sheet["H2"] = "Included periods: " + ", ".join(activity.periods)
+    labels = {
+        "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
+        "N5": "Total Due to\nFoundation", "P5": "Total Due From\nFoundation",
+        "A6": "Loan", "C6": "Project", "D6": "Beginning\nBalance (Adjusted)",
+        "E6": "1621\nUnclassified", "F6": f"FY{activity.fiscal_year}\nLoan Activity (Net)",
+        "G6": f"FY{activity.fiscal_year}\nPayments", "H6": "1621\nNet Activity",
+        "J6": "Interest\n5909R", "K6": "Late Fees\n8309R", "L6": "Total\nInterest and Fees",
+        "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "C19": "Project",
+        "D19": "Comparison\nBalance", "E19": "Loan Total", "F19": "Variance",
+        "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
+        "A16": "Adjusted Amount signs are preserved. AP, AR and variance calculations are pending.",
+        "A29": "Blank beginning balances remain unknown; Loan Totals include the available activity. Shaded blanks are review inputs.",
+        "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
+        "A34": "Reviewed By:", "A35": "Reviewed Date:",
+    }
+    for cell, label in labels.items():
+        sheet[cell] = label
+    for region in ("A1:P1", "A2:G2", "H2:P2", "A5:H5", "J5:L5", "N5:N6", "P5:P6",
+                   "A6:B6", "A14:C14", "A16:P16", "A18:L18", "A19:B19", "G19:L19",
+                   "A27:C27", "A29:P29", "A31:D31"):
+        sheet.merge_cells(region)
+
+    for row, project in enumerate(RECON_LOAN_ORDER, 7):
+        loan_sheet = f"'{LOANS[project]} - {project}'"
+        totals = subtotal_rows[project]
+        sheet.merge_cells(f"A{row}:B{row}")
+        sheet.cell(row, 1, LOANS[project].upper())
+        sheet.cell(row, 3, project)
+        opening = f"{loan_sheet}!H{totals['opening']}"
+        sheet.cell(row, 4, f'=IF({opening}="","",{opening})')
+        for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
+                                (10, "5909R"), (11, "8309R")):
+            sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")
+        # All three columns already carry the confirmed Adjusted Amount signs.
+        sheet.cell(row, 8, f"=SUM(E{row}:G{row})")
+        sheet.cell(row, 12, f"=SUM(J{row}:K{row})")
+        for column in (14, 16):
+            sheet.cell(row, column, "Pending")
+        pending = row + 13
+        sheet.merge_cells(f"A{pending}:B{pending}")
+        sheet.merge_cells(f"G{pending}:L{pending}")
+        sheet.cell(pending, 1, f"=A{row}")
+        sheet.cell(pending, 3, f"=C{row}")
+        # This is the complete existing Loan Total, not an independent GL balance.
+        sheet.cell(pending, 5, f"={loan_sheet}!H{totals['loan']}")
+        sheet.cell(pending, 6, "Pending")
+
+    for column in (4, 5, 6, 7, 8, 10, 11, 12):
+        letter = get_column_letter(column)
+        sheet.cell(14, column, f"=SUM({letter}7:{letter}13)")
+    # A partial opening-balance sum must not masquerade as a complete control.
+    sheet["D14"] = '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")'
+    sheet["N14"] = sheet["P14"] = "Pending"
+    sheet["E27"] = "=SUM(E20:E26)"
+    for row in range(32, 36):
+        sheet.merge_cells(f"A{row}:B{row}")
+        sheet.merge_cells(f"C{row}:D{row}")
+    for cell in ("C33", "C35"):
+        sheet[cell].number_format = "mm/dd/yyyy"
+
+    apply_default_font(sheet)
+    for row in sheet.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+        sheet.row_dimensions[row[0].row].height = 27
+    for column, width in {"A": 12, "B": 6, "C": 13, "D": 18, "E": 18, "F": 18,
+                          "G": 18, "H": 18, "I": 3, "J": 18, "K": 18, "L": 18,
+                          "M": 3, "N": 20, "O": 3, "P": 20}.items():
+        sheet.column_dimensions[column].width = width
+    for first, last, columns in ((7, 14, (4, 5, 6, 7, 8, 10, 11, 12, 14, 16)),
+                                 (20, 27, (4, 5, 6))):
+        for row in range(first, last + 1):
+            for column in columns:
+                sheet.cell(row, column).number_format = CURRENCY_FORMAT
+                sheet.cell(row, column).alignment = Alignment(horizontal="right", vertical="center")
+    for region, color in (("A5:H5", "E2EFDA"), ("J5:L5", "DDEBF7"),
+                          ("N5:N14", "D9D9D9"), ("P5:P14", "FCE4D6"),
+                          ("A18:L18", "FFF2CC"), ("A31:D31", "FFF2CC")):
+        for row in sheet[region]:
+            for cell in row:
+                cell.fill = PatternFill("solid", fgColor=color)
+    for row_number in (5, 6, 18, 19, 31):
+        for cell in sheet[row_number]:
+            if cell.value is not None:
+                cell.font = Font(name="Aptos", size=12, bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for row_number, columns in ((14, (1, 4, 5, 6, 7, 8, 10, 11, 12, 14, 16)),
+                                (27, (1, 4, 5, 6))):
+        for column in columns:
+            cell = sheet.cell(row_number, column)
+            cell.font = Font(name="Aptos", size=12, bold=True)
+            cell.border = Border(bottom=Side(style="double", color="595959"))
+    for region in ("D20:D26", "G20:L26", "C32:D35"):
+        for row in sheet[region]:
+            for cell in row:
+                cell.fill = PatternFill("solid", fgColor="FFF2CC")
+    for region in ("D20:F26", "A7:H13", "J7:L13"):
+        for row in sheet[region]:
+            for cell in row:
+                cell.border = Border(bottom=Side(style="hair", color="BFBFBF"))
+    for cell in ("A16", "A29"):
+        sheet[cell].font = Font(name="Aptos", size=11, italic=True, color="595959")
+    sheet["A1"].font = Font(name="Aptos", size=18, bold=True, color="21314D")
+    sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 34
+    sheet.row_dimensions[2].height = max(30, 18 * ceil(len(sheet["H2"].value) / 75))
+    sheet.row_dimensions[6].height = 64
+    sheet.row_dimensions[19].height = 48
+    sheet.print_area = "A1:P35"
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 1
 
 
 def _append(sheet, values) -> int:
@@ -67,10 +194,11 @@ def build_workbook(
     trial_source: SourceData | None = None, cancellation: CancellationToken | None = None,
 ) -> Workbook:
     book = Workbook()
-    book.active.title = "Current Recon"
+    book.active.title = "Current Month Recon"
     book.properties.title = "CSMF Loans — R1"
     book.properties.description = f"Mines Bursar Automation {app_version}; source-value review, not a completed reconciliation."
     opening = dict(balances.values)
+    subtotal_rows = {}
     for project, loan in LOANS.items():
         if cancellation:
             cancellation.check()
@@ -90,6 +218,7 @@ def build_workbook(
         sheet["H8"] = '=IF(COUNT(H7)=0,"",SUM(H7:H7))'
         _append(sheet, [])
         totals = [8]
+        subtotal_rows[project] = {"opening": 8}
         project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_activity]
         footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_activity]
         sections = dict(SECTIONS)
@@ -111,11 +240,13 @@ def build_workbook(
             if last >= first:
                 sheet.cell(total_row, 8, f"=SUM(H{first}:H{last})")
             totals.append(total_row)
+            subtotal_rows[project][section] = total_row
             _append(sheet, [])
         loan_total = _append(sheet, ["Loan Total"])
         # Reference subtotals only so detail rows are not counted a second time.
         sheet.cell(loan_total, 8, f"=SUM({','.join(f'H{number}' for number in totals)})")
         totals.append(loan_total)
+        subtotal_rows[project]["loan"] = loan_total
         footnote_headings = []
         for account, marker, caption in PRIOR_YEAR_FOOTNOTES:
             account_rows = [row for row in footnote_rows if row.account == account]
@@ -163,6 +294,9 @@ def build_workbook(
         sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
         sheet.page_setup.fitToWidth = 1
         sheet.page_setup.fitToHeight = 0
+    if cancellation:
+        cancellation.check()
+    _current_recon_sheet(book["Current Month Recon"], activity, subtotal_rows)
     snapshot = book.create_sheet("Opening Balances")
     _append(snapshot, ["Fiscal Year", "Project", "Loan", "Opening Balance", "Last Uploaded/Updated", "Source"])
     for project, balance in balances.projects:
@@ -177,6 +311,5 @@ def build_workbook(
     _source_sheet(book, "Journal Lines", activity.source)
     if trial_source is not None:
         _source_sheet(book, "Trial Balance", trial_source)
-    # Show the first populated loan worksheet rather than the intentionally empty summary.
-    book.active = 1
+    book.active = 0
     return book

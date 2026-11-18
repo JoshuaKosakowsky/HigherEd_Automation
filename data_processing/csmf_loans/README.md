@@ -112,7 +112,9 @@ reports their count for review.
 
 ## Workbook
 
-`Current Recon` is created first and left empty. The seven loan worksheets are:
+`Current Month Recon` is created first and opens by default. As of 0.30.11 it
+replaces the empty `Current Recon` placeholder with the initial summary layout
+described below. The seven loan worksheets are:
 
 | Project | Worksheet |
 |---|---|
@@ -164,6 +166,67 @@ source filename, including those retained from older uploads. `Journal Lines`
 preserves source columns, source row numbers and import status. `Trial Balance`
 is also included when uploaded. With cached balances, the snapshot supplies
 their provenance; the original Trial Balance file is not reconstructed.
+
+### Current Month Recon starting layout
+
+For 0.30.11, the owner supplied **Current Month Recon** from the existing FY27
+P03 reconciliation as a layout reference. Only that sheet informed the new
+summary. This supersedes the empty-summary scope in
+[output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44).
+The owner confirmed **all uploaded FY activity**, rather than only the latest
+month, and explicitly deferred **AP, AR and variance calculations** until the
+new accounting treatment is agreed. This is a starting layout, not a completed
+reconciliation or an independent GL tie-out.
+
+The summary retains the reference's title, Loan Information, Interest and Fees,
+AP/AR columns, Pending Items and Reconciliation Dates blocks. Its loan order is
+Parsons, Combined, CSM Board, Welch, Lewis, Pearson, Bruce; the existing loan-tab
+order is unchanged. Obsolete Unisa identifiers are removed, Project contains
+only the current six-digit worktag, and historical balances, notes, names and
+sign-off dates are never copied from the reference. No reference workbook is
+required at runtime or stored in the repository.
+
+| Summary field | Live source / calculation |
+|---|---|
+| Beginning Balance (Adjusted) | Loan tab's Beginning Balance Total; preserve blank and zero separately |
+| 1621 Unclassified | 1621 — Unclassified Total; replaces the old Adjustments/Reclass heading without assuming these entries are adjustments |
+| FY Loan Activity (Net) | Loan Activity Total, including disbursements and reversals |
+| FY Payments | Payment Total |
+| 1621 Net Activity | Sum of Unclassified, Loan Activity and Payments, excluding the opening balance |
+| Interest / 5909R | Interest on loans Total from that loan's own tab |
+| Late Fees / 8309R | Late fees on loans Total from that loan's own tab |
+| Total Interest and Fees | Sum of those two amounts; no separate interest/fee worksheets |
+| Pending Items: Loan Total | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
+
+Links use the subtotal rows actually generated for each loan, so different
+transaction counts and optional Other activity cannot shift them onto the wrong
+cells. They update with Excel edits to Adjusted Amount. All signs are retained
+as already adjusted; the summary does not flip them again or reuse the old
+principal subtraction formulas. The header lists the selected FY and exactly
+the uploaded periods, including gaps. It does not assert complete FY coverage.
+
+AP/AR amounts and totals, comparison-balance total, and variances display
+**Pending**, without a calculation. Comparison balances, review notes and
+completion/review fields are blank editable cells. Entering a comparison
+balance does not activate a variance formula in this iteration. The aggregate
+beginning balance is also Pending if any loan's opening balance is missing;
+each missing opening remains blank while its Loan Total includes available
+activity, as before. A supplied zero opening is still numeric zero.
+
+Synthetic acceptance examples:
+
+- Opening 1,000 appears as -1,000. SIS debit 100 and SIS credit 25 give net loan
+  activity -75. Journal credit 40 and unclassified debit 3 give 1621 Net Activity
+  -38. Interest credit 10 and fee debit 2 give Total Interest and Fees 8. These
+  examples use multiple uploaded months, all included in the summary.
+- Adding offsetting 2100/2402 amounts (-5 and 5), 2881 credit 7, regular 1382
+  credit 11 and Other debit 4 gives Loan Total -1,016. Prior-year 2100/1382
+  footnotes do not enter this total. The AP/AR and variance fields remain
+  Pending rather than treating these components as amounts owed to/from the
+  Foundation before their treatment is confirmed.
+- A blank Bruce opening remains blank; an explicitly supplied zero remains
+  zero. The total opening stays Pending until all seven openings are supplied,
+  while existing per-loan activity totals remain available.
 
 ### Prior fiscal year payment footnote
 
@@ -293,10 +356,11 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
 
 ## Deferred work and verification
 
-Additional 1621 classifications (including any Adjustment category), full
-Current Recon/current-month output, further Adjusted Amount rules, 2100/2402
-net-zero checks and JE preparation remain deferred. Section subtotals sum the
-editable Adjusted Amount cells; they are not completed reconciled balances.
+Additional 1621 classifications (including any Adjustment category), final
+Current Month Recon accounting rules (AP, AR and variance), further Adjusted
+Amount rules, 2100/2402 net-zero checks and JE preparation remain deferred.
+Section subtotals sum the editable Adjusted Amount cells; they are not completed
+reconciled balances.
 
 Synthetic tests are in `tests/python/test_csmf_loans.py` and
 `tests/python/test_gui_csmf_loans.py`. Shared reader changes also run the existing

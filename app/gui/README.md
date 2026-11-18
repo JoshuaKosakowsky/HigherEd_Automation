@@ -383,12 +383,15 @@ update only included projects after a successful run; omitted projects retain
 their saved values/dates. An included blank/null amount clears that project's
 balance. Cached runs do not refresh timestamps. No prior output workbook or
 TEST/PROD selection is used.
-Output includes seven loan tabs, source evidence and an empty **Current Recon**.
+Output includes seven loan tabs, source evidence and **Current Month Recon**.
+As of 0.30.11, the summary follows the supplied reconciliation layout and links
+all uploaded FY activity, interest, fees and Loan Totals from those loan tabs.
 As of 0.30.5, 1621 SIS debits are Loan Disbursements and SIS credits are Loan
 Reversals. Sources containing Journal are Payments; other 1621 sources remain
 unclassified. As of 0.30.8, Adjusted Amount reverses every debit's sign across
 all accounts and sources, including footnoted payments, and preserves credits.
-Full reconciliation calculations remain deferred.
+AP, AR and variance calculations remain pending; comparison balances, notes and
+sign-off fields are blank for review. Full reconciliation remains deferred.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for
 source mappings, persistence, limitations and acceptance examples.
