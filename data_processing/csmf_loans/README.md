@@ -181,13 +181,20 @@ reconciliation or an independent GL tie-out.
 The summary retains the reference's title, Loan Information, Interest and Fees,
 AP/AR columns, Pending Items and Reconciliation Dates blocks. Its loan order is
 Parsons, Combined, CSM Board, Welch, Lewis, Pearson, Bruce; the existing loan-tab
-order is unchanged. Obsolete Unisa identifiers are removed, Project contains
-only the current six-digit worktag, and historical balances, notes, names and
-sign-off dates are never copied from the reference. No reference workbook is
-required at runtime or stored in the repository.
+order is unchanged. In 0.30.12 the owner confirmed that **Unisa Acct** must remain
+in column B of both Loan Information and Pending Items, even though no Unisa
+report is imported. The six reference identifiers are Parsons 6304, Combined
+6308, CSM Board 6309, Welch 6311, Lewis 6313 and Pearson 6315; Bruce is blank in
+the reference and remains blank. Pending Items links to the upper account cell,
+preserving a missing identifier as blank rather than zero. These are display
+identifiers only and do not change project matching or financial calculations.
+Project contains only the current six-digit worktag. Historical balances,
+notes, names and sign-off dates are never copied from the reference. No
+reference workbook is required at runtime or stored in the repository.
 
 | Summary field | Live source / calculation |
 |---|---|
+| Unisa Acct | Reference identifier by Project; repeated in Pending Items, with Bruce blank |
 | Beginning Balance (Adjusted) | Loan tab's Beginning Balance Total; preserve blank and zero separately |
 | 1621 Unclassified | 1621 — Unclassified Total; replaces the old Adjustments/Reclass heading without assuming these entries are adjustments |
 | FY Loan Activity (Net) | Loan Activity Total, including disbursements and reversals |

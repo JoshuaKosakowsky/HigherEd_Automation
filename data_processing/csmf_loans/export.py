@@ -28,6 +28,11 @@ PRIOR_YEAR_FOOTNOTES = (
 )
 # Keep the reference summary's order without changing the existing loan tabs.
 RECON_LOAN_ORDER = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
+# Reference identifiers remain useful even though Unisa reports are not inputs.
+RECON_UNISA_ACCOUNTS = {
+    "694511": "6304", "694512": "6308", "694513": "6309", "694514": "6311",
+    "694518": "6313", "694521": "6315", "694516": None,
+}
 
 
 def _current_recon_sheet(
@@ -41,11 +46,11 @@ def _current_recon_sheet(
     labels = {
         "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
         "N5": "Total Due to\nFoundation", "P5": "Total Due From\nFoundation",
-        "A6": "Loan", "C6": "Project", "D6": "Beginning\nBalance (Adjusted)",
+        "A6": "Loan", "B6": "Unisa\nAcct", "C6": "Project", "D6": "Beginning\nBalance (Adjusted)",
         "E6": "1621\nUnclassified", "F6": f"FY{activity.fiscal_year}\nLoan Activity (Net)",
         "G6": f"FY{activity.fiscal_year}\nPayments", "H6": "1621\nNet Activity",
         "J6": "Interest\n5909R", "K6": "Late Fees\n8309R", "L6": "Total\nInterest and Fees",
-        "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "C19": "Project",
+        "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
         "D19": "Comparison\nBalance", "E19": "Loan Total", "F19": "Variance",
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
         "A16": "Adjusted Amount signs are preserved. AP, AR and variance calculations are pending.",
@@ -56,15 +61,15 @@ def _current_recon_sheet(
     for cell, label in labels.items():
         sheet[cell] = label
     for region in ("A1:P1", "A2:G2", "H2:P2", "A5:H5", "J5:L5", "N5:N6", "P5:P6",
-                   "A6:B6", "A14:C14", "A16:P16", "A18:L18", "A19:B19", "G19:L19",
+                   "A14:C14", "A16:P16", "A18:L18", "G19:L19",
                    "A27:C27", "A29:P29", "A31:D31"):
         sheet.merge_cells(region)
 
     for row, project in enumerate(RECON_LOAN_ORDER, 7):
         loan_sheet = f"'{LOANS[project]} - {project}'"
         totals = subtotal_rows[project]
-        sheet.merge_cells(f"A{row}:B{row}")
         sheet.cell(row, 1, LOANS[project].upper())
+        sheet.cell(row, 2, RECON_UNISA_ACCOUNTS[project])
         sheet.cell(row, 3, project)
         opening = f"{loan_sheet}!H{totals['opening']}"
         sheet.cell(row, 4, f'=IF({opening}="","",{opening})')
@@ -77,9 +82,9 @@ def _current_recon_sheet(
         for column in (14, 16):
             sheet.cell(row, column, "Pending")
         pending = row + 13
-        sheet.merge_cells(f"A{pending}:B{pending}")
         sheet.merge_cells(f"G{pending}:L{pending}")
         sheet.cell(pending, 1, f"=A{row}")
+        sheet.cell(pending, 2, f'=IF(B{row}="","",B{row})')
         sheet.cell(pending, 3, f"=C{row}")
         # This is the complete existing Loan Total, not an independent GL balance.
         sheet.cell(pending, 5, f"={loan_sheet}!H{totals['loan']}")
@@ -103,7 +108,7 @@ def _current_recon_sheet(
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
         sheet.row_dimensions[row[0].row].height = 27
-    for column, width in {"A": 12, "B": 6, "C": 13, "D": 18, "E": 18, "F": 18,
+    for column, width in {"A": 17, "B": 9, "C": 13, "D": 18, "E": 18, "F": 18,
                           "G": 18, "H": 18, "I": 3, "J": 18, "K": 18, "L": 18,
                           "M": 3, "N": 20, "O": 3, "P": 20}.items():
         sheet.column_dimensions[column].width = width

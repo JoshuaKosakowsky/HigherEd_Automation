@@ -690,8 +690,24 @@ class CsmfTests(unittest.TestCase):
         self.assertTrue({"A1:P1", "A5:H5", "J5:L5", "A18:L18", "A31:D31"}.issubset(
             {str(region) for region in summary.merged_cells}))
         all_text = " ".join(str(cell.value) for row in summary for cell in row if cell.value is not None)
-        for obsolete in ("Unisa", "Banner", "Acct 4580", "Acct 4511", "'A 4580'", "'A 4511'", "[1]", "-1360", "-1365"):
+        for obsolete in ("Banner", "Acct 4580", "Acct 4511", "'A 4580'", "'A 4511'", "[1]", "-1360", "-1365"):
             self.assertNotIn(obsolete, all_text)
+
+    def test_current_month_recon_retains_unisa_identifiers_in_both_sections(self):
+        self.run_workflow()
+        summary = self.workbook()["Current Month Recon"]
+        self.assertEqual(summary["B6"].value, "Unisa\nAcct")
+        self.assertEqual(summary["B19"].value, "Unisa\nAcct")
+        expected = [("694511", "6304"), ("694512", "6308"), ("694513", "6309"),
+                    ("694514", "6311"), ("694518", "6313"), ("694521", "6315"), ("694516", None)]
+        for row, (project, account) in enumerate(expected, 7):
+            with self.subTest(project=project):
+                self.assertEqual(summary.cell(row, 3).value, project)
+                self.assertEqual(summary.cell(row, 2).value, account)
+                self.assertEqual(summary.cell(row + 13, 2).value, f'=IF(B{row}="","",B{row})')
+                for visible_row in (row, row + 13, 6, 19):
+                    self.assertNotIn(f"B{visible_row}", summary.merged_cells)
+        self.assertIsNone(summary["B13"].value)
 
     def test_current_month_recon_preserves_blank_openings_and_zero_activity_sections(self):
         self.write_trial([["Project: 694511 Parsons", 0], ["Project: 694516 Bruce", None]])
