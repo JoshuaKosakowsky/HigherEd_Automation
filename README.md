@@ -113,9 +113,9 @@ Bursar drive and displayed with their individual upload dates before running.
 Partial Trial Balance uploads update only included projects; missing balances
 can stay blank while their loan tabs and activity remain available.
 As of 0.30.5, 1621 SIS rows are Loan Activity (disbursements or reversals), and
-sources containing Journal are Payments. Only SIS debits have their Adjusted
-Amount sign flipped; other 1621 sources remain unclassified. Current Recon is
-an empty placeholder. See the
+sources containing Journal are Payments; other 1621 sources remain unclassified.
+As of 0.30.8, every debit has its sign flipped in Adjusted Amount, while credits
+retain their source value. Current Recon is an empty placeholder. See the
 [CSMF technical guide](data_processing/csmf_loans/README.md).
 
 **W&F - Banner Recon** (0.23.4) compares one combined Banner collections

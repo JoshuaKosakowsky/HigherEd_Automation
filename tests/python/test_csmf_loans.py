@@ -144,7 +144,7 @@ class CsmfTests(unittest.TestCase):
                 sheet = book[f"{LOANS[project]} - {project}"]
                 self.assertEqual([sheet.cell(row, 3).value.date().isoformat() for row in (10, 11, 18, 19)],
                                  ["2026-08-05", "2026-07-05", "2026-08-07", "2026-07-02"])
-                self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 18, 19)], [200, 100, 60, 50])
+                self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 18, 19)], [-200, -100, 60, -50])
                 self.assertEqual(sheet["A7"].value, "Beginning Balance of the FY")
                 self.assertEqual(sheet["H12"].value, "=SUM(H10:H11)")
                 self.assertEqual(sheet["H20"].value, "=SUM(H18:H19)")
@@ -156,7 +156,7 @@ class CsmfTests(unittest.TestCase):
         self.run_workflow()
         sheet = self.workbook()["Parsons - 694511"]
         self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 7).value, sheet.cell(row, 8).value)
-                          for row in (10, 11, 12)], [(25, "Credit", 25), (-5, "Debit", -5), (0, "Debit", 0)])
+                          for row in (10, 11, 12)], [(25, "Credit", 25), (-5, "Debit", 5), (0, "Debit", 0)])
 
     def test_1621_source_classification_and_adjusted_signs(self):
         cases = [
@@ -167,14 +167,14 @@ class CsmfTests(unittest.TestCase):
             ("SIS", 0, None, "loan_activity", "Loan Disbursement", 0),
             ("SIS", None, 0, "loan_activity", "Loan Reversal", 0),
             (" sis ", 10, None, "loan_activity", "Loan Disbursement", -10),
-            ("Journal", 10, None, "payment", "Payment", 10),
+            ("Journal", 10, None, "payment", "Payment", -10),
             ("Manual Journal", None, 15, "payment", "Payment", 15),
-            ("Journal Import", -5, None, "payment", "Payment", -5),
+            ("Journal Import", -5, None, "payment", "Payment", 5),
             ("External JOURNAL Import", None, -7, "payment", "Payment", -7),
-            ("SIS Journal", 10, None, "payment", "Payment", 10),
-            ("SIS Import", 10, None, "1621", "1621 — Unclassified", 10),
+            ("SIS Journal", 10, None, "payment", "Payment", -10),
+            ("SIS Import", 10, None, "1621", "1621 — Unclassified", -10),
             ("Manual Entry", None, 15, "1621", "1621 — Unclassified", 15),
-            ("", -5, None, "1621", "1621 — Unclassified", -5),
+            ("", -5, None, "1621", "1621 — Unclassified", 5),
         ]
         for source, debit, credit, section, label, adjusted in cases:
             with self.subTest(source=source, debit=debit, credit=credit):
@@ -187,7 +187,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(row.direction, "Debit" if debit is not None else "Credit")
                 self.assertEqual(row.source, source.strip())
 
-    def test_1621_rules_do_not_change_other_accounts(self):
+    def test_other_accounts_keep_classification_and_apply_debit_credit_sign_rule(self):
         for source in ("SIS", "Manual Journal"):
             for account, section in (("2100", "payables"), ("2402", "payables"), ("2881", "2881"),
                                      ("5909R", "5909R"), ("8309R", "8309R"), ("9999", "other")):
@@ -196,7 +196,38 @@ class CsmfTests(unittest.TestCase):
                                         journal_row(account=account, source=source, debit=None, credit=-25)])
                     rows = prepare_activity(read_journal(self.journal), 2027).rows
                     self.assertEqual([row.section for row in rows], [section, section])
-                    self.assertEqual([row.adjusted_amount for row in rows], [100, -25])
+                    self.assertEqual([row.adjusted_amount for row in rows], [-100, -25])
+
+    def test_every_section_and_footnote_negates_debits_and_preserves_credits(self):
+        categories = [
+            ("1621", "SIS"), ("1621", "Manual Journal"), ("1621", "Unknown"),
+            ("2100", "Manual Journal"), ("2100", "Supplier Invoice Payment"),
+            ("2402", "SIS"), ("2881", "Manual Journal"), ("5909R", "SIS"),
+            ("8309R", "Manual Journal"), ("9999", "Unknown"),
+        ]
+        cases = [(125.5, None, -125.5), (-5.25, None, 5.25), (0, None, 0),
+                 (None, 125.5, 125.5), (None, -5.25, -5.25), (None, 0, 0)]
+        rows = []
+        expected = {}
+        for account, source in categories:
+            for debit, credit, adjusted in cases:
+                journal = f"J-{len(rows):03d}"
+                rows.append(journal_row(account=account, source=source, debit=debit, credit=credit, journal=journal))
+                expected[journal] = (debit if debit is not None else credit,
+                                     "Debit" if debit is not None else "Credit", adjusted)
+        self.write_journal(rows)
+        original = self.journal.read_bytes()
+        self.run_workflow()
+        saved = BalanceStore(2027).path.read_bytes()
+        self.run_workflow(upload=False, output=self.root / "reuse.xlsx")
+        self.assertEqual(self.journal.read_bytes(), original)
+        self.assertEqual(BalanceStore(2027).path.read_bytes(), saved)
+        for path in (self.output, self.root / "reuse.xlsx"):
+            sheet = self.workbook(path)["Parsons - 694511"]
+            details = [row for row in sheet.iter_rows(min_row=7) if row[1].value in expected]
+            self.assertEqual(len(details), len(expected))
+            self.assertEqual({row[1].value: (row[5].value, row[6].value, row[7].value) for row in details}, expected)
+            self.assertEqual((sheet["F7"].value, sheet["H7"].value), (1000, -1000))
 
     def test_classified_1621_sections_sort_and_total_independently_for_every_loan(self):
         rows = []
@@ -229,7 +260,7 @@ class CsmfTests(unittest.TestCase):
                     self.assertEqual([sheet.cell(row, 3).value.month for row in (10, 11, 14, 15, 18)],
                                      [8, 7, 8, 7, 9])
                     self.assertEqual([sheet.cell(row, 6).value for row in (10, 11, 14, 15, 18)], [15, 40, 25, 100, 7])
-                    self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 14, 15, 18)], [15, 40, 25, -100, 7])
+                    self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 14, 15, 18)], [15, -40, 25, -100, -7])
                     self.assertEqual([sheet.cell(row, 7).value for row in (10, 11, 14, 15, 18)],
                                      ["Credit", "Debit", "Credit", "Debit", "Debit"])
                     self.assertEqual(sheet["H12"].value, "=SUM(H10:H11)")
@@ -361,7 +392,7 @@ class CsmfTests(unittest.TestCase):
                 row, = activity.rows
                 self.assertEqual(row.prior_year_payment, expected)
                 self.assertEqual(row.amount, 100)
-                self.assertEqual(row.adjusted_amount, 100)
+                self.assertEqual(row.adjusted_amount, -100)
                 if expected:
                     self.assertEqual(row.section, "payables")
                     self.assertIn("excluded from activity totals", activity.source.dispositions[row.source_row])
@@ -399,7 +430,7 @@ class CsmfTests(unittest.TestCase):
                     continue
                 self.assertEqual(sheet["A19"].value, "Payables (2100/2402) Total")
                 self.assertEqual(sheet["H19"].value, "=SUM(H16:H18)")
-                self.assertEqual([sheet.cell(row, 8).value for row in (16, 17, 18)], [40, 30, 20])
+                self.assertEqual([sheet.cell(row, 8).value for row in (16, 17, 18)], [-40, -30, -20])
                 self.assertEqual(sheet["A27"].value, "Loan Total")
                 self.assertEqual(sheet["H27"].value, "=SUM(H8,H10,H12,H14,H19,H21,H23,H25)")
                 self.assertTrue(all(cell.value is None for cell in sheet[28]))
@@ -412,7 +443,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual([sheet.cell(row, 2).value for row in (30, 31)], ["PY-002", "PY-001"])
                 self.assertEqual([sheet.cell(row, 3).value.day for row in (30, 31)], [31, 1])
                 self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 7).value, sheet.cell(row, 8).value)
-                                  for row in (30, 31)], [(-25, "Credit", -25), (100, "Debit", 100)])
+                                  for row in (30, 31)], [(-25, "Credit", -25), (100, "Debit", -100)])
                 journals = [cell.value for cell in sheet["B"] if cell.row >= 7 and cell.value]
                 self.assertEqual(sorted(journals), ["CURRENT-001", "CURRENT-002", "CURRENT-003", "PY-001", "PY-002"])
         source = book["Journal Lines"]
@@ -442,7 +473,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(sheet["A24"].value, "Loan Total")
                 self.assertEqual(sheet["H24"].value, "=SUM(H8,H10,H12,H14,H16,H18,H20,H22)")
                 self.assertEqual(sheet.max_row, 29)
-                self.assertEqual([sheet.cell(row, 8).value for row in (27, 28, 29)], [0, 50, 25])
+                self.assertEqual([sheet.cell(row, 8).value for row in (27, 28, 29)], [0, -50, -25])
 
     def test_seven_loan_tabs_empty_current_recon_and_literal_source_text(self):
         self.write_journal([journal_row(memo='=HYPERLINK("https://invalid.example")')])
@@ -476,7 +507,7 @@ class CsmfTests(unittest.TestCase):
                     self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
                     self.assertEqual(book["Opening Balances"].cell(row_number, 4).value, amount)
                     self.assertEqual(dict(saved.values)[project], Decimal(str(amount)) if amount is not None else None)
-            self.assertEqual(book["Parsons - 694511"]["H10"].value, 100)
+            self.assertEqual(book["Parsons - 694511"]["H10"].value, -100)
         trial = self.workbook()["Trial Balance"]
         self.assertEqual([trial.cell(row_number, 3).value for row_number in range(2, 9)],
                          [str(amount) if amount is not None else None for amount, _ in cases])

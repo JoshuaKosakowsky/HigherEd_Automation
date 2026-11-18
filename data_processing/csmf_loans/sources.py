@@ -124,9 +124,9 @@ class Activity:
 
     @property
     def adjusted_amount(self) -> Decimal:
-        # Only SIS disbursements reverse the source sign; payments and reversals
-        # retain it regardless of which debit/credit column supplied the amount.
-        if self.section == "loan_activity" and self.direction == "Debit":
+        # The source column determines the sign, including unclassified and
+        # footnoted activity. Keep the original amount intact for review.
+        if self.direction == "Debit":
             return -self.amount
         return self.amount
 

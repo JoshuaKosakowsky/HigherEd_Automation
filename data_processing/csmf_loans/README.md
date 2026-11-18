@@ -65,13 +65,20 @@ not block processing or remove its tab/activity. The same omission/blank rules
 apply to every configured loan.
 
 Amounts use exact cents during parsing. Journal activity preserves the original
-debit/credit value and identifies its origin. Adjusted Amount copies Amount
-except for the confirmed 1621 SIS debit rule below. Following owner feedback in
-0.30.4, **Beginning Balance of the FY** uses the opposite sign for Adjusted
-Amount: a 1,000.00 opening balance
-becomes -1,000.00, and -25.00 becomes 25.00. Zero stays zero and blank stays
-blank. Its Amount, Debit/Credit, saved FY value, preview and Opening Balances
-snapshot retain the original source value and origin.
+debit/credit value and identifies its origin. In 0.30.8, the owner reported
+confirmation from their supervisor that **every Debit must have its sign
+reversed in Adjusted Amount; every Credit keeps its original value**. This
+supersedes the earlier restriction to SIS disbursements. The source column,
+rather than account, Source or section, determines the adjustment. It applies
+to payments, payables, interest, fees, unclassified/Other activity and footnotes.
+A debit of 100.00 becomes -100.00; a debit of -5.00 becomes 5.00. Credits of
+100.00 and -5.00 remain 100.00 and -5.00. Zero stays zero.
+
+**Beginning Balance of the FY** already follows the Debit rule introduced in
+0.30.4: a 1,000.00 opening balance becomes -1,000.00, and -25.00 becomes 25.00.
+Apply this once; do not negate the adjusted balance again. Blank stays blank.
+Amount, Debit/Credit, saved FY values, preview, Opening Balances snapshot and
+raw source sheets retain their original values and origins.
 Adjusted Amount remains editable in Excel, and subtotal SUM formulas update
 from those cells. Reusing saved balances applies the sign flip to the output
 once per run; it never negates the saved balance itself.
@@ -83,14 +90,15 @@ are ambiguous. Source strings beginning with `=` remain literal text.
 
 Owner clarification for 0.30.5 defines these rules for account **1621**
 (LT Loan Receivable - Student), superseding the blanket deferral in
-[output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44):
+[output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44).
+The table includes the confirmed 0.30.8 sign rule:
 
 | Source | Debit/Credit | Section | Activity label | Adjusted Amount |
 |---|---|---|---|---|
 | SIS | Debit | Loan Activity | Loan Disbursement | Opposite sign of Amount |
 | SIS | Credit | Loan Activity | Loan Reversal | Same value as Amount |
-| Contains Journal (`*Journal*`) | Either | Payment | Payment | Same value as Amount |
-| Any other or blank source | Either | 1621 — Unclassified | 1621 — Unclassified | Same value as Amount |
+| Contains Journal (`*Journal*`) | Debit / Credit | Payment | Payment | Opposite sign / Same value as Amount |
+| Any other or blank source | Debit / Credit | 1621 — Unclassified | 1621 — Unclassified | Opposite sign / Same value as Amount |
 
 Match Source case-insensitively after trimming surrounding whitespace. SIS is
 an exact match; `SIS Import` stays unclassified. Journal may appear anywhere,
@@ -98,12 +106,9 @@ as in `Manual Journal` or `Journal Import`. Do not infer classifications from
 the memo. The source rule distinguishes loan disbursements/reversals from
 payments; Debit/Credit identifies the kind of SIS loan activity.
 
-Only Adjusted Amount is sign-adjusted. A SIS debit of 100.00 becomes -100.00;
-a SIS debit of -5.00 becomes 5.00. Zero stays zero. SIS credits and Journal
-payments retain their value, including any negative sign. These rules do not
-change other ledger accounts, original Amount/Source/Debit/Credit, raw source
-sheets or saved FY balances. Unmatched 1621 sources remain visible, and the
-completion message reports their count for review.
+Classification does not override the common Debit/Credit sign rule. Unmatched
+1621 sources remain visible with that same rule, and the completion message
+reports their count for review.
 
 ## Workbook
 
@@ -168,12 +173,13 @@ Payables Total and Loan Total**. They appear once, below Loan Total, under:
 
 > Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year.
 
-The footnote rows retain all transaction columns and original values, with
+The footnote rows retain all transaction columns and original Amount values, with
 `Payables — 2100*` as their Activity label. They remain newest first, with the
 existing journal/source-row tie-breakers. Only loans with qualifying rows show
 the footnote. The raw Journal Lines sheet preserves each line and identifies
-its exclusion from activity totals in Import Status. No amounts are negated or
-saved balances changed by this rule.
+its exclusion from activity totals in Import Status. Their Adjusted Amount
+follows the common sign rule: negate Debit, preserve Credit. Footnote placement
+does not apply a second adjustment or change saved balances.
 
 ## Persistence and partial updates
 
@@ -224,19 +230,23 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   Loan Reversal. Their Adjusted Amounts are -100 and 25, and Loan Activity
   subtotal is -75. Original Amounts remain 100 and 25.
 - Two 1621 Journal lines, debit 100 and credit 100, appear as Payments with
-  Adjusted Amount 100 each. Their Payment subtotal is 200, not net zero.
-- Beginning Balance Total -1,000, Payment Total 200 and Loan Activity Total -75
-  produce Loan Total -875 when all other sections are zero. Changing a payment's
-  Adjusted Amount from 100 to 125 updates Payment Total to 225 and Loan Total
-  to -850. A blank opening balance with only a 75 payment gives Loan Total 75.
-- In FY2027, a 2100 Supplier Invoice Payment dated July 31, 2026 for 100 moves
-  below Loan Total with the footnote and contributes nothing to either total.
-  Another 2100 Supplier Invoice Payment dated August 1, 2026 for 40 stays in
-  Payables and contributes 40 to Payables Total and Loan Total. A July 31 line
-  for 2402 or a different Source is not moved. If all activity is footnoted,
+  Adjusted Amount -100 and 100. Their Payment subtotal is zero.
+- Beginning Balance Total -1,000, Payment Total 200 from two 100 credits, and
+  Loan Activity Total -75 produce Loan Total -875 when all other sections are
+  zero. Changing a payment's Adjusted Amount from 100 to 125 updates Payment
+  Total to 225 and Loan Total to -850. A blank opening balance with only a 75
+  credit payment gives Loan Total 75.
+- In FY2027, a 2100 Supplier Invoice Payment debit dated July 31, 2026 for 100
+  moves below Loan Total with Adjusted Amount -100 and the footnote, contributing
+  nothing to either total. Another 2100 Supplier Invoice Payment debit dated
+  August 1, 2026 for 40 stays in Payables and contributes -40 to Payables Total
+  and Loan Total. A July 31 line for 2402 or a different Source is not moved.
+  If all activity is footnoted,
   Payables Total is zero and Loan Total reflects the opening subtotal alone.
-- A 1621 line with Source `SIS Import` remains unclassified with its original
-  value; a 2100 SIS debit of 100 remains a Payable with Adjusted Amount 100.
+- A 1621 debit of 100 with Source `SIS Import` remains unclassified with Amount
+  100 and Adjusted Amount -100; a 2100 SIS debit of 100 remains a Payable with
+  Adjusted Amount -100. Interest, late fees and Other ledger debits follow the
+  same sign rule. Credit values remain unchanged in every section.
 - Two Payment lines occupy rows 10–11, subtotal 12, blank 13, next section 14.
   Five lines occupy 10–14, subtotal 15, blank 16, next section 17. With none,
   subtotal 10, blank 11, next section 12.
