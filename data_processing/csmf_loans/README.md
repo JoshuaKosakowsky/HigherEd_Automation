@@ -127,13 +127,18 @@ reports their count for review.
 Rows 1–6 contain the specified report/column headers. Row 7 is the FY opening
 balance, row 8 its subtotal, row 9 blank, and activity begins at row 10. Sections
 are **Payment**, **Loan Activity**, **1621 — Unclassified**,
-**Payables (2100/2402)**, **Payables (2881)**,
+**Payables (2100/2402)**, **Payables (2881)**, **AR (1382)**,
 **Interest on loans (5909R)** and **Late fees on loans (8309R)**. Each row has an
 Accounting Date; sections sort **newest to oldest** by that date. Same-date rows
 retain ascending journal number and original source-row order as tie-breakers.
 2100 and 2402 remain distinguishable in Activity labels. Qualifying prior-year
 2100 payments appear in the footnote block described below. 2881's recipient is
-unspecified. 1021/1036/1382 do not enter loan activity but remain in source data.
+unspecified. Following owner clarification in 0.30.9, ledger **1382** is included
+as **AR** immediately after Payables (2881), replacing its earlier exclusion.
+Its debit/credit sign rule and newest-first ordering match the other sections.
+**AR Total** sums its Adjusted Amount cells and contributes once to Loan Total;
+an empty AR section shows a zero subtotal. Only 1021/1036 stay excluded from
+loan activity while remaining in source data.
 When no opening value is supplied, its Amount, Debit/Credit and Adjusted Amount
 cells remain blank. The opening subtotal formula stays blank until Adjusted
 Amount contains a number; it does not turn an unknown balance into zero.
@@ -247,6 +252,10 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   100 and Adjusted Amount -100; a 2100 SIS debit of 100 remains a Payable with
   Adjusted Amount -100. Interest, late fees and Other ledger debits follow the
   same sign rule. Credit values remain unchanged in every section.
+- A 1382 debit of 100 and credit of 25 appear as two AR rows directly below
+  Payables (2881), with Adjusted Amounts -100 and 25. AR Total is -75 and adds
+  -75 to Loan Total. Source values remain 100 and 25 in the original order on
+  Journal Lines, with Import Status Included.
 - Two Payment lines occupy rows 10–11, subtotal 12, blank 13, next section 14.
   Five lines occupy 10–14, subtotal 15, blank 16, next section 17. With none,
   subtotal 10, blank 11, next section 12.

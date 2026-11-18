@@ -24,9 +24,10 @@ LOANS = {
 SECTIONS = {
     "payment": "Payment", "loan_activity": "Loan Activity",
     "1621": "1621 — Unclassified", "payables": "Payables (2100/2402)",
-    "2881": "Payables (2881)", "5909R": "Interest on loans", "8309R": "Late fees on loans",
+    "2881": "Payables (2881)", "1382": "AR",
+    "5909R": "Interest on loans", "8309R": "Late fees on loans",
 }
-IGNORED_ACCOUNTS = frozenset({"1021", "1036", "1382"})
+IGNORED_ACCOUNTS = frozenset({"1021", "1036"})
 JOURNAL_ALIASES = {
     "project": ("Project",), "ledger": ("Ledger Account",), "journal": ("Journal Number",),
     "date": ("Accounting Date",), "source": ("Source", "Journal Source"),
