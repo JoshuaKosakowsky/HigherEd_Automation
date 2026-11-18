@@ -136,9 +136,11 @@ retain ascending journal number and original source-row order as tie-breakers.
 unspecified. Following owner clarification in 0.30.9, ledger **1382** is included
 as **AR** immediately after Payables (2881), replacing its earlier exclusion.
 Its debit/credit sign rule and newest-first ordering match the other sections.
-**AR Total** sums its Adjusted Amount cells and contributes once to Loan Total;
-an empty AR section shows a zero subtotal. Only 1021/1036 stay excluded from
-loan activity while remaining in source data.
+The subtotal is labeled **1382 Totals** as of 0.30.10. It sums non-footnoted AR
+Adjusted Amount cells and contributes once to Loan Total; an empty AR section
+shows a zero subtotal. Qualifying July activity is moved to the AR footnote
+below. Only 1021/1036 stay excluded from loan activity while remaining in source
+data.
 When no opening value is supplied, its Amount, Debit/Credit and Adjusted Amount
 cells remain blank. The opening subtotal formula stays blank until Adjusted
 Amount contains a number; it does not turn an unknown balance into zero.
@@ -185,6 +187,26 @@ the footnote. The raw Journal Lines sheet preserves each line and identifies
 its exclusion from activity totals in Import Status. Their Adjusted Amount
 follows the common sign rule: negate Debit, preserve Credit. Footnote placement
 does not apply a second adjustment or change saved balances.
+
+### Prior fiscal year AR footnote
+
+In 0.30.10, the owner extended the same inclusive July 31 cutoff to **1382**
+and explicitly confirmed that it applies to **every Source**, including blank
+Source values. For FY2027, July 1–31, 2026 activity moves below Loan Total;
+August 1, 2026 onward stays in the regular AR section below Payables (2881).
+The selected FY validation remains in effect, so prior/next-FY dates are still
+rejected. This does not broaden the Source restriction for 2100.
+
+Footnoted 1382 rows are excluded from **1382 Totals** and **Loan Total**. They
+appear once in a separate AR block, after the 2100 block when both are present:
+
+> Footnote** — Prior fiscal year accounts receivable activity recorded in the current fiscal year.
+
+These rows use Activity **AR\*\*** and retain the transaction details and common
+Debit/Credit sign rule. Each footnote block remains newest first and is shown
+only when that loan has qualifying rows. Journal Lines retains the original
+data and identifies prior-year AR exclusions in Import Status. Regular AR
+detail labels remain **AR**; its subtotal is exactly **1382 Totals**.
 
 ## Persistence and partial updates
 
@@ -252,10 +274,15 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   100 and Adjusted Amount -100; a 2100 SIS debit of 100 remains a Payable with
   Adjusted Amount -100. Interest, late fees and Other ledger debits follow the
   same sign rule. Credit values remain unchanged in every section.
-- A 1382 debit of 100 and credit of 25 appear as two AR rows directly below
-  Payables (2881), with Adjusted Amounts -100 and 25. AR Total is -75 and adds
-  -75 to Loan Total. Source values remain 100 and 25 in the original order on
-  Journal Lines, with Import Status Included.
+- A 1382 debit of 100 and credit of 25 dated August 1 or later appear as two AR
+  rows directly below Payables (2881), with Adjusted Amounts -100 and 25.
+  1382 Totals is -75 and adds -75 to Loan Total. Source values remain 100 and 25
+  in the original order on Journal Lines, with Import Status Included.
+- For FY2027, a 1382 debit of 100 dated July 31, 2026 moves to the AR footnote
+  regardless of Source and keeps Adjusted Amount -100. A 1382 credit of 25
+  dated August 1, 2026 stays in AR, giving 1382 Totals 25. With Beginning Balance
+  Total -1,000 and no other activity, Loan Total is -975. Footnote edits do not
+  affect either total.
 - Two Payment lines occupy rows 10–11, subtotal 12, blank 13, next section 14.
   Five lines occupy 10–14, subtotal 15, blank 16, next section 17. With none,
   subtotal 10, blank 11, next section 12.

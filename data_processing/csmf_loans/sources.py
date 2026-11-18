@@ -111,7 +111,7 @@ class Activity:
     amount: Decimal
     direction: str
     source_row: int
-    prior_year_payment: bool = False
+    prior_year_activity: bool = False
 
     @property
     def label(self) -> str:
@@ -200,15 +200,16 @@ def prepare_activity(source: SourceData, fiscal_year: int) -> LoanActivity:
             other_count += 1
         # Dates already belong to the selected FY. July is its opening month,
         # so FY2027's inclusive cutoff is July 31, 2026, not July 31, 2027.
-        prior_year_payment = (account == "2100"
-                              and journal_source.casefold() == "supplier invoice payment"
-                              and day <= date(fiscal_year - 1, 7, 31))
+        prior_year_activity = (day <= date(fiscal_year - 1, 7, 31)
+                               and (account == "1382" or (account == "2100"
+                                    and journal_source.casefold() == "supplier invoice payment")))
         rows.append(Activity(project, account, section, text(source.value(row, "journal")), day,
                              journal_source, text(source.value(row, "memo")),
-                             amount, direction, number, prior_year_payment=prior_year_payment))
+                             amount, direction, number, prior_year_activity=prior_year_activity))
         periods.add(period)
-        if prior_year_payment:
-            source.dispositions[number] = "Footnote; prior fiscal year payment excluded from activity totals"
+        if prior_year_activity:
+            kind = "accounts receivable activity" if account == "1382" else "payment"
+            source.dispositions[number] = f"Footnote; prior fiscal year {kind} excluded from activity totals"
         else:
             source.dispositions[number] = "Included; unmapped ledger account" if section == "other" else "Included"
     if not rows:

@@ -285,7 +285,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertFalse(self.cache.exists())
 
     def test_account_rules_and_unknown_accounts_preserve_review_evidence(self):
-        self.write_journal([journal_row(account=account) for account in
+        self.write_journal([journal_row(account=account, day="2026-08-15") for account in
                             ("1021", "1036", "1382", "1621", "2100", "2402", "2881", "5909R", "8309R", "9999")]
                            + [journal_row(project="999999")])
         result = self.run_workflow()
@@ -297,7 +297,7 @@ class CsmfTests(unittest.TestCase):
         self.assertIn("Payables — 2402", labels)
         self.assertIn("Payables (2881)", labels)
         self.assertIn("AR", labels)
-        self.assertIn("AR Total", labels)
+        self.assertIn("1382 Totals", labels)
         self.assertIn("Other — 9999", labels)
         self.assertNotIn("Receivables", " ".join(labels))
         self.assertIn("8 activity rows", result.message)
@@ -309,16 +309,16 @@ class CsmfTests(unittest.TestCase):
         for project in LOANS:
             rows.extend([
                 journal_row(project=project, account="1382", source="SIS",
-                            day="2026-07-01", debit=100, journal="AR-001"),
+                            day="2026-08-01", debit=100, journal="AR-001"),
                 journal_row(project=project, account="1382", source="Manual Journal",
-                            day="2026-08-01", debit=None, credit=25, journal="AR-002"),
+                            day="2026-09-01", debit=None, credit=25, journal="AR-002"),
             ])
         self.write_journal(rows)
         original = self.journal.read_bytes()
         activity = prepare_activity(read_journal(self.journal), 2027)
         self.assertEqual(len(activity.rows), 14)
         self.assertEqual(activity.other_account_count, 0)
-        self.assertTrue(all(row.section == "1382" and row.label == "AR" and not row.prior_year_payment
+        self.assertTrue(all(row.section == "1382" and row.label == "AR" and not row.prior_year_activity
                             for row in activity.rows))
         result = self.run_workflow()
         self.assertIn("14 activity rows", result.message)
@@ -331,10 +331,10 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(sheet["H18"].value, 0)
                 self.assertEqual([sheet.cell(row, 1).value for row in (20, 21)], ["AR", "AR"])
                 self.assertEqual([sheet.cell(row, 2).value for row in (20, 21)], ["AR-002", "AR-001"])
-                self.assertEqual([sheet.cell(row, 3).value.month for row in (20, 21)], [8, 7])
+                self.assertEqual([sheet.cell(row, 3).value.month for row in (20, 21)], [9, 8])
                 self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 7).value, sheet.cell(row, 8).value)
                                   for row in (20, 21)], [(25, "Credit", 25), (100, "Debit", -100)])
-                self.assertEqual(sheet["A22"].value, "AR Total")
+                self.assertEqual(sheet["A22"].value, "1382 Totals")
                 self.assertEqual(sheet["H22"].value, "=SUM(H20:H21)")
                 self.assertEqual(sheet["A24"].value, "Interest on loans Total")
                 self.assertEqual(sheet["A28"].value, "Loan Total")
@@ -372,7 +372,8 @@ class CsmfTests(unittest.TestCase):
             journal_row(source="SIS", debit=80), journal_row(source="SIS", debit=None, credit=10),
             journal_row(source="Unknown", debit=3),
             journal_row(account="2100", debit=40), journal_row(account="2402", debit=None, credit=40),
-            journal_row(account="2881", debit=9), journal_row(account="1382", debit=8), journal_row(account="5909R", debit=2),
+            journal_row(account="2881", debit=9), journal_row(account="1382", debit=8, day="2026-08-15"),
+            journal_row(account="5909R", debit=2),
             journal_row(account="8309R", debit=1), journal_row(account="9999", debit=7),
         ])
         self.run_workflow()
@@ -383,12 +384,12 @@ class CsmfTests(unittest.TestCase):
                 if project == "694511":
                     total_row = 40
                     formula = "=SUM(H8,H12,H16,H19,H23,H26,H29,H32,H35,H38)"
-                    self.assertEqual(sheet["A29"].value, "AR Total")
+                    self.assertEqual(sheet["A29"].value, "1382 Totals")
                     self.assertEqual(sheet["A38"].value, "Other ledger activity — review Total")
                 else:
                     total_row = 26
                     formula = "=SUM(H8,H10,H12,H14,H16,H18,H20,H22,H24)"
-                    self.assertEqual(sheet["A20"].value, "AR Total")
+                    self.assertEqual(sheet["A20"].value, "1382 Totals")
                     self.assertEqual(sheet["H20"].value, 0)
                 self.assertEqual(sheet.max_row, total_row)
                 self.assertEqual(sheet.cell(total_row, 1).value, "Loan Total")
@@ -425,7 +426,6 @@ class CsmfTests(unittest.TestCase):
             (2028, "2100", source_name, "2027-07-31", True),
             (2028, "2100", source_name, "2027-08-01", False),
             (2027, "2402", source_name, "2026-07-31", False),
-            (2027, "1382", source_name, "2026-07-31", False),
             (2027, "1621", source_name, "2026-07-31", False),
             (2027, "2100", "Supplier Invoice Payment Adjustment", "2026-07-31", False),
             (2027, "2100", "Manual Journal", "2026-07-31", False),
@@ -436,7 +436,7 @@ class CsmfTests(unittest.TestCase):
                 self.write_journal([journal_row(account=account, source=source, day=day)])
                 activity = prepare_activity(read_journal(self.journal), year)
                 row, = activity.rows
-                self.assertEqual(row.prior_year_payment, expected)
+                self.assertEqual(row.prior_year_activity, expected)
                 self.assertEqual(row.amount, 100)
                 self.assertEqual(row.adjusted_amount, -100)
                 if expected:
@@ -496,6 +496,101 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual([cell.value for cell in source["D"]][1:], [row[2] for row in rows])
         self.assertEqual(sum("excluded from activity totals" in str(cell.value) for cell in source["J"]), 4)
         self.assertTrue(all(cell.value is None for row in book["Current Recon"] for cell in row))
+
+    def test_prior_year_ar_uses_inclusive_opening_july_cutoff_for_every_source(self):
+        for year in (2027, 2028):
+            for source_name in ("SIS", "Manual Journal", "Supplier Invoice Payment", ""):
+                for day, expected in ((f"{year - 1}-07-01", True), (f"{year - 1}-07-31", True),
+                                      (f"{year - 1}-08-01", False), (f"{year}-06-30", False)):
+                    with self.subTest(year=year, source=source_name, day=day):
+                        self.write_journal([journal_row(account="1382", source=source_name, day=day)])
+                        activity = prepare_activity(read_journal(self.journal), year)
+                        row, = activity.rows
+                        self.assertEqual(row.prior_year_activity, expected)
+                        self.assertEqual((row.section, row.label, row.amount, row.adjusted_amount),
+                                         ("1382", "AR", 100, -100))
+                        status = activity.source.dispositions[row.source_row]
+                        if expected:
+                            self.assertEqual(status, "Footnote; prior fiscal year accounts receivable activity excluded from activity totals")
+                        else:
+                            self.assertEqual(status, "Included")
+        for day in ("2026-06-30", "2027-07-01"):
+            with self.subTest(outside_fy=day):
+                self.write_journal([journal_row(account="1382", day=day)])
+                with self.assertRaisesRegex(ValueError, "not selected FY2027"):
+                    prepare_activity(read_journal(self.journal), 2027)
+
+    def test_ar_and_payable_footnotes_are_separate_and_excluded_from_current_totals(self):
+        rows = []
+        for project in LOANS:
+            rows.extend([
+                journal_row(project=project, account="1382", source="SIS", day="2026-07-01", debit=80, journal="AR-PRIOR-001"),
+                journal_row(project=project, account="1382", source="", day="2026-07-31", debit=None, credit=10, journal="AR-PRIOR-002"),
+                journal_row(project=project, account="1382", day="2026-08-01", debit=100, journal="AR-CURRENT-001"),
+                journal_row(project=project, account="1382", day="2026-09-01", debit=None, credit=25, journal="AR-CURRENT-002"),
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment", day="2026-07-31", debit=None, credit=30, journal="PAY-PRIOR"),
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment", day="2026-08-01", debit=20, journal="PAY-CURRENT"),
+                journal_row(project=project, account="2100", day="2026-07-15", debit=5, journal="PAY-MANUAL"),
+            ])
+        self.write_journal(rows)
+        original = self.journal.read_bytes()
+        self.run_workflow()
+        self.assertEqual(self.journal.read_bytes(), original)
+        book = self.workbook()
+        for project, loan in LOANS.items():
+            with self.subTest(project=project):
+                sheet = book[f"{loan} - {project}"]
+                self.assertEqual(sheet["H18"].value, "=SUM(H16:H17)")
+                self.assertEqual(sheet["A20"].value, "Payables (2881) Total")
+                self.assertEqual([sheet.cell(row, 1).value for row in (22, 23)], ["AR", "AR"])
+                self.assertEqual(sheet["A24"].value, "1382 Totals")
+                self.assertEqual(sheet["H24"].value, "=SUM(H22:H23)")
+                self.assertEqual([sheet.cell(row, 8).value for row in (22, 23)], [25, -100])
+                self.assertEqual(sheet["A30"].value, "Loan Total")
+                self.assertEqual(sheet["H30"].value, "=SUM(H8,H10,H12,H14,H18,H20,H24,H26,H28)")
+                self.assertEqual(sheet["A32"].value,
+                                 "Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year.")
+                self.assertEqual(sheet["A33"].value, "Payables — 2100*")
+                self.assertEqual(sheet["A35"].value,
+                                 "Footnote** — Prior fiscal year accounts receivable activity recorded in the current fiscal year.")
+                self.assertEqual([sheet.cell(row, 1).value for row in (36, 37)], ["AR**", "AR**"])
+                self.assertEqual([sheet.cell(row, 3).value.day for row in (36, 37)], [31, 1])
+                self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 7).value, sheet.cell(row, 8).value)
+                                  for row in (33, 36, 37)], [(30, "Credit", 30), (10, "Credit", 10), (80, "Debit", -80)])
+                self.assertEqual(sheet.max_row, 37)
+                for heading in (32, 35):
+                    self.assertIn(f"A{heading}:H{heading}", sheet.merged_cells)
+                    self.assertTrue(sheet.cell(heading, 1).font.italic)
+                    self.assertTrue(all(cell.value is None for cell in sheet[heading - 1]))
+                journals = [cell.value for cell in sheet["B"] if cell.row >= 7 and cell.value]
+                self.assertEqual(sorted(journals), sorted(row[2] for row in rows if row[0] == project))
+                self.assertNotIn("AR Total", [cell.value for cell in sheet["A"]])
+        statuses = [cell.value for cell in list(book["Journal Lines"]["J"])[1:]]
+        self.assertEqual(sum("accounts receivable activity excluded" in status for status in statuses), 14)
+        self.assertEqual(sum("payment excluded" in status for status in statuses), 7)
+
+    def test_ar_only_footnotes_leave_1382_totals_zero_and_preserve_ties(self):
+        rows = []
+        for project in LOANS:
+            rows.extend([
+                journal_row(project=project, account="1382", source="SIS", day="2026-07-31", debit=25, journal="AR-002"),
+                journal_row(project=project, account="1382", source="", day="2026-07-31", debit=0, journal="AR-001"),
+                journal_row(project=project, account="1382", day="2026-07-31", debit=50, journal="AR-001"),
+            ])
+        self.write_journal(rows)
+        self.run_workflow()
+        book = self.workbook()
+        for project, loan in LOANS.items():
+            with self.subTest(project=project):
+                sheet = book[f"{loan} - {project}"]
+                self.assertEqual(sheet["A20"].value, "1382 Totals")
+                self.assertEqual(sheet["H20"].value, 0)
+                self.assertEqual(sheet["A26"].value, "Loan Total")
+                self.assertEqual(sheet["H26"].value, "=SUM(H8,H10,H12,H14,H16,H18,H20,H22,H24)")
+                self.assertEqual(sheet["A28"].value,
+                                 "Footnote** — Prior fiscal year accounts receivable activity recorded in the current fiscal year.")
+                self.assertEqual(sheet.max_row, 31)
+                self.assertEqual([sheet.cell(row, 8).value for row in (29, 30, 31)], [0, -50, -25])
 
     def test_all_footnoted_activity_keeps_payables_zero_and_loan_total_at_opening_balance(self):
         rows = []
