@@ -43,6 +43,9 @@ def _current_recon_sheet(
     sheet["A1"] = "Donor Restricted Student Loans - Administered by School"
     sheet["A2"] = f"FY{activity.fiscal_year} — All uploaded activity"
     sheet["H2"] = "Included periods: " + ", ".join(activity.periods)
+    sheet["A3"] = "Reconciliation month"
+    sheet["D3"] = max(row.day for row in activity.rows).replace(day=1)
+    sheet["D3"].number_format = "mmmm yyyy"
     labels = {
         "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
         "N5": "Total Due to\nFoundation", "P5": "Total Due From\nFoundation",
@@ -53,14 +56,14 @@ def _current_recon_sheet(
         "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
         "D19": "Unisa Ending\nBalance", "E19": "GL", "F19": "Variance",
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
-        "A16": "Beginning balances use raw amounts. Activity and GL retain Adjusted Amount signs. AP, AR and variance calculations are pending.",
+        "A16": "Beginning Balance = FY opening + all uploaded 1621 credits - debits, including the reconciliation month. AP, AR and variance calculations are pending.",
         "A29": "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs.",
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
         "A34": "Reviewed By:", "A35": "Reviewed Date:",
     }
     for cell, label in labels.items():
         sheet[cell] = label
-    for region in ("A1:P1", "A2:G2", "H2:P2", "A5:H5", "J5:L5", "N5:N6", "P5:P6",
+    for region in ("A1:P1", "A2:G2", "H2:P2", "A3:C3", "A5:H5", "J5:L5", "N5:N6", "P5:P6",
                    "A14:C14", "A16:P16", "A18:L18", "G19:L19",
                    "A27:C27", "A29:P29", "A31:D31"):
         sheet.merge_cells(region)
@@ -71,10 +74,16 @@ def _current_recon_sheet(
         sheet.cell(row, 1, LOANS[project].upper())
         sheet.cell(row, 2, RECON_UNISA_ACCOUNTS[project])
         sheet.cell(row, 3, project)
-        # Summary opening balances use the raw Amount, independently of the
-        # adjusted opening that still contributes to the loan's GL total.
+        # Payment, Loan Activity and Unclassified are the first three sections
+        # and contain only 1621. Subtotal rows have no Debit/Credit marker.
+        # Include every uploaded period, including the reconciliation month.
         opening = f"{loan_sheet}!F7"
-        sheet.cell(row, 4, f'=IF({opening}="","",{opening})')
+        last_1621 = totals["1621"] - 1
+        amounts = f"{loan_sheet}!F10:F{last_1621}"
+        directions = f"{loan_sheet}!G10:G{last_1621}"
+        sheet.cell(row, 4, f'=IF({opening}="","",{opening}'
+                          f'+SUMIFS({amounts},{directions},"Credit")'
+                          f'-SUMIFS({amounts},{directions},"Debit"))')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):
             sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")

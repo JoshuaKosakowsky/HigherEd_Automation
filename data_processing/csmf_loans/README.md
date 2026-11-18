@@ -195,7 +195,7 @@ reference workbook is required at runtime or stored in the repository.
 | Summary field | Live source / calculation |
 |---|---|
 | Unisa Acct | Reference identifier by Project; repeated in Pending Items, with Bruce blank |
-| Beginning Balance | Loan tab's raw opening Amount (F7); preserve its sign, blank and zero separately |
+| Beginning Balance | Raw FY opening Amount + all uploaded 1621 credits - all uploaded 1621 debits |
 | Adjustments/Reclass | Existing 1621 — Unclassified Total; only the summary heading changed |
 | FY Loan Activity (Net) | Loan Activity Total, including disbursements and reversals |
 | FY Payments | Payment Total |
@@ -207,22 +207,39 @@ reference workbook is required at runtime or stored in the repository.
 | Pending Items: GL | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
 
 In 0.30.13, the owner requested the original headings shown above and raw
-beginning balances in the upper table. Column D now links the loan tab's **F7**
-Amount, not its adjusted opening subtotal. This does not change the adjusted
-opening on the loan tab or its contribution to GL. Positive and negative source
-values both retain their original sign in summary D; this is not an absolute
-value conversion. The remaining changes are labels only: Adjustments/Reclass
-still links the existing unclassified 1621 section, Net Change in Principal
-still sums E:G, and GL still links the existing Loan Total. No new adjustment
-classification or independent GL source is introduced.
+beginning balances in the upper table. In 0.30.14, the owner clarified that
+**Beginning Balance = raw FY opening + 1621 credits - 1621 debits** and explicitly
+selected **all uploaded 1621 activity**, including the reconciliation month.
+There is no prior-month-only cutoff. The reconciliation month shown above the
+table is the latest Accounting Date month among included loan activity across
+all seven projects and included ledger accounts. It is independent of the run
+date and does not filter the beginning-balance formula or other FY summaries.
+
+Column D keeps the calculation in its existing cell. Its visible Excel formula
+starts with the loan tab's **F7** raw FY opening, adds a `SUMIFS` of raw Amount
+for Credit, then subtracts a `SUMIFS` for Debit. Both sums cover only the first
+three activity sections: Payment, Loan Activity and 1621 — Unclassified. This
+includes every Source; subtotal/blank rows have no Debit/Credit marker and
+cannot be counted twice. All other ledger accounts and prior-year footnotes
+are outside that range. The limits follow each loan's actual section sizes.
+
+The raw source values retain their signs, including negative credits/debits.
+This is not an absolute-value conversion and does not use manually edited
+Adjusted Amount values. A missing FY opening keeps D blank; a supplied zero
+allows the activity calculation. The adjusted opening on the loan tab and its
+contribution to GL are unchanged. Adjustments/Reclass still links the existing
+unclassified 1621 section, Net Change in Principal still sums E:G, and GL still
+links Loan Total. No new adjustment classification or independent GL source is
+introduced.
 
 Links use the subtotal rows actually generated for each loan, so different
 transaction counts and optional Other activity cannot shift them onto the wrong
 cells. Activity and GL update with Excel edits to Adjusted Amount and retain
 those signs; the summary does not flip them again or reuse the old principal
 subtraction formulas. Summary beginning balances instead update from edits to
-the raw opening Amount. The header lists the selected FY and exactly
-the uploaded periods, including gaps. It does not assert complete FY coverage.
+the raw FY opening, raw 1621 Amounts and their Debit/Credit labels. The header
+lists the selected FY and exactly the uploaded periods, including gaps. It does
+not assert complete FY coverage.
 
 AP/AR amounts and totals, Unisa Ending Balance total, and variances display
 **Pending**, without a calculation. Unisa ending balances, review notes and
@@ -230,23 +247,30 @@ completion/review fields are blank editable cells. Entering a Unisa ending
 balance does not activate a variance formula in this iteration. The aggregate
 beginning balance is also Pending if any loan's opening balance is missing;
 each missing opening remains blank while its Loan Total includes available
-activity, as before. A supplied zero opening is still numeric zero.
+activity, as before. A supplied zero FY opening counts as known and allows the
+1621 activity calculation.
 
 Synthetic acceptance examples:
 
-- Opening 1,000 appears as 1,000 in summary D and remains -1,000 in the loan tab's
-  Adjusted Amount. SIS debit 100 and SIS credit 25 give net loan activity -75.
-  Journal credit 40 and unclassified debit 3 give Net Change in Principal
-  -38. Interest credit 10 and fee debit 2 give Total Interest and Fees 8. These
-  examples use multiple uploaded months, all included in the summary.
+- Raw FY opening 1,000, SIS debit 100, SIS credit 25, Journal credit 40 and
+  unclassified debit 3 produce summary Beginning Balance **962**
+  (`1000 + 25 + 40 - 100 - 3`). This includes September entries when September
+  is the displayed reconciliation month. The loan tab's adjusted opening
+  remains -1,000; net loan activity is -75 and Net Change in Principal is -38.
+  Interest credit 10 and fee debit 2 give Total Interest and Fees 8, without
+  changing the 1621 beginning-balance calculation.
 - Adding offsetting 2100/2402 amounts (-5 and 5), 2881 credit 7, regular 1382
   credit 11 and Other debit 4 gives Loan Total (summary GL) -1,016. Prior-year 2100/1382
   footnotes do not enter this total. The AP/AR and variance fields remain
   Pending rather than treating these components as amounts owed to/from the
   Foundation before their treatment is confirmed.
-- A blank Bruce opening remains blank; an explicitly supplied zero remains
-  zero. The total opening stays Pending until all seven openings are supplied,
-  while existing per-loan activity totals remain available.
+- A blank Bruce FY opening keeps D blank; a supplied zero FY opening permits
+  the credits-minus-debits calculation. The aggregate D14 stays Pending until
+  all seven FY openings are supplied; existing loan activity totals remain
+  available.
+- With raw opening zero, 1621 credit 25 and debit 100, D is -75. A negative
+  credit of -4 subtracts 4 and a negative debit of -5 adds 5. Other-account
+  entries can determine the displayed report month but do not enter D.
 
 ### Prior fiscal year payment footnote
 
