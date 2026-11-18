@@ -116,15 +116,39 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual(activity.rows[0].project, "694511")
         self.assertEqual(activity.rows[0].source_row, 4)
 
-    def test_source_dates_sort_all_months_and_keep_identical_lines(self):
-        self.write_journal([journal_row(day="2026-08-05", debit=None, credit=15),
-                            journal_row(day="2026-07-05", debit=20),
-                            journal_row(day="2026-07-05", debit=20)])
+    def test_source_dates_sort_newest_first_and_preserve_same_date_ties_and_duplicates(self):
+        self.write_journal([journal_row(day="2026-07-05", debit=20, journal="J-002"),
+                            journal_row(day="2026-08-05", debit=None, credit=15),
+                            journal_row(day="2026-08-05", debit=30, journal="J-002"),
+                            journal_row(day="2026-08-05", debit=40),
+                            journal_row(day="2026-07-05", debit=20, journal="J-002")])
         activity = prepare_activity(read_journal(self.journal), 2027)
         self.assertEqual(activity.periods, ("P01", "P02"))
-        self.assertEqual([row.amount for row in activity.rows], [20, 20, 15])
-        self.assertEqual([row.direction for row in activity.rows], ["Debit", "Debit", "Credit"])
+        self.assertEqual([row.amount for row in activity.rows], [15, 40, 30, 20, 20])
+        self.assertEqual([row.direction for row in activity.rows], ["Credit", "Debit", "Debit", "Debit", "Debit"])
+        self.assertEqual([row.source_row for row in activity.rows], [4, 6, 5, 3, 7])
         self.assertTrue(all(row.section == "1621" for row in activity.rows))
+
+    def test_loan_worksheets_show_newest_dates_first_within_each_section(self):
+        rows = []
+        for project in ("694511", "694516"):
+            rows.extend([journal_row(project=project, day="2026-07-05", debit=100),
+                         journal_row(project=project, day="2026-08-05", debit=200),
+                         journal_row(project=project, account="2100", day="2026-07-02", debit=50),
+                         journal_row(project=project, account="2402", day="2026-08-07", debit=None, credit=60)])
+        self.write_journal(rows)
+        self.run_workflow()
+        book = self.workbook()
+        for project in ("694511", "694516"):
+            with self.subTest(project=project):
+                sheet = book[f"{LOANS[project]} - {project}"]
+                self.assertEqual([sheet.cell(row, 3).value.date().isoformat() for row in (10, 11, 14, 15)],
+                                 ["2026-08-05", "2026-07-05", "2026-08-07", "2026-07-02"])
+                self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 14, 15)], [200, 100, 60, 50])
+                self.assertEqual(sheet["A7"].value, "Beginning Balance of the FY")
+                self.assertEqual(sheet["H12"].value, "=SUM(H10:H11)")
+                self.assertEqual(sheet["H16"].value, "=SUM(H14:H15)")
+        self.assertEqual([cell.value for cell in book["Journal Lines"]["E"]][1:], [row[3] for row in rows])
 
     def test_source_direction_and_original_values_are_preserved(self):
         self.write_journal([journal_row(debit=None, credit=25), journal_row(debit=-5),

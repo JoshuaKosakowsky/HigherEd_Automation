@@ -89,7 +89,8 @@ Rows 1–6 contain the specified report/column headers. Row 7 is the FY opening
 balance, row 8 its subtotal, row 9 blank, and activity begins at row 10. Sections
 are **1621 — Unclassified**, **Payables (2100/2402)**, **Payables (2881)**,
 **Interest on loans (5909R)** and **Late fees on loans (8309R)**. Each row has an
-Accounting Date; sections sort by date, journal number, then original row order.
+Accounting Date; sections sort **newest to oldest** by that date. Same-date rows
+retain ascending journal number and original source-row order as tie-breakers.
 2100 and 2402 remain distinguishable in Activity labels. 2881's recipient is
 unspecified. 1021/1036/1382 do not enter loan activity but remain in source data.
 When no opening value is supplied, its Amount, Debit/Credit and Adjusted Amount
@@ -158,7 +159,9 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   Five lines occupy 10–14, subtotal 15, blank 16, next section 17. With none,
   subtotal 10, blank 11, next section 12.
 - July/August transactions retain individual dates under the same activity
-  sections. No Payment/Adjustment classification is inferred for 1621.
+  sections, with August activity above July activity. Identical lines are kept;
+  source worksheets retain their uploaded order. No Payment/Adjustment
+  classification is inferred for 1621.
 
 ## Deferred work and verification
 

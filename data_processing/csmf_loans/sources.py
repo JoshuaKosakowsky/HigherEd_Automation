@@ -178,5 +178,5 @@ def prepare_activity(source: SourceData, fiscal_year: int) -> LoanActivity:
         source.dispositions[number] = "Included; unmapped ledger account" if section == "other" else "Included"
     if not rows:
         raise ValueError("No loan activity was found for the configured projects and included accounts.")
-    rows.sort(key=lambda row: (row.day, row.journal, row.source_row))
+    rows.sort(key=lambda row: (-row.day.toordinal(), row.journal, row.source_row))
     return LoanActivity(fiscal_year, tuple(rows), source, tuple(sorted(periods)), other_count)
