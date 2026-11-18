@@ -195,7 +195,7 @@ reference workbook is required at runtime or stored in the repository.
 | Summary field | Live source / calculation |
 |---|---|
 | Unisa Acct | Reference identifier by Project; repeated in Pending Items, with Bruce blank |
-| Beginning Balance | Raw FY opening Amount + all uploaded 1621 credits - all uploaded 1621 debits |
+| Beginning Balance | Raw FY opening Amount + all uploaded 1621 debits - all uploaded 1621 credits |
 | Adjustments/Reclass | Existing 1621 — Unclassified Total; only the summary heading changed |
 | FY Loan Activity (Net) | Loan Activity Total, including disbursements and reversals |
 | FY Payments | Payment Total |
@@ -207,9 +207,10 @@ reference workbook is required at runtime or stored in the repository.
 | Pending Items: GL | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
 
 In 0.30.13, the owner requested the original headings shown above and raw
-beginning balances in the upper table. In 0.30.14, the owner clarified that
-**Beginning Balance = raw FY opening + 1621 credits - 1621 debits** and explicitly
-selected **all uploaded 1621 activity**, including the reconciliation month.
+beginning balances in the upper table. In 0.30.15, the owner corrected the
+calculation to **Beginning Balance = raw FY opening + 1621 debits - 1621 credits**.
+The 0.30.14 choice of **all uploaded 1621 activity**, including the reconciliation
+month, still applies.
 There is no prior-month-only cutoff. The reconciliation month shown above the
 table is the latest Accounting Date month among included loan activity across
 all seven projects and included ledger accounts. It is independent of the run
@@ -217,7 +218,7 @@ date and does not filter the beginning-balance formula or other FY summaries.
 
 Column D keeps the calculation in its existing cell. Its visible Excel formula
 starts with the loan tab's **F7** raw FY opening, adds a `SUMIFS` of raw Amount
-for Credit, then subtracts a `SUMIFS` for Debit. Both sums cover only the first
+for Debit, then subtracts a `SUMIFS` for Credit. Both sums cover only the first
 three activity sections: Payment, Loan Activity and 1621 — Unclassified. This
 includes every Source; subtotal/blank rows have no Debit/Credit marker and
 cannot be counted twice. All other ledger accounts and prior-year footnotes
@@ -253,8 +254,8 @@ activity, as before. A supplied zero FY opening counts as known and allows the
 Synthetic acceptance examples:
 
 - Raw FY opening 1,000, SIS debit 100, SIS credit 25, Journal credit 40 and
-  unclassified debit 3 produce summary Beginning Balance **962**
-  (`1000 + 25 + 40 - 100 - 3`). This includes September entries when September
+  unclassified debit 3 produce summary Beginning Balance **1,038**
+  (`1000 + 100 + 3 - 25 - 40`). This includes September entries when September
   is the displayed reconciliation month. The loan tab's adjusted opening
   remains -1,000; net loan activity is -75 and Net Change in Principal is -38.
   Interest credit 10 and fee debit 2 give Total Interest and Fees 8, without
@@ -265,11 +266,11 @@ Synthetic acceptance examples:
   Pending rather than treating these components as amounts owed to/from the
   Foundation before their treatment is confirmed.
 - A blank Bruce FY opening keeps D blank; a supplied zero FY opening permits
-  the credits-minus-debits calculation. The aggregate D14 stays Pending until
+  the debits-minus-credits calculation. The aggregate D14 stays Pending until
   all seven FY openings are supplied; existing loan activity totals remain
   available.
-- With raw opening zero, 1621 credit 25 and debit 100, D is -75. A negative
-  credit of -4 subtracts 4 and a negative debit of -5 adds 5. Other-account
+- With raw opening zero, 1621 credit 25 and debit 100, D is 75. A negative
+  credit of -4 adds 4 and a negative debit of -5 subtracts 5. Other-account
   entries can determine the displayed report month but do not enter D.
 
 ### Prior fiscal year payment footnote

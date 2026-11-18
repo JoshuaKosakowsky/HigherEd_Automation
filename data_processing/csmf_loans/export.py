@@ -56,7 +56,7 @@ def _current_recon_sheet(
         "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
         "D19": "Unisa Ending\nBalance", "E19": "GL", "F19": "Variance",
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
-        "A16": "Beginning Balance = FY opening + all uploaded 1621 credits - debits, including the reconciliation month. AP, AR and variance calculations are pending.",
+        "A16": "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month. AP, AR and variance calculations are pending.",
         "A29": "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs.",
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
         "A34": "Reviewed By:", "A35": "Reviewed Date:",
@@ -82,8 +82,8 @@ def _current_recon_sheet(
         amounts = f"{loan_sheet}!F10:F{last_1621}"
         directions = f"{loan_sheet}!G10:G{last_1621}"
         sheet.cell(row, 4, f'=IF({opening}="","",{opening}'
-                          f'+SUMIFS({amounts},{directions},"Credit")'
-                          f'-SUMIFS({amounts},{directions},"Debit"))')
+                          f'+SUMIFS({amounts},{directions},"Debit")'
+                          f'-SUMIFS({amounts},{directions},"Credit"))')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):
             sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")
