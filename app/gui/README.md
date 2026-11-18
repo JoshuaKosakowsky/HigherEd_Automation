@@ -386,9 +386,13 @@ Activity adds Banner and non-SIS Workday, so opposite signs wash to zero.
 From patch 0.26.1, CWID Recon sorts by CWID ascending, then fiscal year and period.
 Student groups alternate between no fill and Combined's light grey across all
 their period rows. Amounts remain separate for each student/fiscal period.
-From 0.27.1, Banner Data shows a CWID in column B and flags conflicting IDs for
-review. CWID Rolling Total sums Net Period Activity per student and lists the
-contributing periods for nonzero totals. Rerun the workflow to refresh the snapshot.
+From 0.27.1, Banner Data shows a CWID in column B. Patch 0.29.4 prioritizes a
+single Description CWID over a different ID, including legacy numeric sponsor
+accounts. Multiple distinct CWIDs within Description still require review;
+ID is the fallback when Description has none. This changes the Banner Data
+display field only. CWID Rolling Total sums Net Period Activity per student and
+lists the contributing periods for nonzero totals. Rerun the workflow to refresh
+the snapshot.
 Document Difference is Banner minus Workday. Period Totals compares Banner against all
 Workday (SIS plus Other) and keeps a blank **Notes** column for staff comments.
 See the [1305 technical guide](../../data_processing/graduate_contract_recon/README.md)

@@ -468,11 +468,43 @@ class GraduateContractReconTests(unittest.TestCase):
             book = load_workbook(output)
             try:
                 self.assertEqual([cell.value for cell in book["Banner Data"]["B"]], [
-                    "CWID", "10000001", "10000002", "REVIEW: CWID conflict",
+                    "CWID", "10000001", "10000002", "10000004",
                     "REVIEW: CWID conflict", "NO CWID", "10000008",
                 ])
                 self.assertEqual([cell.value for cell in book["1305 CWID Recon"]["C"]],
                                  ["CWID", "10000002", "10000003", "10000005", "10000008"])
+            finally:
+                book.close()
+
+    def test_banner_display_cwid_prioritizes_description_over_legacy_sponsor_ids(self):
+        cases = [
+            ("10900001", "Tuition for 10000001", "10000001"),
+            (10900002.0, "10000002 Synthetic student RA", "10000002"),
+            ("10900003", "10000003 repeated (10000003)", "10000003"),
+            ("10900004", "10000004 and 10000005", "REVIEW: CWID conflict"),
+            ("10900005", "No student number supplied", "10900005"),
+            ("TPS00100", "No student number supplied", "NO CWID"),
+            ("10900006", "Tuition for 10900007", "10900007"),
+            ("10000008", "10000008 and 10000009", "REVIEW: CWID conflict"),
+        ]
+        result = self.build([], [bn_row(account=account, desc=description)
+                                 for account, description, _ in cases])
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "review.xlsx"
+            export_reconciliation(result, output, app_version="synthetic", banner_source="manual")
+            book = load_workbook(output)
+            try:
+                banner = book["Banner Data"]
+                self.assertEqual([cell.value for cell in banner["B"]][1:],
+                                 [expected for _, _, expected in cases])
+                self.assertEqual([cell.value for cell in banner["A"]][1:],
+                                 [account for account, _, _ in cases])
+                headers = [cell.value for cell in banner[1]]
+                description_column = headers.index("'Description'") + 1
+                amount_column = headers.index("'Amount'") + 1
+                for number, (_, description, _) in enumerate(cases, 2):
+                    self.assertEqual(banner.cell(number, description_column).value, description)
+                    self.assertEqual(banner.cell(number, amount_column).value, 60)
             finally:
                 book.close()
 

@@ -129,12 +129,20 @@ The periods are not collapsed or netted across rows.
 Banner Data puts ID first and adds CWID in column B. A CWID has eight digits
 beginning with `10`. Search the entire transaction Description for a complete
 number, then fall back to a valid ID if Description has none. Repeated mentions
-of the same number count once. If Description contains several distinct CWIDs
-or disagrees with a valid ID, show `REVIEW: CWID conflict`. If neither field
-supplies one, show `NO CWID`. For example, ID `TPS00100` with Description
-`Tuition (10000001)` displays `10000001`; ID `10000002` with the same description
-displays `REVIEW: CWID conflict`. This display field is independent of the
-existing transaction attribution used by the reconciliation. [Issue #38](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/38)
+of the same number count once. A single Description CWID takes priority even
+when ID contains a different valid-looking CWID. If Description contains several
+distinct CWIDs, show `REVIEW: CWID conflict`; ID must not break that ambiguity.
+If neither field supplies one, show `NO CWID`. For example, ID `TPS00100` or
+`10900001` with Description `Tuition (10000001)` displays `10000001`. Description
+`10000001 and 10000002` still displays `REVIEW: CWID conflict`, even if ID matches
+one of those numbers. This display field is independent of the existing
+transaction attribution used by the reconciliation. [Issue #38](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/38)
+
+Patch **0.29.4** corrects Description-versus-ID priority following the owner's
+clarification: legacy sponsor accounts used `109xxxxx` IDs before the TPS format,
+so a different student CWID in Description is not itself a conflict. The existing
+eight-digit `10` prefix rule remains; `109xxxxx` is not categorically rejected.
+If Description supplies no CWID, a valid ID remains the fallback.
 
 CWID Rolling Total uses the student and fiscal-period rows in 1305 CWID Recon
 and lists each nonzero contributing period in chronological order. Semicolon

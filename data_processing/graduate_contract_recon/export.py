@@ -48,8 +48,10 @@ def combined_output_row(row: list[object]) -> list[object]:
 def _banner_display_cwid(account: object, description: object) -> str:
     account_cwid = student_id(account)
     description_cwids = {match for match in STUDENT_PATTERN.findall(text(description)) if student_id(match)}
-    if len(description_cwids) > 1 or (account_cwid and description_cwids - {account_cwid}):
+    if len(description_cwids) > 1:
         return "REVIEW: CWID conflict"
+    # Legacy sponsor IDs can look like student CWIDs (109xxxxx). A single
+    # description CWID identifies the student even when the account ID differs.
     return next(iter(description_cwids), account_cwid) or "NO CWID"
 
 
