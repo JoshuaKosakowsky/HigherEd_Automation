@@ -288,6 +288,55 @@ class CsmfTests(unittest.TestCase):
                                  f"=SUM(H10:H{total_row - 1})" if count else 0)
                 self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
                 self.assertIsNone(sheet.cell(total_row + 1, 1).value)
+                self.assertEqual(sheet.cell(sheet.max_row, 1).value, "Loan Total")
+                self.assertEqual(sheet.cell(sheet.max_row, 8).value,
+                                 f"=SUM(H8,H{total_row},H{next_row},H{next_row + 2},"
+                                 f"H{next_row + 5},H{next_row + 7},H{next_row + 9},H{next_row + 11})")
+
+    def test_loan_total_includes_opening_and_all_sections_without_counting_details_twice(self):
+        self.write_journal([
+            journal_row(debit=100), journal_row(debit=None, credit=20),
+            journal_row(source="SIS", debit=80), journal_row(source="SIS", debit=None, credit=10),
+            journal_row(source="Unknown", debit=3),
+            journal_row(account="2100", debit=40), journal_row(account="2402", debit=None, credit=40),
+            journal_row(account="2881", debit=9), journal_row(account="5909R", debit=2),
+            journal_row(account="8309R", debit=1), journal_row(account="9999", debit=7),
+        ])
+        self.run_workflow()
+        book = self.workbook()
+        for project, loan in LOANS.items():
+            with self.subTest(project=project):
+                sheet = book[f"{loan} - {project}"]
+                if project == "694511":
+                    total_row = 37
+                    formula = "=SUM(H8,H12,H16,H19,H23,H26,H29,H32,H35)"
+                    self.assertEqual(sheet["A35"].value, "Other ledger activity — review Total")
+                else:
+                    total_row = 24
+                    formula = "=SUM(H8,H10,H12,H14,H16,H18,H20,H22)"
+                self.assertEqual(sheet.max_row, total_row)
+                self.assertEqual(sheet.cell(total_row, 1).value, "Loan Total")
+                self.assertEqual(sheet.cell(total_row, 8).value, formula)
+                self.assertEqual(sheet.cell(total_row, 8).data_type, "f")
+                self.assertTrue(sheet.cell(total_row, 8).font.bold)
+                self.assertEqual(sheet.cell(total_row, 8).number_format, sheet["H8"].number_format)
+                self.assertTrue(all(cell.value is None for cell in sheet[total_row - 1]))
+                self.assertTrue(all(sheet.cell(total_row, column).value is None for column in range(2, 8)))
+
+    def test_loan_total_keeps_blank_and_zero_opening_balances_distinct(self):
+        self.write_trial([[self.balance_rows[0][0], 0]])
+        self.write_journal([journal_row(project="694516", debit=None, credit=75)])
+        self.run_workflow()
+        book = self.workbook()
+        bruce = book["Bruce - 694516"]
+        self.assertIsNone(bruce["H7"].value)
+        self.assertEqual(bruce["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
+        self.assertEqual(bruce["H11"].value, "=SUM(H10:H10)")
+        self.assertEqual(bruce["H25"].value, "=SUM(H8,H11,H13,H15,H17,H19,H21,H23)")
+        for project in ("694511", "694512"):
+            sheet = book[f"{LOANS[project]} - {project}"]
+            self.assertEqual(sheet["H7"].value, 0 if project == "694511" else None)
+            self.assertEqual(sheet["H24"].value, "=SUM(H8,H10,H12,H14,H16,H18,H20,H22)")
 
     def test_seven_loan_tabs_empty_current_recon_and_literal_source_text(self):
         self.write_journal([journal_row(memo='=HYPERLINK("https://invalid.example")')])

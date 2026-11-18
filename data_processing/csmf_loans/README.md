@@ -139,6 +139,13 @@ accounts for a configured loan appear in **Other ledger activity — review**
 instead of being lost. Non-configured projects stay in the source tab with
 their import status. A file with no usable configured-loan activity is rejected.
 
+**Loan Total** appears after the last section on every loan worksheet. Its
+Adjusted Amount formula adds Beginning Balance Total and each activity section
+subtotal exactly once, including unclassified and Other activity when present.
+It updates when Adjusted Amount detail cells are edited. Empty sections
+contribute zero; a blank opening subtotal is ignored, leaving the total of
+available activity without filling in the missing opening balance.
+
 `Opening Balances` records each project's value, original upload timestamp and
 source filename, including those retained from older uploads. `Journal Lines`
 preserves source columns, source row numbers and import status. `Trial Balance`
@@ -195,6 +202,10 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   subtotal is -75. Original Amounts remain 100 and 25.
 - Two 1621 Journal lines, debit 100 and credit 100, appear as Payments with
   Adjusted Amount 100 each. Their Payment subtotal is 200, not net zero.
+- Beginning Balance Total -1,000, Payment Total 200 and Loan Activity Total -75
+  produce Loan Total -875 when all other sections are zero. Changing a payment's
+  Adjusted Amount from 100 to 125 updates Payment Total to 225 and Loan Total
+  to -850. A blank opening balance with only a 75 payment gives Loan Total 75.
 - A 1621 line with Source `SIS Import` remains unclassified with its original
   value; a 2100 SIS debit of 100 remains a Payable with Adjusted Amount 100.
 - Two Payment lines occupy rows 10–11, subtotal 12, blank 13, next section 14.

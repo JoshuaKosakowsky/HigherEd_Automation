@@ -106,6 +106,10 @@ def build_workbook(
                 sheet.cell(total_row, 8, f"=SUM(H{first}:H{last})")
             totals.append(total_row)
             _append(sheet, [])
+        loan_total = _append(sheet, ["Loan Total"])
+        # Reference subtotals only so detail rows are not counted a second time.
+        sheet.cell(loan_total, 8, f"=SUM({','.join(f'H{number}' for number in totals)})")
+        totals.append(loan_total)
         apply_default_font(sheet)
         style_header_row(sheet, row_number=3)
         style_header_row(sheet, row_number=6)
