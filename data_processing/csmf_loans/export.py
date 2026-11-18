@@ -46,15 +46,15 @@ def _current_recon_sheet(
     labels = {
         "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
         "N5": "Total Due to\nFoundation", "P5": "Total Due From\nFoundation",
-        "A6": "Loan", "B6": "Unisa\nAcct", "C6": "Project", "D6": "Beginning\nBalance (Adjusted)",
-        "E6": "1621\nUnclassified", "F6": f"FY{activity.fiscal_year}\nLoan Activity (Net)",
-        "G6": f"FY{activity.fiscal_year}\nPayments", "H6": "1621\nNet Activity",
-        "J6": "Interest\n5909R", "K6": "Late Fees\n8309R", "L6": "Total\nInterest and Fees",
+        "A6": "Loan", "B6": "Unisa\nAcct", "C6": "Project", "D6": "Beginning\nBalance",
+        "E6": "Adjustments/\nReclass", "F6": f"FY{activity.fiscal_year}\nLoan Activity (Net)",
+        "G6": f"FY{activity.fiscal_year}\nPayments", "H6": "Net Change\nin Principal",
+        "J6": "Interest", "K6": "Late Charges", "L6": "Total\nInterest and Fees",
         "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
-        "D19": "Comparison\nBalance", "E19": "Loan Total", "F19": "Variance",
+        "D19": "Unisa Ending\nBalance", "E19": "GL", "F19": "Variance",
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
-        "A16": "Adjusted Amount signs are preserved. AP, AR and variance calculations are pending.",
-        "A29": "Blank beginning balances remain unknown; Loan Totals include the available activity. Shaded blanks are review inputs.",
+        "A16": "Beginning balances use raw amounts. Activity and GL retain Adjusted Amount signs. AP, AR and variance calculations are pending.",
+        "A29": "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs.",
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
         "A34": "Reviewed By:", "A35": "Reviewed Date:",
     }
@@ -71,7 +71,9 @@ def _current_recon_sheet(
         sheet.cell(row, 1, LOANS[project].upper())
         sheet.cell(row, 2, RECON_UNISA_ACCOUNTS[project])
         sheet.cell(row, 3, project)
-        opening = f"{loan_sheet}!H{totals['opening']}"
+        # Summary opening balances use the raw Amount, independently of the
+        # adjusted opening that still contributes to the loan's GL total.
+        opening = f"{loan_sheet}!F7"
         sheet.cell(row, 4, f'=IF({opening}="","",{opening})')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):

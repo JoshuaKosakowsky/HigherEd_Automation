@@ -656,9 +656,13 @@ class CsmfTests(unittest.TestCase):
         summary = book["Current Month Recon"]
         self.assertEqual(summary["A2"].value, "FY2027 — All uploaded activity")
         self.assertEqual(summary["H2"].value, "Included periods: P01, P03")
-        self.assertEqual(summary["E6"].value, "1621\nUnclassified")
-        self.assertEqual(summary["J6"].value, "Interest\n5909R")
-        self.assertEqual(summary["K6"].value, "Late Fees\n8309R")
+        self.assertEqual(summary["D6"].value, "Beginning\nBalance")
+        self.assertEqual(summary["E6"].value, "Adjustments/\nReclass")
+        self.assertEqual(summary["H6"].value, "Net Change\nin Principal")
+        self.assertEqual(summary["J6"].value, "Interest")
+        self.assertEqual(summary["K6"].value, "Late Charges")
+        self.assertEqual(summary["D19"].value, "Unisa Ending\nBalance")
+        self.assertEqual(summary["E19"].value, "GL")
         expected_projects = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
         for row, project in enumerate(expected_projects, 7):
             with self.subTest(project=project):
@@ -671,7 +675,7 @@ class CsmfTests(unittest.TestCase):
                                       (7, "Payment Total"), (10, "Interest on loans Total"),
                                       (11, "Late fees on loans Total")):
                     self.assertEqual(summary.cell(row, column).value, f"='{loan.title}'!{total_cells[label]}")
-                self.assertEqual(summary.cell(row, 4).value, f'=IF(\'{loan.title}\'!H8="","",\'{loan.title}\'!H8)')
+                self.assertEqual(summary.cell(row, 4).value, f'=IF(\'{loan.title}\'!F7="","",\'{loan.title}\'!F7)')
                 self.assertEqual(summary.cell(row, 8).value, f"=SUM(E{row}:G{row})")
                 self.assertEqual(summary.cell(row, 12).value, f"=SUM(J{row}:K{row})")
                 self.assertEqual(summary.cell(row + 13, 5).value, f"='{loan.title}'!{total_cells['Loan Total']}")
@@ -719,7 +723,7 @@ class CsmfTests(unittest.TestCase):
             project = summary.cell(row, 3).value
             loan = book[f"{LOANS[project]} - {project}"]
             self.assertEqual(loan["H7"].value, 0 if project == "694511" else None)
-            self.assertEqual(summary.cell(row, 4).value, f'=IF(\'{loan.title}\'!H8="","",\'{loan.title}\'!H8)')
+            self.assertEqual(summary.cell(row, 4).value, f'=IF(\'{loan.title}\'!F7="","",\'{loan.title}\'!F7)')
             for column in (5, 6, 7, 10, 11):
                 formula = summary.cell(row, column).value
                 target = formula.rsplit("!", 1)[1]
@@ -753,10 +757,14 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual(store.path.read_bytes(), raw)
         for path in (self.output, self.root / "reuse.xlsx"):
             book = self.workbook(path)
+            summary = book["Current Month Recon"]
+            summary_rows = {summary.cell(row, 3).value: row for row in range(7, 14)}
             for row_number, ((project, loan), (amount, adjusted)) in enumerate(zip(LOANS.items(), cases), 2):
                 with self.subTest(workbook=path.name, project=project):
                     sheet = book[f"{loan} - {project}"]
                     self.assertEqual(sheet["F7"].value, amount)
+                    self.assertEqual(summary.cell(summary_rows[project], 4).value,
+                                     f'=IF(\'{sheet.title}\'!F7="","",\'{sheet.title}\'!F7)')
                     self.assertEqual(sheet["G7"].value, "Debit" if amount is not None else None)
                     self.assertEqual(sheet["H7"].value, adjusted)
                     self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
