@@ -126,7 +126,8 @@ are **Payment**, **Loan Activity**, **1621 — Unclassified**,
 **Interest on loans (5909R)** and **Late fees on loans (8309R)**. Each row has an
 Accounting Date; sections sort **newest to oldest** by that date. Same-date rows
 retain ascending journal number and original source-row order as tie-breakers.
-2100 and 2402 remain distinguishable in Activity labels. 2881's recipient is
+2100 and 2402 remain distinguishable in Activity labels. Qualifying prior-year
+2100 payments appear in the footnote block described below. 2881's recipient is
 unspecified. 1021/1036/1382 do not enter loan activity but remain in source data.
 When no opening value is supplied, its Amount, Debit/Credit and Adjusted Amount
 cells remain blank. The opening subtotal formula stays blank until Adjusted
@@ -151,6 +152,28 @@ source filename, including those retained from older uploads. `Journal Lines`
 preserves source columns, source row numbers and import status. `Trial Balance`
 is also included when uploaded. With cached balances, the snapshot supplies
 their provenance; the original Trial Balance file is not reconstructed.
+
+### Prior fiscal year payment footnote
+
+Owner clarification in 0.30.7 moves a journal line to the bottom of its loan tab
+when all three conditions hold: Ledger Account is **2100**, Source is exactly
+**Supplier Invoice Payment**, and Accounting Date is on or before **July 31 of
+the selected FY's opening calendar year**. Source matching ignores case and
+surrounding whitespace. The existing FY validation still applies: for FY2027,
+only July 1–31, 2026 qualifies, including July 31. August 1, 2026 and later
+stay in ordinary activity; a date outside FY2027 is still rejected.
+
+Per the owner's explicit confirmation, these payments are **excluded from
+Payables Total and Loan Total**. They appear once, below Loan Total, under:
+
+> Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year.
+
+The footnote rows retain all transaction columns and original values, with
+`Payables — 2100*` as their Activity label. They remain newest first, with the
+existing journal/source-row tie-breakers. Only loans with qualifying rows show
+the footnote. The raw Journal Lines sheet preserves each line and identifies
+its exclusion from activity totals in Import Status. No amounts are negated or
+saved balances changed by this rule.
 
 ## Persistence and partial updates
 
@@ -206,6 +229,12 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   produce Loan Total -875 when all other sections are zero. Changing a payment's
   Adjusted Amount from 100 to 125 updates Payment Total to 225 and Loan Total
   to -850. A blank opening balance with only a 75 payment gives Loan Total 75.
+- In FY2027, a 2100 Supplier Invoice Payment dated July 31, 2026 for 100 moves
+  below Loan Total with the footnote and contributes nothing to either total.
+  Another 2100 Supplier Invoice Payment dated August 1, 2026 for 40 stays in
+  Payables and contributes 40 to Payables Total and Loan Total. A July 31 line
+  for 2402 or a different Source is not moved. If all activity is footnoted,
+  Payables Total is zero and Loan Total reflects the opening subtotal alone.
 - A 1621 line with Source `SIS Import` remains unclassified with its original
   value; a 2100 SIS debit of 100 remains a Payable with Adjusted Amount 100.
 - Two Payment lines occupy rows 10–11, subtotal 12, blank 13, next section 14.

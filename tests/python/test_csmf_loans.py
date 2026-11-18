@@ -338,6 +338,112 @@ class CsmfTests(unittest.TestCase):
             self.assertEqual(sheet["H7"].value, 0 if project == "694511" else None)
             self.assertEqual(sheet["H24"].value, "=SUM(H8,H10,H12,H14,H16,H18,H20,H22)")
 
+    def test_prior_year_payment_requires_exact_account_source_and_opening_july_cutoff(self):
+        source_name = "Supplier Invoice Payment"
+        cases = [
+            (2027, "2100", source_name, "2026-07-01", True),
+            (2027, "2100", source_name, "2026-07-31", True),
+            (2027, "2100", " supplier invoice payment ", "2026-07-15", True),
+            (2027, "2100", source_name, "2026-08-01", False),
+            (2027, "2100", source_name, "2027-06-30", False),
+            (2028, "2100", source_name, "2027-07-31", True),
+            (2028, "2100", source_name, "2027-08-01", False),
+            (2027, "2402", source_name, "2026-07-31", False),
+            (2027, "1621", source_name, "2026-07-31", False),
+            (2027, "2100", "Supplier Invoice Payment Adjustment", "2026-07-31", False),
+            (2027, "2100", "Manual Journal", "2026-07-31", False),
+            (2027, "2100", "", "2026-07-31", False),
+        ]
+        for year, account, source, day, expected in cases:
+            with self.subTest(year=year, account=account, source=source, day=day):
+                self.write_journal([journal_row(account=account, source=source, day=day)])
+                activity = prepare_activity(read_journal(self.journal), year)
+                row, = activity.rows
+                self.assertEqual(row.prior_year_payment, expected)
+                self.assertEqual(row.amount, 100)
+                self.assertEqual(row.adjusted_amount, 100)
+                if expected:
+                    self.assertEqual(row.section, "payables")
+                    self.assertIn("excluded from activity totals", activity.source.dispositions[row.source_row])
+        for day in ("2026-06-30", "2027-07-01", "2027-07-31"):
+            with self.subTest(outside_fy=day):
+                self.write_journal([journal_row(account="2100", source=source_name, day=day)])
+                with self.assertRaisesRegex(ValueError, "not selected FY2027"):
+                    prepare_activity(read_journal(self.journal), 2027)
+
+    def test_prior_year_payments_move_below_loan_total_and_are_excluded_from_both_totals(self):
+        rows = []
+        for project in ("694511", "694516"):
+            rows.extend([
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment",
+                            day="2026-07-01", debit=100, journal="PY-001"),
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment",
+                            day="2026-08-01", debit=40, journal="CURRENT-001"),
+                journal_row(project=project, account="2402", source="Supplier Invoice Payment",
+                            day="2026-07-15", debit=30, journal="CURRENT-002"),
+                journal_row(project=project, account="2100", day="2026-07-15", debit=20, journal="CURRENT-003"),
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment",
+                            day="2026-07-31", debit=None, credit=-25, journal="PY-002"),
+            ])
+        self.write_journal(rows)
+        original = self.journal.read_bytes()
+        self.run_workflow()
+        book = self.workbook()
+        self.assertEqual(self.journal.read_bytes(), original)
+        for project, loan in LOANS.items():
+            with self.subTest(project=project):
+                sheet = book[f"{loan} - {project}"]
+                if project not in {"694511", "694516"}:
+                    self.assertEqual(sheet.max_row, 24)
+                    self.assertEqual(sheet["A24"].value, "Loan Total")
+                    continue
+                self.assertEqual(sheet["A19"].value, "Payables (2100/2402) Total")
+                self.assertEqual(sheet["H19"].value, "=SUM(H16:H18)")
+                self.assertEqual([sheet.cell(row, 8).value for row in (16, 17, 18)], [40, 30, 20])
+                self.assertEqual(sheet["A27"].value, "Loan Total")
+                self.assertEqual(sheet["H27"].value, "=SUM(H8,H10,H12,H14,H19,H21,H23,H25)")
+                self.assertTrue(all(cell.value is None for cell in sheet[28]))
+                self.assertEqual(sheet["A29"].value,
+                                 "Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year.")
+                self.assertIn("A29:H29", sheet.merged_cells)
+                self.assertTrue(sheet["A29"].font.italic)
+                self.assertEqual(sheet.max_row, 31)
+                self.assertEqual([sheet.cell(row, 1).value for row in (30, 31)], ["Payables — 2100*", "Payables — 2100*"])
+                self.assertEqual([sheet.cell(row, 2).value for row in (30, 31)], ["PY-002", "PY-001"])
+                self.assertEqual([sheet.cell(row, 3).value.day for row in (30, 31)], [31, 1])
+                self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 7).value, sheet.cell(row, 8).value)
+                                  for row in (30, 31)], [(-25, "Credit", -25), (100, "Debit", 100)])
+                journals = [cell.value for cell in sheet["B"] if cell.row >= 7 and cell.value]
+                self.assertEqual(sorted(journals), ["CURRENT-001", "CURRENT-002", "CURRENT-003", "PY-001", "PY-002"])
+        source = book["Journal Lines"]
+        self.assertEqual([cell.value for cell in source["D"]][1:], [row[2] for row in rows])
+        self.assertEqual(sum("excluded from activity totals" in str(cell.value) for cell in source["J"]), 4)
+        self.assertTrue(all(cell.value is None for row in book["Current Recon"] for cell in row))
+
+    def test_all_footnoted_activity_keeps_payables_zero_and_loan_total_at_opening_balance(self):
+        rows = []
+        for project in LOANS:
+            rows.extend([
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment",
+                            day="2026-07-31", debit=25, journal="PY-002"),
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment",
+                            day="2026-07-31", debit=0, journal="PY-001"),
+                journal_row(project=project, account="2100", source="Supplier Invoice Payment",
+                            day="2026-07-31", debit=50, journal="PY-001"),
+            ])
+        self.write_journal(rows)
+        self.run_workflow()
+        book = self.workbook()
+        for project, loan in LOANS.items():
+            with self.subTest(project=project):
+                sheet = book[f"{loan} - {project}"]
+                self.assertEqual(sheet["A16"].value, "Payables (2100/2402) Total")
+                self.assertEqual(sheet["H16"].value, 0)
+                self.assertEqual(sheet["A24"].value, "Loan Total")
+                self.assertEqual(sheet["H24"].value, "=SUM(H8,H10,H12,H14,H16,H18,H20,H22)")
+                self.assertEqual(sheet.max_row, 29)
+                self.assertEqual([sheet.cell(row, 8).value for row in (27, 28, 29)], [0, 50, 25])
+
     def test_seven_loan_tabs_empty_current_recon_and_literal_source_text(self):
         self.write_journal([journal_row(memo='=HYPERLINK("https://invalid.example")')])
         self.run_workflow()

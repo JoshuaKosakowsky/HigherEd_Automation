@@ -21,6 +21,9 @@ from .sources import LOANS, SECTIONS, LoanActivity
 HEADERS = ["Activity", "Journal Number", "Accounting Date", "Source", "Description",
            "Amount", "Debit/Credit", "Adjusted Amount"]
 SUBTOTAL_FILL = PatternFill("solid", fgColor="CFDCE9")
+PRIOR_YEAR_PAYMENT_FOOTNOTE = (
+    "Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year."
+)
 
 
 def _append(sheet, values) -> int:
@@ -86,7 +89,8 @@ def build_workbook(
         sheet["H8"] = '=IF(COUNT(H7)=0,"",SUM(H7:H7))'
         _append(sheet, [])
         totals = [8]
-        project_rows = [row for row in activity.rows if row.project == project]
+        project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_payment]
+        footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_payment]
         sections = dict(SECTIONS)
         if any(row.section == "other" for row in project_rows):
             sections["other"] = "Other ledger activity — review"
@@ -110,6 +114,15 @@ def build_workbook(
         # Reference subtotals only so detail rows are not counted a second time.
         sheet.cell(loan_total, 8, f"=SUM({','.join(f'H{number}' for number in totals)})")
         totals.append(loan_total)
+        footnote_heading = None
+        if footnote_rows:
+            _append(sheet, [])
+            footnote_heading = _append(sheet, [PRIOR_YEAR_PAYMENT_FOOTNOTE])
+            for row in footnote_rows:
+                if cancellation:
+                    cancellation.check()
+                _append(sheet, [f"{row.label}*", row.journal, row.day, row.source, row.description,
+                                row.amount, row.direction, row.adjusted_amount])
         apply_default_font(sheet)
         style_header_row(sheet, row_number=3)
         style_header_row(sheet, row_number=6)
@@ -130,6 +143,10 @@ def build_workbook(
                 cell.fill = SUBTOTAL_FILL
                 cell.font = Font(name="Aptos", size=12, bold=True)
             sheet.row_dimensions[number].height = 34
+        if footnote_heading is not None:
+            sheet.merge_cells(start_row=footnote_heading, start_column=1, end_row=footnote_heading, end_column=8)
+            sheet.cell(footnote_heading, 1).font = Font(name="Aptos", size=12, italic=True, color="595959")
+            sheet.row_dimensions[footnote_heading].height = 28
         sheet.row_dimensions[1].height = 32
         for cell in sheet[4]:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
