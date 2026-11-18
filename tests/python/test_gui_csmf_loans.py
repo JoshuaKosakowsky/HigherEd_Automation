@@ -122,7 +122,7 @@ class CsmfGuiTests(unittest.TestCase):
         self.assertFalse(next(p for p in definition.parameters if p.key == "trial_balance_file").required)
         path = get_shared_csmf_balances_directory({"OneDriveCommercial": "C:/Synthetic/Institution"})
         self.assertEqual(path.name, "csmf_opening_balances")
-        self.assertIn("C:/Synthetic/Institution", str(path))
+        self.assertIn(Path("C:/Synthetic/Institution"), path.parents)
 
     def test_july_default_targets_previous_months_fy(self):
         definition = get_workflow("csmf_loans")
