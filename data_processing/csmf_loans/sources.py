@@ -22,6 +22,7 @@ LOANS = {
     "694514": "Welch", "694516": "Bruce", "694518": "Lewis", "694521": "Pearson",
 }
 SECTIONS = {
+    "payment": "Payment", "loan_activity": "Loan Activity",
     "1621": "1621 — Unclassified", "payables": "Payables (2100/2402)",
     "2881": "Payables (2881)", "5909R": "Interest on loans", "8309R": "Late fees on loans",
 }
@@ -110,6 +111,24 @@ class Activity:
     direction: str
     source_row: int
 
+    @property
+    def label(self) -> str:
+        if self.section == "loan_activity":
+            return "Loan Disbursement" if self.direction == "Debit" else "Loan Reversal"
+        if self.section == "payables":
+            return f"Payables — {self.account}"
+        if self.section == "other":
+            return f"Other — {self.account}"
+        return SECTIONS[self.section]
+
+    @property
+    def adjusted_amount(self) -> Decimal:
+        # Only SIS disbursements reverse the source sign; payments and reversals
+        # retain it regardless of which debit/credit column supplied the amount.
+        if self.section == "loan_activity" and self.direction == "Debit":
+            return -self.amount
+        return self.amount
+
 
 @dataclass(frozen=True)
 class LoanActivity:
@@ -167,12 +186,18 @@ def prepare_activity(source: SourceData, fiscal_year: int) -> LoanActivity:
         else:
             direction = "Debit" if debit != ZERO else "Credit"
         amount = debit if direction == "Debit" else credit
+        journal_source = text(source.value(row, "source"))
         section = "payables" if account in {"2100", "2402"} else account
+        if account == "1621":
+            if journal_source.casefold() == "sis":
+                section = "loan_activity"
+            elif "journal" in journal_source.casefold():
+                section = "payment"
         if section not in SECTIONS:
             section = "other"
             other_count += 1
         rows.append(Activity(project, account, section, text(source.value(row, "journal")), day,
-                             text(source.value(row, "source")), text(source.value(row, "memo")),
+                             journal_source, text(source.value(row, "memo")),
                              amount, direction, number))
         periods.add(period)
         source.dispositions[number] = "Included; unmapped ledger account" if section == "other" else "Included"

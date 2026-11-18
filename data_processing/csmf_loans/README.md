@@ -65,9 +65,10 @@ not block processing or remove its tab/activity. The same omission/blank rules
 apply to every configured loan.
 
 Amounts use exact cents during parsing. Journal activity preserves the original
-debit/credit value and identifies its origin; its Adjusted Amount initially
-copies Amount. Following owner feedback in 0.30.4, **Beginning Balance of the
-FY** uses the opposite sign for Adjusted Amount: a 1,000.00 opening balance
+debit/credit value and identifies its origin. Adjusted Amount copies Amount
+except for the confirmed 1621 SIS debit rule below. Following owner feedback in
+0.30.4, **Beginning Balance of the FY** uses the opposite sign for Adjusted
+Amount: a 1,000.00 opening balance
 becomes -1,000.00, and -25.00 becomes 25.00. Zero stays zero and blank stays
 blank. Its Amount, Debit/Credit, saved FY value, preview and Opening Balances
 snapshot retain the original source value and origin.
@@ -77,6 +78,32 @@ once per run; it never negates the saved balance itself.
 A line with two nonzero amount columns is rejected instead of netted. For a
 zero line, one amount column must identify its origin; two zeros or two blanks
 are ambiguous. Source strings beginning with `=` remain literal text.
+
+## 1621 classification and signs
+
+Owner clarification for 0.30.5 defines these rules for account **1621**
+(LT Loan Receivable - Student), superseding the blanket deferral in
+[output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44):
+
+| Source | Debit/Credit | Section | Activity label | Adjusted Amount |
+|---|---|---|---|---|
+| SIS | Debit | Loan Activity | Loan Disbursement | Opposite sign of Amount |
+| SIS | Credit | Loan Activity | Loan Reversal | Same value as Amount |
+| Contains Journal (`*Journal*`) | Either | Payment | Payment | Same value as Amount |
+| Any other or blank source | Either | 1621 — Unclassified | 1621 — Unclassified | Same value as Amount |
+
+Match Source case-insensitively after trimming surrounding whitespace. SIS is
+an exact match; `SIS Import` stays unclassified. Journal may appear anywhere,
+as in `Manual Journal` or `Journal Import`. Do not infer classifications from
+the memo. The source rule distinguishes loan disbursements/reversals from
+payments; Debit/Credit identifies the kind of SIS loan activity.
+
+Only Adjusted Amount is sign-adjusted. A SIS debit of 100.00 becomes -100.00;
+a SIS debit of -5.00 becomes 5.00. Zero stays zero. SIS credits and Journal
+payments retain their value, including any negative sign. These rules do not
+change other ledger accounts, original Amount/Source/Debit/Credit, raw source
+sheets or saved FY balances. Unmatched 1621 sources remain visible, and the
+completion message reports their count for review.
 
 ## Workbook
 
@@ -94,7 +121,8 @@ are ambiguous. Source strings beginning with `=` remain literal text.
 
 Rows 1–6 contain the specified report/column headers. Row 7 is the FY opening
 balance, row 8 its subtotal, row 9 blank, and activity begins at row 10. Sections
-are **1621 — Unclassified**, **Payables (2100/2402)**, **Payables (2881)**,
+are **Payment**, **Loan Activity**, **1621 — Unclassified**,
+**Payables (2100/2402)**, **Payables (2881)**,
 **Interest on loans (5909R)** and **Late fees on loans (8309R)**. Each row has an
 Accounting Date; sections sort **newest to oldest** by that date. Same-date rows
 retain ascending journal number and original source-row order as tie-breakers.
@@ -162,21 +190,27 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   to record an explicit zero. Omit it on a later upload to retain its saved state.
 - Opening Amount 1,000.00 produces Adjusted Amount -1,000.00 and opening subtotal
   -1,000.00. A later run using the saved 1,000.00 again produces -1,000.00.
-- Debit 100 and credit 100 are two rows with matching direction labels and
-  Adjusted Amount 100 each. Their section subtotal is 200, not net zero.
-- Two 1621 lines occupy rows 10–11, subtotal 12, blank 13, next section 14.
+- Two 1621 SIS lines, debit 100 and credit 25, appear as Loan Disbursement and
+  Loan Reversal. Their Adjusted Amounts are -100 and 25, and Loan Activity
+  subtotal is -75. Original Amounts remain 100 and 25.
+- Two 1621 Journal lines, debit 100 and credit 100, appear as Payments with
+  Adjusted Amount 100 each. Their Payment subtotal is 200, not net zero.
+- A 1621 line with Source `SIS Import` remains unclassified with its original
+  value; a 2100 SIS debit of 100 remains a Payable with Adjusted Amount 100.
+- Two Payment lines occupy rows 10–11, subtotal 12, blank 13, next section 14.
   Five lines occupy 10–14, subtotal 15, blank 16, next section 17. With none,
   subtotal 10, blank 11, next section 12.
 - July/August transactions retain individual dates under the same activity
   sections, with August activity above July activity. Identical lines are kept;
-  source worksheets retain their uploaded order. No Payment/Adjustment
-  classification is inferred for 1621.
+  source worksheets retain their uploaded order. SIS and Journal transactions
+  have separate section subtotals, without repeated monthly blocks.
 
 ## Deferred work and verification
 
-1621 classification, full Current Recon/current-month output, final Adjusted
-Amount rules, 2100/2402 net-zero checks and JE preparation remain deferred.
-Section subtotals are source-value totals, not reconciled balances.
+Additional 1621 classifications (including any Adjustment category), full
+Current Recon/current-month output, further Adjusted Amount rules, 2100/2402
+net-zero checks and JE preparation remain deferred. Section subtotals sum the
+editable Adjusted Amount cells; they are not completed reconciled balances.
 
 Synthetic tests are in `tests/python/test_csmf_loans.py` and
 `tests/python/test_gui_csmf_loans.py`. Shared reader changes also run the existing

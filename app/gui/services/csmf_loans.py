@@ -63,8 +63,11 @@ def run_csmf_loans(context: WorkflowContext) -> WorkflowResult:
             publish()
     finally:
         book.close()
+    unclassified_count = sum(row.section == "1621" for row in activity.rows)
     return WorkflowResult(True,
         f"Created CSMF R1 workbook with {len(activity.rows):,} activity rows. "
         + (f"{activity.other_account_count:,} rows use unmapped ledger accounts; review Other ledger activity. "
            if activity.other_account_count else "")
-        + "1621 remains unclassified. Current Recon is empty for this release.", output)
+        + (f"{unclassified_count:,} 1621 rows have unclassified sources; review 1621 — Unclassified. "
+           if unclassified_count else "")
+        + "Current Recon is empty for this release.", output)

@@ -1,4 +1,4 @@
-"""R1 loan worksheets with an opening-balance adjustment; no full reconciliation."""
+"""R1 loan worksheets with confirmed amount adjustments; no full reconciliation."""
 
 from __future__ import annotations
 
@@ -97,10 +97,8 @@ def build_workbook(
                     continue
                 if cancellation:
                     cancellation.check()
-                name = f"Payables — {row.account}" if section == "payables" else (
-                    f"Other — {row.account}" if section == "other" else title)
-                _append(sheet, [name, row.journal, row.day, row.source, row.description,
-                                row.amount, row.direction, row.amount])
+                _append(sheet, [row.label, row.journal, row.day, row.source, row.description,
+                                row.amount, row.direction, row.adjusted_amount])
             last = sheet.max_row
             total_row = _append(sheet, [f"{title} Total", None, None, None, None, None, None,
                                         0 if last < first else None])

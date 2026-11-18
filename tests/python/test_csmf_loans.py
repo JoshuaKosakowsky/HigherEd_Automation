@@ -26,8 +26,8 @@ JULY = datetime(2026, 7, 10, 12, tzinfo=timezone.utc)
 AUGUST = datetime(2026, 8, 10, 12, tzinfo=timezone.utc)
 
 
-def journal_row(account="1621", day="2026-07-15", debit=100, credit=None, project="694511", memo="Synthetic activity", journal="J-001"):
-    return [project, account + ":Synthetic account", journal, day, "Manual Journal", memo, debit, credit]
+def journal_row(account="1621", day="2026-07-15", debit=100, credit=None, project="694511", memo="Synthetic activity", journal="J-001", source="Manual Journal"):
+    return [project, account + ":Synthetic account", journal, day, source, memo, debit, credit]
 
 
 def write_csv(path, headers, rows):
@@ -127,7 +127,7 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual([row.amount for row in activity.rows], [15, 40, 30, 20, 20])
         self.assertEqual([row.direction for row in activity.rows], ["Credit", "Debit", "Debit", "Debit", "Debit"])
         self.assertEqual([row.source_row for row in activity.rows], [4, 6, 5, 3, 7])
-        self.assertTrue(all(row.section == "1621" for row in activity.rows))
+        self.assertTrue(all(row.section == "payment" for row in activity.rows))
 
     def test_loan_worksheets_show_newest_dates_first_within_each_section(self):
         rows = []
@@ -142,12 +142,12 @@ class CsmfTests(unittest.TestCase):
         for project in ("694511", "694516"):
             with self.subTest(project=project):
                 sheet = book[f"{LOANS[project]} - {project}"]
-                self.assertEqual([sheet.cell(row, 3).value.date().isoformat() for row in (10, 11, 14, 15)],
+                self.assertEqual([sheet.cell(row, 3).value.date().isoformat() for row in (10, 11, 18, 19)],
                                  ["2026-08-05", "2026-07-05", "2026-08-07", "2026-07-02"])
-                self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 14, 15)], [200, 100, 60, 50])
+                self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 18, 19)], [200, 100, 60, 50])
                 self.assertEqual(sheet["A7"].value, "Beginning Balance of the FY")
                 self.assertEqual(sheet["H12"].value, "=SUM(H10:H11)")
-                self.assertEqual(sheet["H16"].value, "=SUM(H14:H15)")
+                self.assertEqual(sheet["H20"].value, "=SUM(H18:H19)")
         self.assertEqual([cell.value for cell in book["Journal Lines"]["E"]][1:], [row[3] for row in rows])
 
     def test_source_direction_and_original_values_are_preserved(self):
@@ -157,6 +157,90 @@ class CsmfTests(unittest.TestCase):
         sheet = self.workbook()["Parsons - 694511"]
         self.assertEqual([(sheet.cell(row, 6).value, sheet.cell(row, 7).value, sheet.cell(row, 8).value)
                           for row in (10, 11, 12)], [(25, "Credit", 25), (-5, "Debit", -5), (0, "Debit", 0)])
+
+    def test_1621_source_classification_and_adjusted_signs(self):
+        cases = [
+            ("SIS", 100, None, "loan_activity", "Loan Disbursement", -100),
+            ("SIS", None, 25, "loan_activity", "Loan Reversal", 25),
+            ("SIS", -5, None, "loan_activity", "Loan Disbursement", 5),
+            ("SIS", None, -7, "loan_activity", "Loan Reversal", -7),
+            ("SIS", 0, None, "loan_activity", "Loan Disbursement", 0),
+            ("SIS", None, 0, "loan_activity", "Loan Reversal", 0),
+            (" sis ", 10, None, "loan_activity", "Loan Disbursement", -10),
+            ("Journal", 10, None, "payment", "Payment", 10),
+            ("Manual Journal", None, 15, "payment", "Payment", 15),
+            ("Journal Import", -5, None, "payment", "Payment", -5),
+            ("External JOURNAL Import", None, -7, "payment", "Payment", -7),
+            ("SIS Journal", 10, None, "payment", "Payment", 10),
+            ("SIS Import", 10, None, "1621", "1621 — Unclassified", 10),
+            ("Manual Entry", None, 15, "1621", "1621 — Unclassified", 15),
+            ("", -5, None, "1621", "1621 — Unclassified", -5),
+        ]
+        for source, debit, credit, section, label, adjusted in cases:
+            with self.subTest(source=source, debit=debit, credit=credit):
+                self.write_journal([journal_row(source=source, debit=debit, credit=credit)])
+                row, = prepare_activity(read_journal(self.journal), 2027).rows
+                self.assertEqual(row.section, section)
+                self.assertEqual(row.label, label)
+                self.assertEqual(row.adjusted_amount, Decimal(str(adjusted)))
+                self.assertEqual(row.amount, Decimal(str(debit if debit is not None else credit)))
+                self.assertEqual(row.direction, "Debit" if debit is not None else "Credit")
+                self.assertEqual(row.source, source.strip())
+
+    def test_1621_rules_do_not_change_other_accounts(self):
+        for source in ("SIS", "Manual Journal"):
+            for account, section in (("2100", "payables"), ("2402", "payables"), ("2881", "2881"),
+                                     ("5909R", "5909R"), ("8309R", "8309R"), ("9999", "other")):
+                with self.subTest(source=source, account=account):
+                    self.write_journal([journal_row(account=account, source=source),
+                                        journal_row(account=account, source=source, debit=None, credit=-25)])
+                    rows = prepare_activity(read_journal(self.journal), 2027).rows
+                    self.assertEqual([row.section for row in rows], [section, section])
+                    self.assertEqual([row.adjusted_amount for row in rows], [100, -25])
+
+    def test_classified_1621_sections_sort_and_total_independently_for_every_loan(self):
+        rows = []
+        for project in LOANS:
+            rows.extend([
+                journal_row(project=project, source="SIS", debit=100, day="2026-07-15"),
+                journal_row(project=project, source="SIS", debit=None, credit=25, day="2026-08-15"),
+                journal_row(project=project, debit=40, day="2026-07-15"),
+                journal_row(project=project, source="Journal Import", debit=None, credit=15, day="2026-08-15"),
+                journal_row(project=project, source="SIS Import", debit=7, day="2026-09-15"),
+            ])
+        self.write_journal(rows)
+        original = self.journal.read_bytes()
+        result = self.run_workflow()
+        self.assertIn("35 activity rows", result.message)
+        self.assertIn("7 1621 rows have unclassified sources", result.message)
+        saved = BalanceStore(2027).path.read_bytes()
+        self.run_workflow(upload=False, output=self.root / "reuse.xlsx")
+        self.assertEqual(self.journal.read_bytes(), original)
+        self.assertEqual(BalanceStore(2027).path.read_bytes(), saved)
+        for path in (self.output, self.root / "reuse.xlsx"):
+            book = self.workbook(path)
+            self.assertEqual(book["Current Recon"].max_row, 1)
+            self.assertIsNone(book["Current Recon"]["A1"].value)
+            for project, loan in LOANS.items():
+                with self.subTest(workbook=path.name, project=project):
+                    sheet = book[f"{loan} - {project}"]
+                    self.assertEqual([sheet.cell(row, 1).value for row in (10, 11, 14, 15, 18)],
+                                     ["Payment", "Payment", "Loan Reversal", "Loan Disbursement", "1621 — Unclassified"])
+                    self.assertEqual([sheet.cell(row, 3).value.month for row in (10, 11, 14, 15, 18)],
+                                     [8, 7, 8, 7, 9])
+                    self.assertEqual([sheet.cell(row, 6).value for row in (10, 11, 14, 15, 18)], [15, 40, 25, 100, 7])
+                    self.assertEqual([sheet.cell(row, 8).value for row in (10, 11, 14, 15, 18)], [15, 40, 25, -100, 7])
+                    self.assertEqual([sheet.cell(row, 7).value for row in (10, 11, 14, 15, 18)],
+                                     ["Credit", "Debit", "Credit", "Debit", "Debit"])
+                    self.assertEqual(sheet["H12"].value, "=SUM(H10:H11)")
+                    self.assertEqual(sheet["A16"].value, "Loan Activity Total")
+                    self.assertEqual(sheet["H16"].value, "=SUM(H14:H15)")
+                    self.assertEqual(sheet["H19"].value, "=SUM(H18:H18)")
+                    for blank_row in (13, 17, 20):
+                        self.assertTrue(all(cell.value is None for cell in sheet[blank_row]))
+            self.assertEqual([cell.value for cell in book["Journal Lines"]["H"]][1:],
+                             [str(row[6]) if row[6] is not None else None for row in rows])
+            self.assertEqual([cell.value for cell in book["Journal Lines"]["F"]][1:], [row[4] for row in rows])
 
     def test_ambiguous_or_invalid_journal_lines_fail_without_writes(self):
         for row in (journal_row(debit=20, credit=10), journal_row(debit=None, credit=None),
@@ -177,7 +261,7 @@ class CsmfTests(unittest.TestCase):
         book = self.workbook(); sheet = book["Parsons - 694511"]
         self.assertEqual(len(book["Journal Lines"]["A"]), 12)
         labels = [cell.value for cell in sheet["A"] if cell.value]
-        self.assertIn("1621 — Unclassified", labels)
+        self.assertIn("Payment", labels)
         self.assertIn("Payables — 2100", labels)
         self.assertIn("Payables — 2402", labels)
         self.assertIn("Payables (2881)", labels)
@@ -185,6 +269,7 @@ class CsmfTests(unittest.TestCase):
         self.assertNotIn("Receivables", " ".join(labels))
         self.assertIn("7 activity rows", result.message)
         self.assertIn("1 rows use unmapped", result.message)
+        self.assertNotIn("unclassified sources", result.message)
 
     def test_zero_two_and_five_rows_place_totals_and_next_section_correctly(self):
         for count, total_row, next_row in ((0, 10, 12), (2, 12, 14), (5, 15, 17)):
@@ -193,8 +278,12 @@ class CsmfTests(unittest.TestCase):
                 output = self.root / f"count-{count}.xlsx"
                 self.run_workflow(output=output)
                 sheet = self.workbook(output)["Parsons - 694511"]
-                self.assertEqual(sheet.cell(total_row, 1).value, "1621 — Unclassified Total")
-                self.assertEqual(sheet.cell(next_row, 1).value, "Payables — 2100")
+                self.assertEqual(sheet.cell(total_row, 1).value, "Payment Total")
+                self.assertEqual(sheet.cell(next_row, 1).value, "Loan Activity Total")
+                self.assertEqual(sheet.cell(next_row, 8).value, 0)
+                self.assertEqual(sheet.cell(next_row + 2, 1).value, "1621 — Unclassified Total")
+                self.assertEqual(sheet.cell(next_row + 2, 8).value, 0)
+                self.assertEqual(sheet.cell(next_row + 4, 1).value, "Payables — 2100")
                 self.assertEqual(sheet.cell(total_row, 8).value,
                                  f"=SUM(H10:H{total_row - 1})" if count else 0)
                 self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')

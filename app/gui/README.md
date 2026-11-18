@@ -384,7 +384,10 @@ their saved values/dates. An included blank/null amount clears that project's
 balance. Cached runs do not refresh timestamps. No prior output workbook or
 TEST/PROD selection is used.
 Output includes seven loan tabs, source evidence and an empty **Current Recon**.
-1621 classification and signed reconciliation calculations remain deferred.
+As of 0.30.5, 1621 SIS debits are Loan Disbursements with a flipped Adjusted
+Amount sign; SIS credits are Loan Reversals with the original sign. Sources
+containing Journal are Payments with the original sign. Other 1621 sources
+remain unclassified. Full reconciliation calculations remain deferred.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for
 source mappings, persistence, limitations and acceptance examples.
