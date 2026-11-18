@@ -109,7 +109,9 @@ for matching rules and the permission grant needed in existing shared policies.
 
 **CSMF Loans — R1** (0.30.0) imports Workday journal activity and Trial Balance
 opening balances into loan worksheets. FY balances are saved on the shared
-Bursar drive and displayed with their last-update date before running.
+Bursar drive and displayed with their individual upload dates before running.
+Partial Trial Balance uploads update only included projects; missing balances
+can stay blank while their loan tabs and activity remain available.
 1621 remains unclassified and Current Recon is an empty placeholder. See the
 [CSMF technical guide](data_processing/csmf_loans/README.md).
 

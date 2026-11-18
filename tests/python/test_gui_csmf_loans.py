@@ -86,10 +86,28 @@ class CsmfGuiTests(unittest.TestCase):
         with patch("app.gui.pages.workflow_detail.QDialog.exec", reject):
             self.assertFalse(self.page._confirm(WorkflowContext("csmf_loans", {"_opening_balances": selection})))
         text = "\n".join(captured)
-        self.assertIn("Last uploaded/updated: 2026-07-10", text)
+        self.assertIn("Latest Trial Balance upload: 2026-07-10", text)
         for project in LOANS:
             self.assertIn(project, text)
         self.assertEqual(text.count("$1,000.00"), 7)
+
+    def test_partial_upload_review_retains_saved_values_and_accepts_missing_bruce(self):
+        write_csv(self.trial, ["Worktags", "Debit Amount"],
+                  [[f"Project: {project} Loan", 1000] for project in LOANS if project != "694516"])
+        self.cached()
+        write_csv(self.trial, ["Worktags", "Debit Amount"], [["Project: 694511 Parsons", 1500]])
+        self.page.inputs["trial_balance_file"].setText(str(self.trial))
+        with patch.object(self.page, "_confirm", return_value=False) as confirm:
+            self.page._run()
+        selection = confirm.call_args.args[0].parameters["_opening_balances"]
+        projects = dict(selection.balances.projects)
+        self.assertEqual(projects["694511"].amount, 1500)
+        self.assertEqual(projects["694512"].amount, 1000)
+        self.assertIn("2026-07-10", projects["694512"].updated_at)
+        self.assertIsNone(projects["694516"].amount)
+        # Cancelling the preview preserves the old values.
+        saved, _ = BalanceStore(2027).load()
+        self.assertEqual(dict(saved.values)["694511"], 1000)
 
     def test_changing_fy_does_not_reuse_another_years_balances(self):
         self.cached(); self.page.inputs["fiscal_year"].setValue(2028)

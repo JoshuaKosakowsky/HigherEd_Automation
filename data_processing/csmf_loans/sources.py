@@ -73,8 +73,9 @@ def read_trial_balance(path: Path) -> SourceData:
         raise ValueError("Trial Balance could not be read. Upload an intact XLSX, XLSM, or CSV export.") from None
 
 
-def opening_values(source: SourceData) -> tuple[tuple[str, Decimal], ...]:
-    values: dict[str, Decimal] = {}
+def opening_values(source: SourceData) -> tuple[tuple[str, Decimal | None], ...]:
+    """Return only uploaded projects; a blank amount is distinct from omission."""
+    values: dict[str, Decimal | None] = {}
     for number, row in source.rows:
         try:
             project = project_number(source.value(row, "worktags"), worktags=True)
@@ -86,14 +87,14 @@ def opening_values(source: SourceData) -> tuple[tuple[str, Decimal], ...]:
         if project in values:
             raise ValueError(f"Trial Balance has duplicate rows for Project {project}; balances were not saved.")
         try:
-            values[project] = money(source.value(row, "debit"))
+            amount = source.value(row, "debit")
+            values[project] = None if text(amount).casefold() in {"", "null"} else money(amount)
         except ValueError:
             raise ValueError(f"Trial Balance row {number}: invalid Debit Amount for Project {project}.") from None
-        source.dispositions[number] = "Opening balance"
-    missing = LOANS.keys() - values.keys()
-    if missing:
-        raise ValueError("Trial Balance is missing opening balances for Projects: " + ", ".join(sorted(missing)))
-    return tuple((project, values[project]) for project in LOANS)
+        source.dispositions[number] = "Opening balance" if values[project] is not None else "Blank opening balance"
+    if not values:
+        raise ValueError("Trial Balance contains no configured loan projects. Include at least one loan row to update.")
+    return tuple((project, values[project]) for project in LOANS if project in values)
 
 
 @dataclass(frozen=True)

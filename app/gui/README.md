@@ -376,10 +376,13 @@ Existing workstations retain the normal requirements and setup process.
 **CSMF Loans — R1** (0.30.0), workflow ID `csmf_loans`, reads **Find Journal
 Lines - GA** and either a new **Trial Balance** or saved FY opening balances.
 Select one fiscal ending year and include all desired months in the journal
-upload. **Review & run** shows the seven balances and their actual saved/update
-timestamp before execution. First use of an FY requires Trial Balance; later
-uploads replace that FY after a successful run. Cached runs do not refresh the
-timestamp. No prior output workbook or TEST/PROD selection is used.
+upload. **Review & run** shows all seven balances, including blanks, and each
+project's actual upload date before execution. First use of an FY requires
+Trial Balance, but it can contain only some projects. As of 0.30.2, later uploads
+update only included projects after a successful run; omitted projects retain
+their saved values/dates. An included blank/null amount clears that project's
+balance. Cached runs do not refresh timestamps. No prior output workbook or
+TEST/PROD selection is used.
 Output includes seven loan tabs, source evidence and an empty **Current Recon**.
 1621 classification and signed reconciliation calculations remain deferred.
 Existing staff views need the `csmf_loans` grant through Access Management.

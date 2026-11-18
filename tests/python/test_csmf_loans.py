@@ -86,19 +86,19 @@ class CsmfTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "More than one"):
             project_number("Project: 694511 Project: 694512")
 
-    def test_trial_requires_one_balance_per_project_without_accounting_date(self):
+    def test_trial_accepts_partial_projects_without_accounting_date_but_rejects_duplicates(self):
         source = read_trial_balance(self.trial)
         self.assertEqual(dict(opening_values(source))["694511"], Decimal("1000.00"))
         self.write_trial(self.balance_rows + [self.balance_rows[0]])
         with self.assertRaisesRegex(ValueError, "duplicate"):
             self.selection()
         self.write_trial(self.balance_rows[:-1])
-        with self.assertRaisesRegex(ValueError, "694521"):
-            self.selection()
+        self.assertNotIn("694521", dict(opening_values(read_trial_balance(self.trial))))
+        self.assertIsNone(dict(self.selection().balances.values)["694521"])
         self.assertFalse(self.cache.exists())
 
     def test_invalid_opening_value_is_not_silently_zero_or_rounded(self):
-        for amount in ("", "NaN", "1.234", "=SUM(A1)"):
+        for amount in ("invalid", "NaN", "1.234", "=SUM(A1)"):
             with self.subTest(amount=amount):
                 self.write_trial([[self.balance_rows[0][0], amount], *self.balance_rows[1:]])
                 with self.assertRaisesRegex(ValueError, "Debit Amount"):
@@ -173,7 +173,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(sheet.cell(next_row, 1).value, "Payables — 2100")
                 self.assertEqual(sheet.cell(total_row, 8).value,
                                  f"=SUM(H10:H{total_row - 1})" if count else 0)
-                self.assertEqual(sheet["H8"].value, "=SUM(H7:H7)")
+                self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
                 self.assertIsNone(sheet.cell(total_row + 1, 1).value)
 
     def test_seven_loan_tabs_empty_current_recon_and_literal_source_text(self):
@@ -221,7 +221,7 @@ class CsmfTests(unittest.TestCase):
     def test_bad_replacement_preserves_saved_values(self):
         self.run_workflow(self.selection()); store = BalanceStore(2027)
         old = store.path.read_bytes()
-        self.write_trial(self.balance_rows[:-1])
+        self.write_trial([[self.balance_rows[0][0], "invalid"]])
         with self.assertRaises(ValueError):
             self.run_workflow(output=self.root / "bad.xlsx")
         self.assertEqual(store.path.read_bytes(), old)
@@ -256,6 +256,7 @@ class CsmfTests(unittest.TestCase):
 
     def test_cache_atomic_failure_keeps_previous_file(self):
         self.run_workflow(self.selection()); store = BalanceStore(2027); old = store.path.read_bytes()
+        self.write_trial([[self.balance_rows[0][0], 1500]])
         selection = self.selection(AUGUST)
         with patch("data_processing.csmf_loans.balances.os.replace", side_effect=OSError("synthetic failure")):
             with self.assertRaises(OSError):
@@ -275,6 +276,117 @@ class CsmfTests(unittest.TestCase):
     def test_no_prod_mode_can_be_selected(self):
         with self.assertRaisesRegex(ValueError, "do not use TEST or PROD"):
             run_csmf_loans(WorkflowContext("csmf_loans", {}, WorkflowMode.PRODUCTION))
+
+    def test_missing_bruce_opening_balance_keeps_tab_and_collection_activity(self):
+        self.write_trial([row for row in self.balance_rows if "694516" not in row[0]])
+        self.write_journal([journal_row(project="694516", debit=None, credit=75)])
+        self.run_workflow(self.selection())
+        book = self.workbook(); sheet = book["Bruce - 694516"]
+        self.assertEqual(len(book.sheetnames[:8]), 8)
+        for cell in ("F7", "G7", "H7"):
+            self.assertIsNone(sheet[cell].value)
+        self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
+        self.assertEqual((sheet["F10"].value, sheet["G10"].value, sheet["H10"].value), (75, "Credit", 75))
+        self.assertIsNone(book["Opening Balances"]["D6"].value)
+        self.assertIsNone(book["Opening Balances"]["E6"].value)
+        payload = json.loads(BalanceStore(2027).path.read_text())
+        self.assertIsNone(payload["balances"]["694516"]["amount"])
+        self.assertIsNone(payload["balances"]["694516"]["updated_at"])
+        self.assertIn("694516 · Bruce: Blank", balance_summary(prepare_opening_balances(2027)))
+
+    def test_first_upload_may_contain_only_one_loan(self):
+        self.write_trial([self.balance_rows[0]])
+        self.run_workflow(self.selection())
+        selection = prepare_opening_balances(2027)
+        self.assertEqual(dict(selection.balances.values), {p: Decimal("1000.00") if p == "694511" else None for p in LOANS})
+        self.run_workflow(selection, upload=False, output=self.root / "reuse.xlsx")
+        self.assertIsNone(self.workbook(self.root / "reuse.xlsx")["Combined - 694512"]["H7"].value)
+
+    def test_partial_update_preserves_other_values_dates_sources_and_fiscal_years(self):
+        self.run_workflow(self.selection())
+        store = BalanceStore(2027); old = store.path.read_bytes(); original, _ = store.load()
+        other = self.cache / "FY2026.json"; other.write_text("other FY")
+        self.trial = self.root / "one-loan.csv"
+        self.write_trial([[self.balance_rows[0][0], 1500]])
+        selection = self.selection(AUGUST)
+        self.assertEqual(store.path.read_bytes(), old)
+        self.assertEqual(selection.uploaded_projects, ("694511",))
+        self.run_workflow(selection, output=self.root / "partial.xlsx")
+        updated, _ = store.load(); projects = dict(updated.projects)
+        self.assertEqual(projects["694511"].amount, Decimal("1500.00"))
+        self.assertIn("2026-08-10", projects["694511"].updated_at)
+        self.assertEqual(projects["694511"].source_name, "one-loan.csv")
+        for project, balance in original.projects:
+            if project != "694511":
+                self.assertEqual(projects[project], balance)
+        sheet = self.workbook(self.root / "partial.xlsx")["Opening Balances"]
+        self.assertIn("2026-08-10", sheet["E2"].value)
+        self.assertIn("2026-07-10", sheet["E3"].value)
+        self.assertEqual((sheet["F2"].value, sheet["F3"].value), ("one-loan.csv", "trial.csv"))
+        self.assertEqual(other.read_text(), "other FY")
+        self.assertEqual(store.path.with_suffix(".backup.json").read_bytes(), old)
+        saved = store.path.read_bytes(); mtime = store.path.stat().st_mtime_ns
+        self.run_workflow(upload=False, output=self.root / "reuse.xlsx")
+        self.assertEqual(store.path.read_bytes(), saved)
+        self.assertEqual(store.path.stat().st_mtime_ns, mtime)
+
+    def test_explicit_blank_null_and_zero_updates_remain_distinct(self):
+        self.run_workflow(self.selection())
+        store = BalanceStore(2027); original, _ = store.load()
+        for i, amount in enumerate((None, "", " ", "null", "NULL", 0)):
+            with self.subTest(amount=amount):
+                self.write_trial([[self.balance_rows[4][0], amount]])
+                output = self.root / f"blank-{i}.xlsx"
+                self.run_workflow(self.selection(AUGUST), output=output)
+                saved, _ = store.load(); projects = dict(saved.projects)
+                value = projects["694516"].amount
+                if amount == 0:
+                    self.assertEqual(value, Decimal("0.00"))
+                    self.assertEqual(self.workbook(output)["Bruce - 694516"]["G7"].value, "Debit")
+                else:
+                    self.assertIsNone(value)
+                    self.assertIsNone(self.workbook(output)["Bruce - 694516"]["H7"].value)
+                self.assertIn("2026-08-10", projects["694516"].updated_at)
+                self.assertEqual(projects["694511"], dict(original.projects)["694511"])
+
+    def test_empty_or_unrelated_trial_does_not_create_or_update_saved_balances(self):
+        for rows in ([], [["Project: 999999 Other", 100]]):
+            with self.subTest(rows=rows):
+                self.write_trial(rows)
+                with self.assertRaisesRegex(ValueError, "no configured loan projects"):
+                    self.selection()
+                self.assertFalse(self.cache.exists())
+
+    def test_legacy_cache_reuses_without_writes_and_migrates_on_partial_upload(self):
+        initial = self.selection().balances
+        legacy = {"schema_version": 1, "fiscal_year": 2027, "updated_at": initial.updated_at,
+                  "source_name": initial.source_name, "source_sha256": initial.source_digest,
+                  "balances": {p: str(amount) for p, amount in initial.values}}
+        store = BalanceStore(2027); self.cache.mkdir(parents=True)
+        store.path.write_text(json.dumps(legacy), encoding="utf-8")
+        raw = store.path.read_bytes(); mtime = store.path.stat().st_mtime_ns
+        cached = prepare_opening_balances(2027)
+        self.run_workflow(cached, upload=False)
+        self.assertEqual(store.path.read_bytes(), raw)
+        self.assertEqual(store.path.stat().st_mtime_ns, mtime)
+        self.assertEqual(cached.balances, initial)
+        self.write_trial([[self.balance_rows[0][0], 1500]])
+        self.run_workflow(self.selection(AUGUST), output=self.root / "update.xlsx")
+        self.assertEqual(json.loads(store.path.read_text())["schema_version"], 2)
+        self.assertEqual(store.path.with_suffix(".backup.json").read_bytes(), raw)
+        saved, _ = store.load()
+        self.assertEqual(dict(saved.projects)["694512"], dict(initial.projects)["694512"])
+
+    def test_invalid_project_provenance_is_not_treated_as_a_blank_balance(self):
+        self.run_workflow(self.selection()); store = BalanceStore(2027)
+        raw = store.path.read_text()
+        for fields in ({"amount": "invalid"}, {"source_sha256": "invalid"}, {"updated_at": "2026-07-10"},
+                       {"updated_at": None, "source_name": None, "source_sha256": None}):
+            with self.subTest(fields=fields):
+                payload = json.loads(raw); payload["balances"]["694511"].update(fields)
+                store.path.write_text(json.dumps(payload))
+                with self.assertRaisesRegex(ValueError, "Saved FY2027"):
+                    prepare_opening_balances(2027)
 
 
 if __name__ == "__main__":

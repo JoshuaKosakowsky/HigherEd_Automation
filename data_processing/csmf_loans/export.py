@@ -80,9 +80,9 @@ def build_workbook(
         _append(sheet, [])
         _append(sheet, HEADERS)
         _append(sheet, ["Beginning Balance of the FY", None, None, "Trial Balance", None,
-                        opening[project], "Debit", opening[project]])
+                        opening[project], "Debit" if opening[project] is not None else None, opening[project]])
         _append(sheet, ["Beginning Balance Total", None, None, None, None, None, None, None])
-        sheet["H8"] = "=SUM(H7:H7)"
+        sheet["H8"] = '=IF(COUNT(H7)=0,"",SUM(H7:H7))'
         _append(sheet, [])
         totals = [8]
         project_rows = [row for row in activity.rows if row.project == project]
@@ -140,9 +140,9 @@ def build_workbook(
         sheet.page_setup.fitToHeight = 0
     snapshot = book.create_sheet("Opening Balances")
     _append(snapshot, ["Fiscal Year", "Project", "Loan", "Opening Balance", "Last Uploaded/Updated", "Source"])
-    for project, amount in balances.values:
-        _append(snapshot, [balances.fiscal_year, project, LOANS[project], amount,
-                           balances.updated_at, balances.source_name])
+    for project, balance in balances.projects:
+        _append(snapshot, [balances.fiscal_year, project, LOANS[project], balance.amount,
+                           balance.updated_at, balance.source_name])
     apply_default_font(snapshot)
     style_header_row(snapshot)
     format_table_columns(snapshot, headers=[cell.value for cell in snapshot[1]], currency_headers={"Opening Balance"})

@@ -26,12 +26,25 @@ def file_digest(path: Path) -> str:
 
 
 @dataclass(frozen=True)
+class ProjectBalance:
+    amount: Decimal | None = None
+    updated_at: str | None = None
+    source_name: str | None = None
+    source_digest: str | None = None
+
+
+@dataclass(frozen=True)
 class OpeningBalances:
     fiscal_year: int
-    values: tuple[tuple[str, Decimal], ...]
+    projects: tuple[tuple[str, ProjectBalance], ...]
+    # The latest upload to the FY file can differ from individual project dates.
     updated_at: str
     source_name: str
     source_digest: str
+
+    @property
+    def values(self) -> tuple[tuple[str, Decimal | None], ...]:
+        return tuple((project, balance.amount) for project, balance in self.projects)
 
 
 @dataclass(frozen=True)
@@ -40,6 +53,25 @@ class BalanceSelection:
     expected_digest: str | None
     trial_path: Path | None = None
     trial_source: SourceData | None = None
+    uploaded_projects: tuple[str, ...] = ()
+
+
+def _validate_upload(updated_at: str, source_name: str, source_digest: str) -> None:
+    if datetime.fromisoformat(updated_at).tzinfo is None or not isinstance(source_name, str):
+        raise ValueError("Invalid saved provenance")
+    if not re.fullmatch(r"[0-9a-f]{64}", source_digest):
+        raise ValueError("Invalid source digest")
+
+
+def _load_project(payload: dict) -> ProjectBalance:
+    amount = None if payload["amount"] is None else money(payload["amount"])
+    updated_at, name, digest = payload["updated_at"], payload["source_name"], payload["source_sha256"]
+    if updated_at is None and name is None and digest is None:
+        if amount is not None:
+            raise ValueError("Saved amount has no provenance")
+    else:
+        _validate_upload(updated_at, name, digest)
+    return ProjectBalance(amount, updated_at, name, digest)
 
 
 class BalanceStore:
@@ -61,18 +93,21 @@ class BalanceStore:
             return None, None
         try:
             payload = json.loads(raw)
-            if payload["schema_version"] != 1 or payload["fiscal_year"] != self.fiscal_year:
+            version = payload["schema_version"]
+            if version not in {1, 2} or payload["fiscal_year"] != self.fiscal_year:
                 raise ValueError("Invalid saved FY or schema")
             values = payload["balances"]
             if not isinstance(values, dict) or set(values) != set(LOANS):
                 raise ValueError("Invalid saved projects")
-            stamp = datetime.fromisoformat(payload["updated_at"])
-            if stamp.tzinfo is None or not isinstance(payload["source_name"], str):
-                raise ValueError("Invalid saved provenance")
-            if not re.fullmatch(r"[0-9a-f]{64}", payload["source_sha256"]):
-                raise ValueError("Invalid source digest")
+            _validate_upload(payload["updated_at"], payload["source_name"], payload["source_sha256"])
+            if version == 1:
+                # Earlier releases gave every project the same upload metadata.
+                # Upgrade in memory; cache-only runs must not rewrite that file.
+                values = {project: {"amount": amount, "updated_at": payload["updated_at"],
+                                   "source_name": payload["source_name"], "source_sha256": payload["source_sha256"]}
+                          for project, amount in values.items()}
             balances = OpeningBalances(self.fiscal_year,
-                tuple((project, money(values[project])) for project in LOANS),
+                tuple((project, _load_project(values[project])) for project in LOANS),
                 payload["updated_at"], payload["source_name"], payload["source_sha256"])
         except (ValueError, TypeError, KeyError, OverflowError):
             raise ValueError(f"Saved FY{self.fiscal_year} opening balances are invalid. Restore the saved backup before running.") from None
@@ -100,10 +135,14 @@ class BalanceStore:
         if balances.fiscal_year != self.fiscal_year or set(dict(balances.values)) != set(LOANS):
             raise ValueError("Opening balances do not match the selected FY/projects.")
         payload = {
-            "schema_version": 1, "fiscal_year": balances.fiscal_year,
+            "schema_version": 2, "fiscal_year": balances.fiscal_year,
             "updated_at": balances.updated_at, "source_name": balances.source_name,
             "source_sha256": balances.source_digest,
-            "balances": {project: str(amount) for project, amount in balances.values},
+            "balances": {project: {
+                "amount": str(balance.amount) if balance.amount is not None else None,
+                "updated_at": balance.updated_at, "source_name": balance.source_name,
+                "source_sha256": balance.source_digest,
+            } for project, balance in balances.projects},
         }
         if self.path.exists():
             shutil.copy2(self.path, self.path.with_suffix(".backup.json"))
@@ -137,17 +176,27 @@ def prepare_opening_balances(
     if file_digest(trial_path) != digest:
         raise ValueError("Trial Balance changed while being read. Upload it again.")
     stamp = (now or datetime.now().astimezone()).astimezone().isoformat(timespec="seconds")
-    return BalanceSelection(OpeningBalances(store.fiscal_year, values, stamp, trial_path.name, digest),
-                            expected, trial_path.resolve(), source)
+    projects = dict(cached.projects) if cached is not None else {project: ProjectBalance() for project in LOANS}
+    for project, amount in values:
+        projects[project] = ProjectBalance(amount, stamp, trial_path.name, digest)
+    balances = OpeningBalances(store.fiscal_year, tuple(projects.items()), stamp, trial_path.name, digest)
+    return BalanceSelection(balances, expected, trial_path.resolve(), source,
+                            tuple(project for project, _ in values))
 
 
 def balance_summary(selection: BalanceSelection) -> str:
     balances = selection.balances
-    action = "New upload — replaces this FY when the run succeeds" if selection.trial_path else "Saved opening balances"
+    action = "New upload — updates only listed projects when the run succeeds" if selection.trial_path else "Saved opening balances"
     stamp = datetime.fromisoformat(balances.updated_at).strftime("%Y-%m-%d %H:%M %z")
+    lines = []
+    for project, balance in balances.projects:
+        amount = "Blank" if balance.amount is None else f"${balance.amount:,.2f}"
+        date = datetime.fromisoformat(balance.updated_at).strftime("%Y-%m-%d %H:%M %z") if balance.updated_at else "Not supplied"
+        state = "from upload" if project in selection.uploaded_projects else "saved" if balance.updated_at else "no saved balance"
+        lines.append(f"{project} · {LOANS[project]}: {amount} — {date} ({state})")
     return "\n".join([
         f"FY{balances.fiscal_year} — {action}",
-        f"Last uploaded/updated: {stamp}",
+        f"Latest Trial Balance upload: {stamp}",
         f"Source: {balances.source_name}", "",
-        *(f"{project} · {LOANS[project]}: ${amount:,.2f}" for project, amount in balances.values),
+        *lines,
     ])
