@@ -209,7 +209,33 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual(book["Parsons - 694511"]["E10"].data_type, "s")
         self.assertEqual(book["Journal Lines"]["G2"].data_type, "s")
         self.assertIn("0.00", book["Parsons - 694511"]["F10"].number_format)
-        self.assertEqual(book["Combined - 694512"]["H7"].value, 1001)
+        self.assertEqual(book["Combined - 694512"]["H7"].value, -1001)
+
+    def test_beginning_adjusted_amount_flips_sign_without_changing_saved_or_source_values(self):
+        cases = [(1000, -1000), (-25, 25), (0, 0), (None, None),
+                 (250, -250), (-500, 500), (123.45, -123.45)]
+        for row, (amount, _) in zip(self.balance_rows, cases):
+            row[1] = amount
+        self.write_trial()
+        self.run_workflow(self.selection())
+        store = BalanceStore(2027); saved, _ = store.load(); raw = store.path.read_bytes()
+        self.run_workflow(upload=False, output=self.root / "reuse.xlsx")
+        self.assertEqual(store.path.read_bytes(), raw)
+        for path in (self.output, self.root / "reuse.xlsx"):
+            book = self.workbook(path)
+            for row_number, ((project, loan), (amount, adjusted)) in enumerate(zip(LOANS.items(), cases), 2):
+                with self.subTest(workbook=path.name, project=project):
+                    sheet = book[f"{loan} - {project}"]
+                    self.assertEqual(sheet["F7"].value, amount)
+                    self.assertEqual(sheet["G7"].value, "Debit" if amount is not None else None)
+                    self.assertEqual(sheet["H7"].value, adjusted)
+                    self.assertEqual(sheet["H8"].value, '=IF(COUNT(H7)=0,"",SUM(H7:H7))')
+                    self.assertEqual(book["Opening Balances"].cell(row_number, 4).value, amount)
+                    self.assertEqual(dict(saved.values)[project], Decimal(str(amount)) if amount is not None else None)
+            self.assertEqual(book["Parsons - 694511"]["H10"].value, 100)
+        trial = self.workbook()["Trial Balance"]
+        self.assertEqual([trial.cell(row_number, 3).value for row_number in range(2, 9)],
+                         [str(amount) if amount is not None else None for amount, _ in cases])
 
     def test_first_use_requires_trial_and_preview_does_not_write(self):
         with self.assertRaisesRegex(ValueError, "Upload Trial Balance"):

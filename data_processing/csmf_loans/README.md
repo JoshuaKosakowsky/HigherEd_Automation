@@ -64,9 +64,16 @@ the loan has not been used for a long time. Its missing opening balance must
 not block processing or remove its tab/activity. The same omission/blank rules
 apply to every configured loan.
 
-Amounts use exact cents during parsing. R1 preserves the original debit/credit
-value and identifies its origin. Adjusted Amount is initially a copy of Amount.
-It is editable in Excel, and section SUM formulas update from those cells.
+Amounts use exact cents during parsing. Journal activity preserves the original
+debit/credit value and identifies its origin; its Adjusted Amount initially
+copies Amount. Following owner feedback in 0.30.4, **Beginning Balance of the
+FY** uses the opposite sign for Adjusted Amount: a 1,000.00 opening balance
+becomes -1,000.00, and -25.00 becomes 25.00. Zero stays zero and blank stays
+blank. Its Amount, Debit/Credit, saved FY value, preview and Opening Balances
+snapshot retain the original source value and origin.
+Adjusted Amount remains editable in Excel, and subtotal SUM formulas update
+from those cells. Reusing saved balances applies the sign flip to the output
+once per run; it never negates the saved balance itself.
 A line with two nonzero amount columns is rejected instead of netted. For a
 zero line, one amount column must identify its origin; two zeros or two blanks
 are ambiguous. Source strings beginning with `=` remain literal text.
@@ -153,6 +160,8 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
   worksheet, and include a later collection of 75.00 as ordinary activity.
 - Supply Bruce with a blank/null amount: keep/set it blank; supply 0.00 instead
   to record an explicit zero. Omit it on a later upload to retain its saved state.
+- Opening Amount 1,000.00 produces Adjusted Amount -1,000.00 and opening subtotal
+  -1,000.00. A later run using the saved 1,000.00 again produces -1,000.00.
 - Debit 100 and credit 100 are two rows with matching direction labels and
   Adjusted Amount 100 each. Their section subtotal is 200, not net zero.
 - Two 1621 lines occupy rows 10–11, subtotal 12, blank 13, next section 14.

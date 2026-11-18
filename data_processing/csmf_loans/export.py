@@ -1,4 +1,4 @@
-"""R1 source-value worksheets; no full reconciliation or sign calculations."""
+"""R1 loan worksheets with an opening-balance adjustment; no full reconciliation."""
 
 from __future__ import annotations
 
@@ -79,8 +79,9 @@ def build_workbook(
         _append(sheet, [f"FY{activity.fiscal_year}", ", ".join(activity.periods), project, loan])
         _append(sheet, [])
         _append(sheet, HEADERS)
+        adjusted_opening = -opening[project] if opening[project] is not None else None
         _append(sheet, ["Beginning Balance of the FY", None, None, "Trial Balance", None,
-                        opening[project], "Debit" if opening[project] is not None else None, opening[project]])
+                        opening[project], "Debit" if opening[project] is not None else None, adjusted_opening])
         _append(sheet, ["Beginning Balance Total", None, None, None, None, None, None, None])
         sheet["H8"] = '=IF(COUNT(H7)=0,"",SUM(H7:H7))'
         _append(sheet, [])
