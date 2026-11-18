@@ -63,6 +63,13 @@ def get_shared_detail_codes_path(
     return get_shared_gui_access_path(environment).with_name("detail_codes.json")
 
 
+def get_shared_csmf_balances_directory(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Return the shared, fiscal-year-specific CSMF opening-balance location."""
+    return get_shared_gui_access_path(environment).parent / "csmf_opening_balances"
+
+
 def ensure_hidden_directory(
     directory: Path,
     *,

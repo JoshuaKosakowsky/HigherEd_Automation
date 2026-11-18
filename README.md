@@ -107,6 +107,12 @@ Detail codes are entered explicitly with no defaults. See the
 [1305 workflow instructions](data_processing/graduate_contract_recon/README.md)
 for matching rules and the permission grant needed in existing shared policies.
 
+**CSMF Loans — R1** (0.30.0) imports Workday journal activity and Trial Balance
+opening balances into loan worksheets. FY balances are saved on the shared
+Bursar drive and displayed with their last-update date before running.
+1621 remains unclassified and Current Recon is an empty placeholder. See the
+[CSMF technical guide](data_processing/csmf_loans/README.md).
+
 **W&F - Banner Recon** (0.23.4) compares one combined Banner collections
 report with batch Williams and Fudge uploads. Administrators may query PROD;
 staff upload the combined report. Output includes Students in Collections,

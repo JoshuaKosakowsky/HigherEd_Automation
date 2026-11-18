@@ -9,6 +9,10 @@ This is read-only in both source systems.
 
 ## Inputs and scope
 
+Header-based XLSX/CSV reading and exact date/amount parsing are shared with CSMF
+R1 through `data_processing/shared/source_exports.py`. The 1305 source aliases,
+selection rules and public source-module imports remain unchanged.
+
 - Upload XLSX, XLSM or UTF-8 CSV exports. Headers are detected within the first
   30 rows; column order and worksheet name do not determine the mapping. A
   workbook must contain exactly one matching source worksheet for each input.

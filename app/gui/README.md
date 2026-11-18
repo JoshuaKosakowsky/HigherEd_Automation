@@ -373,6 +373,19 @@ and retains its checked cap batching. The new grouped Banner report requires a
 complete count-checked result; use a full combined manual export if capped.
 Existing workstations retain the normal requirements and setup process.
 
+**CSMF Loans — R1** (0.30.0), workflow ID `csmf_loans`, reads **Find Journal
+Lines - GA** and either a new **Trial Balance** or saved FY opening balances.
+Select one fiscal ending year and include all desired months in the journal
+upload. **Review & run** shows the seven balances and their actual saved/update
+timestamp before execution. First use of an FY requires Trial Balance; later
+uploads replace that FY after a successful run. Cached runs do not refresh the
+timestamp. No prior output workbook or TEST/PROD selection is used.
+Output includes seven loan tabs, source evidence and an empty **Current Recon**.
+1621 classification and signed reconciliation calculations remain deferred.
+Existing staff views need the `csmf_loans` grant through Access Management.
+See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for
+source mappings, persistence, limitations and acceptance examples.
+
 **1305 Graduate Contract Recon** reads Workday and Banner files and produces
 document, CWID, period and combined activity views, plus the original source tabs.
 The **Grad Contract Sponsor** view receives this workflow with uploads only;

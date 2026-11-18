@@ -19,10 +19,12 @@ from app.gui.parameter_defaults import ParameterDefaults
 from app.gui.progress import WorkflowProgressWidget
 from app.gui.services.drag_drop import FileInput
 from app.gui.services.execution import WorkflowExecutor
+from data_processing.csmf_loans.balances import balance_summary, prepare_opening_balances
 from app.gui.services.parameters import parse_parameters
 from app.gui.services.textbook_recon import MANUAL_SOURCE, SQL_SOURCE
 from app.gui.services.system import open_path
 from app.gui.theme import button, card, label
+from shared.mines_paths import MinesPathError
 
 
 class WorkflowDetailPage(QScrollArea):
@@ -295,7 +297,10 @@ class WorkflowDetailPage(QScrollArea):
     def _confirm(self, context: WorkflowContext) -> bool:
         dialog = QDialog(self)
         dialog.setWindowTitle("Review workflow")
-        dialog.resize(620, 480)
+        if self.definition.workflow_id == "csmf_loans":
+            dialog.resize(700, 640)
+        else:
+            dialog.resize(620, 480)
         layout = QVBoxLayout(dialog)
         layout.addWidget(label("Ready to run?", "title"))
         layout.addWidget(label(self.definition.name, "section"))
@@ -305,6 +310,9 @@ class WorkflowDetailPage(QScrollArea):
         summary = QWidget()
         form = QFormLayout(summary)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        if self.definition.workflow_id == "csmf_loans":
+            form.addRow(label("Opening balances to use", "field"),
+                        label(balance_summary(context.parameters["_opening_balances"])))
         if self._source_control is not None:
             source_label = "Run SQL from PROD Insights" if self._source_control.currentData() == SQL_SOURCE else self._source_control.currentText()
             source_heading = ("Refund data source" if self.refund_source is not None else
@@ -345,7 +353,10 @@ class WorkflowDetailPage(QScrollArea):
         try:
             self.parameter_defaults.refresh()
             parameters = self._parse_parameters()
-        except ValueError as error:
+            if self.definition.workflow_id == "csmf_loans":
+                parameters["_opening_balances"] = prepare_opening_balances(
+                    parameters["fiscal_year"], parameters.get("trial_balance_file"))
+        except (ValueError, OSError, MinesPathError) as error:
             self.error.setText(str(error))
             self.error.show()
             self.ensureWidgetVisible(self.error)
