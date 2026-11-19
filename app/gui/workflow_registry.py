@@ -45,7 +45,7 @@ def _last_completed_fiscal_year() -> str:
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="csmf_loans", name="CSMF Loans — R1",
-        description="Build loan activity worksheets and Current Month Recon from Workday uploads and saved FY opening balances. Summarizes all uploaded FY activity, including interest and fees on each loan tab. AP, AR and variance calculations remain pending.",
+        description="Build loan activity worksheets, Current FY Recon for all uploaded FY activity, and Current Month Recon for the latest uploaded month. Uses Workday uploads and saved FY opening balances, with interest and fees on each loan tab. AP, AR and variance calculations remain pending.",
         category="Accounts Receivable", runner=run_csmf_loans, cancellable=True,
         parameters=(
             ParameterDefinition(key="fiscal_year", label="Fiscal year (ending year)", kind=ParameterKind.INTEGER,

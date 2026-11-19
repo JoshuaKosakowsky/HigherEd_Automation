@@ -383,9 +383,12 @@ update only included projects after a successful run; omitted projects retain
 their saved values/dates. An included blank/null amount clears that project's
 balance. Cached runs do not refresh timestamps. No prior output workbook or
 TEST/PROD selection is used.
-Output includes seven loan tabs, source evidence and **Current Month Recon**.
-As of 0.30.11, the summary follows the supplied reconciliation layout and links
-all uploaded FY activity, interest, fees and Loan Totals from those loan tabs.
+Output includes seven loan tabs, source evidence, **Current Month Recon** and
+**Current FY Recon**. As of 0.30.16, the monthly view opens first and shows only
+the latest included Accounting Date month; its beginning balance is the raw FY
+opening plus 1621 debits minus credits dated before that month. The FY view
+retains all uploaded activity and its existing calculations. Both share the
+supplied reconciliation layout and cumulative Loan Totals from the loan tabs.
 As of 0.30.5, 1621 SIS debits are Loan Disbursements and SIS credits are Loan
 Reversals. Sources containing Journal are Payments; other 1621 sources remain
 unclassified. As of 0.30.8, Adjusted Amount reverses every debit's sign across

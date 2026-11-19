@@ -112,9 +112,10 @@ reports their count for review.
 
 ## Workbook
 
-`Current Month Recon` is created first and opens by default. As of 0.30.11 it
-replaces the empty `Current Recon` placeholder with the initial summary layout
-described below. The seven loan worksheets are:
+`Current Month Recon` is created first and opens by default, followed by
+`Current FY Recon`. As of 0.30.16 these share the initial summary layout but
+separate the latest uploaded month's activity from all uploaded FY activity.
+The seven loan worksheets are:
 
 | Project | Worksheet |
 |---|---|
@@ -167,15 +168,18 @@ preserves source columns, source row numbers and import status. `Trial Balance`
 is also included when uploaded. With cached balances, the snapshot supplies
 their provenance; the original Trial Balance file is not reconstructed.
 
-### Current Month Recon starting layout
+### Reconciliation summaries
 
 For 0.30.11, the owner supplied **Current Month Recon** from the existing FY27
 P03 reconciliation as a layout reference. Only that sheet informed the new
 summary. This supersedes the empty-summary scope in
 [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44).
-The owner confirmed **all uploaded FY activity**, rather than only the latest
-month, and explicitly deferred **AP, AR and variance calculations** until the
-new accounting treatment is agreed. This is a starting layout, not a completed
+In 0.30.16, the owner requested separate FY and monthly views. **Current FY Recon**
+preserves the previous summary's **all uploaded FY activity** calculations.
+**Current Month Recon** shows only the latest included Accounting Date month,
+with a beginning balance rolled forward using earlier uploaded 1621 activity.
+**AP, AR and variance calculations** remain explicitly deferred until their
+accounting treatment is agreed. These are evolving views, not a completed
 reconciliation or an independent GL tie-out.
 
 The summary retains the reference's title, Loan Information, Interest and Fees,
@@ -191,6 +195,8 @@ identifiers only and do not change project matching or financial calculations.
 Project contains only the current six-digit worktag. Historical balances,
 notes, names and sign-off dates are never copied from the reference. No
 reference workbook is required at runtime or stored in the repository.
+
+The existing **Current FY Recon** mappings are:
 
 | Summary field | Live source / calculation |
 |---|---|
@@ -210,13 +216,14 @@ In 0.30.13, the owner requested the original headings shown above and raw
 beginning balances in the upper table. In 0.30.15, the owner corrected the
 calculation to **Beginning Balance = raw FY opening + 1621 debits - 1621 credits**.
 The 0.30.14 choice of **all uploaded 1621 activity**, including the reconciliation
-month, still applies.
+month, still applies to **Current FY Recon**.
 There is no prior-month-only cutoff. The reconciliation month shown above the
 table is the latest Accounting Date month among included loan activity across
 all seven projects and included ledger accounts. It is independent of the run
-date and does not filter the beginning-balance formula or other FY summaries.
+date and does not filter the FY view's beginning-balance formula or other FY
+summaries.
 
-Column D keeps the calculation in its existing cell. Its visible Excel formula
+FY column D keeps the calculation in its existing cell. Its visible Excel formula
 starts with the loan tab's **F7** raw FY opening, adds a `SUMIFS` of raw Amount
 for Debit, then subtracts a `SUMIFS` for Credit. Both sums cover only the first
 three activity sections: Payment, Loan Activity and 1621 — Unclassified. This
@@ -272,6 +279,46 @@ Synthetic acceptance examples:
 - With raw opening zero, 1621 credit 25 and debit 100, D is 75. A negative
   credit of -4 adds 4 and a negative debit of -5 subtracts 5. Other-account
   entries can determine the displayed report month but do not enter D.
+
+#### Latest-month view (0.30.16)
+
+The monthly view uses the same latest month across all seven loans, even when
+some have no activity in that month. Headers show its fiscal period, such as
+`P03 Loan Activity (Net)` and `P03 Payments`; the included-period label lists
+only P03. The month/year is also shown. A loan's most recent individual activity
+does not select a different reporting month. July is P01; June is P12.
+
+Monthly **Beginning Balance = raw FY opening + earlier 1621 debits - earlier
+1621 credits**. Earlier means Accounting Date strictly before the first day of
+the displayed month. The same raw Amount/Debit-Credit columns and all three
+1621 sections feed this formula. Current-month transactions are excluded from
+the opening. July therefore starts from the raw FY opening. Missing FY openings
+remain blank, and zero openings still allow a rollforward.
+
+Adjustments/Reclass, Loan Activity, Payments, Interest and Late Charges sum
+Adjusted Amount only for dates on/after the month's first day and before the
+next month's first day. Net Change in Principal and Total Interest and Fees
+sum those monthly components. Empty sections or loans without current-month
+activity show zero. Formula ranges follow each section's actual detail rows,
+so subtotal rows and prior-year footnotes cannot be counted again. Edits to
+Adjusted Amount affect the corresponding month and FY summaries; edits to raw
+1621 Amount affect the appropriate beginning-balance formulas.
+
+**GL remains the cumulative Loan Total through the latest uploaded month in
+both views**, with the existing adjusted opening and footnote exclusions. It
+is a balance, not a current-month activity subtotal. Unisa ending balances,
+notes and sign-off inputs are independent between the two summaries. AP, AR
+and variance remain Pending in both.
+
+Synthetic acceptance: raw FY opening 1,000, July SIS debit 100 and July Journal
+credit 40 give September Beginning Balance **1,060**. September SIS credit 25
+and unclassified debit 3 give monthly Net Change in Principal **22**; the FY
+Beginning Balance is **1,038**. July interest 10 appears only on the FY view;
+September late charges -2 appear on both. September 1 and September 30 are
+included in September activity; August 31 enters the opening only. January
+uses December history, February includes leap day where applicable, and June
+retains P12. Gaps in uploaded history are not filled or assumed to be complete;
+the FY view continues to list the periods actually supplied.
 
 ### Prior fiscal year payment footnote
 

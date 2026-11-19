@@ -115,9 +115,11 @@ can stay blank while their loan tabs and activity remain available.
 As of 0.30.5, 1621 SIS rows are Loan Activity (disbursements or reversals), and
 sources containing Journal are Payments; other 1621 sources remain unclassified.
 As of 0.30.8, every debit has its sign flipped in Adjusted Amount, while credits
-retain their source value. As of 0.30.11, **Current Month Recon** summarizes all
-uploaded FY activity, interest, fees and Loan Totals using the existing loan
-tabs. AP, AR and variance calculations remain pending. See the
+retain their source value. As of 0.30.16, **Current FY Recon** preserves the
+summary of all uploaded FY activity, while **Current Month Recon** shows only
+the latest uploaded month. Its beginning balance uses the raw FY opening plus
+1621 debits minus credits dated before that month. Both use the existing loan
+tabs; AP, AR and variance calculations remain pending. See the
 [CSMF technical guide](data_processing/csmf_loans/README.md).
 
 **W&F - Banner Recon** (0.23.4) compares one combined Banner collections

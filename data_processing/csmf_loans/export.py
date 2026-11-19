@@ -1,4 +1,4 @@
-"""R1 loan worksheets and the evolving Current Month Recon summary."""
+"""R1 loan worksheets and fiscal-year/monthly reconciliation summaries."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from data_processing.shared.source_exports import SourceData
+from data_processing.shared.source_exports import SourceData, fiscal_scope
 from data_processing.shared.xlsx_output_format import (
     CURRENCY_FORMAT, apply_default_font, format_table_columns, style_header_row,
 )
@@ -37,27 +37,34 @@ RECON_UNISA_ACCOUNTS = {
 
 def _current_recon_sheet(
     sheet: Worksheet, activity: LoanActivity, subtotal_rows: dict[str, dict[str, int]],
+    detail_rows: dict[str, dict[str, tuple[int, int]]], *, monthly: bool = False,
 ) -> None:
-    """Link completed loan subtotals; leave unconfirmed reconciliation rules pending."""
+    """Share the layout while keeping FY totals and monthly activity distinct."""
+    month = max(row.day for row in activity.rows).replace(day=1)
+    _, period, _ = fiscal_scope(month)
+    scope = period if monthly else f"FY{activity.fiscal_year}"
     sheet.sheet_view.showGridLines = False
     sheet["A1"] = "Donor Restricted Student Loans - Administered by School"
-    sheet["A2"] = f"FY{activity.fiscal_year} — All uploaded activity"
-    sheet["H2"] = "Included periods: " + ", ".join(activity.periods)
+    sheet["A2"] = (f"{period} — {month:%B %Y}" if monthly
+                   else f"FY{activity.fiscal_year} — All uploaded activity")
+    sheet["H2"] = f"Included period: {period}" if monthly else "Included periods: " + ", ".join(activity.periods)
     sheet["A3"] = "Reconciliation month"
-    sheet["D3"] = max(row.day for row in activity.rows).replace(day=1)
+    sheet["D3"] = month
     sheet["D3"].number_format = "mmmm yyyy"
     labels = {
         "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
         "N5": "Total Due to\nFoundation", "P5": "Total Due From\nFoundation",
         "A6": "Loan", "B6": "Unisa\nAcct", "C6": "Project", "D6": "Beginning\nBalance",
-        "E6": "Adjustments/\nReclass", "F6": f"FY{activity.fiscal_year}\nLoan Activity (Net)",
-        "G6": f"FY{activity.fiscal_year}\nPayments", "H6": "Net Change\nin Principal",
+        "E6": "Adjustments/\nReclass", "F6": f"{scope}\nLoan Activity (Net)",
+        "G6": f"{scope}\nPayments", "H6": "Net Change\nin Principal",
         "J6": "Interest", "K6": "Late Charges", "L6": "Total\nInterest and Fees",
         "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
         "D19": "Unisa Ending\nBalance", "E19": "GL", "F19": "Variance",
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
-        "A16": "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month. AP, AR and variance calculations are pending.",
-        "A29": "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs.",
+        "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only. AP, AR and variance calculations are pending."
+                if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month. AP, AR and variance calculations are pending."),
+        "A29": ("Blank beginning balances remain unknown; GL is the cumulative Loan Total through this month. Shaded blanks are review inputs."
+                if monthly else "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs."),
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
         "A34": "Reviewed By:", "A35": "Reviewed Date:",
     }
@@ -76,17 +83,28 @@ def _current_recon_sheet(
         sheet.cell(row, 3, project)
         # Payment, Loan Activity and Unclassified are the first three sections
         # and contain only 1621. Subtotal rows have no Debit/Credit marker.
-        # Include every uploaded period, including the reconciliation month.
+        # Monthly openings stop before the report month; FY openings retain
+        # every uploaded period. Both use raw amounts, independent of edits to H.
         opening = f"{loan_sheet}!F7"
         last_1621 = totals["1621"] - 1
         amounts = f"{loan_sheet}!F10:F{last_1621}"
         directions = f"{loan_sheet}!G10:G{last_1621}"
+        before_month = f',{loan_sheet}!C10:C{last_1621},"<"&$D$3' if monthly else ""
         sheet.cell(row, 4, f'=IF({opening}="","",{opening}'
-                          f'+SUMIFS({amounts},{directions},"Debit")'
-                          f'-SUMIFS({amounts},{directions},"Credit"))')
+                          f'+SUMIFS({amounts},{directions},"Debit"{before_month})'
+                          f'-SUMIFS({amounts},{directions},"Credit"{before_month}))')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):
-            sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")
+            if not monthly:
+                sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")
+                continue
+            first, last = detail_rows[project][section]
+            if last < first:
+                sheet.cell(row, column, 0)
+            else:
+                dates = f"{loan_sheet}!C{first}:C{last}"
+                sheet.cell(row, column, f'=SUMIFS({loan_sheet}!H{first}:H{last},'
+                                       f'{dates},">="&$D$3,{dates},"<"&EDATE($D$3,1))')
         # All three columns already carry the confirmed Adjusted Amount signs.
         sheet.cell(row, 8, f"=SUM(E{row}:G{row})")
         sheet.cell(row, 12, f"=SUM(J{row}:K{row})")
@@ -97,7 +115,8 @@ def _current_recon_sheet(
         sheet.cell(pending, 1, f"=A{row}")
         sheet.cell(pending, 2, f'=IF(B{row}="","",B{row})')
         sheet.cell(pending, 3, f"=C{row}")
-        # This is the complete existing Loan Total, not an independent GL balance.
+        # GL is cumulative in both views, not just the month's activity. This
+        # is the existing Loan Total, not an independent GL balance.
         sheet.cell(pending, 5, f"={loan_sheet}!H{totals['loan']}")
         sheet.cell(pending, 6, "Pending")
 
@@ -211,10 +230,12 @@ def build_workbook(
 ) -> Workbook:
     book = Workbook()
     book.active.title = "Current Month Recon"
+    book.create_sheet("Current FY Recon")
     book.properties.title = "CSMF Loans — R1"
     book.properties.description = f"Mines Bursar Automation {app_version}; source-value review, not a completed reconciliation."
     opening = dict(balances.values)
     subtotal_rows = {}
+    detail_rows = {}
     for project, loan in LOANS.items():
         if cancellation:
             cancellation.check()
@@ -235,6 +256,7 @@ def build_workbook(
         _append(sheet, [])
         totals = [8]
         subtotal_rows[project] = {"opening": 8}
+        detail_rows[project] = {}
         project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_activity]
         footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_activity]
         sections = dict(SECTIONS)
@@ -250,6 +272,7 @@ def build_workbook(
                 _append(sheet, [row.label, row.journal, row.day, row.source, row.description,
                                 row.amount, row.direction, row.adjusted_amount])
             last = sheet.max_row
+            detail_rows[project][section] = (first, last)
             total_label = "1382 Totals" if section == "1382" else f"{title} Total"
             total_row = _append(sheet, [total_label, None, None, None, None, None, None,
                                         0 if last < first else None])
@@ -312,7 +335,8 @@ def build_workbook(
         sheet.page_setup.fitToHeight = 0
     if cancellation:
         cancellation.check()
-    _current_recon_sheet(book["Current Month Recon"], activity, subtotal_rows)
+    _current_recon_sheet(book["Current Month Recon"], activity, subtotal_rows, detail_rows, monthly=True)
+    _current_recon_sheet(book["Current FY Recon"], activity, subtotal_rows, detail_rows)
     snapshot = book.create_sheet("Opening Balances")
     _append(snapshot, ["Fiscal Year", "Project", "Loan", "Opening Balance", "Last Uploaded/Updated", "Source"])
     for project, balance in balances.projects:

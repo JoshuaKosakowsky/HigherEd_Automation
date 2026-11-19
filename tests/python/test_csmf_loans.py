@@ -250,7 +250,7 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual(BalanceStore(2027).path.read_bytes(), saved)
         for path in (self.output, self.root / "reuse.xlsx"):
             book = self.workbook(path)
-            self.assertEqual(book["Current Month Recon"]["H2"].value, "Included periods: P01, P02, P03")
+            self.assertEqual(book["Current FY Recon"]["H2"].value, "Included periods: P01, P02, P03")
             for project, loan in LOANS.items():
                 with self.subTest(workbook=path.name, project=project):
                     sheet = book[f"{loan} - {project}"]
@@ -494,7 +494,7 @@ class CsmfTests(unittest.TestCase):
         source = book["Journal Lines"]
         self.assertEqual([cell.value for cell in source["D"]][1:], [row[2] for row in rows])
         self.assertEqual(sum("excluded from activity totals" in str(cell.value) for cell in source["J"]), 4)
-        self.assertEqual(book["Current Month Recon"]["N7"].value, "Pending")
+        self.assertEqual(book["Current FY Recon"]["N7"].value, "Pending")
 
     def test_prior_year_ar_uses_inclusive_opening_july_cutoff_for_every_source(self):
         for year in (2027, 2028):
@@ -615,18 +615,18 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(sheet.max_row, 31)
                 self.assertEqual([sheet.cell(row, 8).value for row in (29, 30, 31)], [0, -50, -25])
 
-    def test_seven_loan_tabs_current_month_recon_and_literal_source_text(self):
+    def test_seven_loan_tabs_both_recons_and_literal_source_text(self):
         self.write_journal([journal_row(memo='=HYPERLINK("https://invalid.example")')])
         self.run_workflow()
         book = self.workbook()
-        self.assertEqual(book.sheetnames[:8], ["Current Month Recon", *(f"{name} - {project}" for project, name in LOANS.items())])
+        self.assertEqual(book.sheetnames[:9], ["Current Month Recon", "Current FY Recon", *(f"{name} - {project}" for project, name in LOANS.items())])
         self.assertEqual(book.active.title, "Current Month Recon")
         self.assertEqual(book["Parsons - 694511"]["E10"].data_type, "s")
         self.assertEqual(book["Journal Lines"]["G2"].data_type, "s")
         self.assertIn("0.00", book["Parsons - 694511"]["F10"].number_format)
         self.assertEqual(book["Combined - 694512"]["H7"].value, -1001)
 
-    def test_current_month_recon_links_dynamic_subtotals_for_all_uploaded_periods(self):
+    def test_current_fy_recon_links_dynamic_subtotals_for_all_uploaded_periods(self):
         rows = []
         for index, project in enumerate(LOANS):
             rows.extend([
@@ -647,13 +647,18 @@ class CsmfTests(unittest.TestCase):
             # Distinct row counts move each loan's subtotals independently.
             rows.extend(journal_row(project=project, day="2026-09-15", debit=None, credit=1)
                         for _ in range(index))
+        # Excluded accounts/projects must not move the reporting month forward.
+        rows.extend([journal_row(account="1021", day="2027-06-30"),
+                     journal_row(project="999999", day="2027-06-30")])
         self.write_journal(rows)
         original = self.journal.read_bytes()
         result = self.run_workflow()
         self.assertIn("AP, AR and variance calculations remain pending", result.message)
+        self.assertIn("Current FY Recon summarizes all uploaded FY activity", result.message)
+        self.assertIn("Current Month Recon shows the latest uploaded month", result.message)
         self.assertEqual(self.journal.read_bytes(), original)
         book = self.workbook()
-        summary = book["Current Month Recon"]
+        summary = book["Current FY Recon"]
         self.assertEqual(summary["A2"].value, "FY2027 — All uploaded activity")
         self.assertEqual(summary["H2"].value, "Included periods: P01, P03")
         self.assertEqual(summary["D3"].value, datetime(2026, 9, 1))
@@ -702,6 +707,73 @@ class CsmfTests(unittest.TestCase):
         for obsolete in ("Banner", "Acct 4580", "Acct 4511", "'A 4580'", "'A 4511'", "[1]", "-1360", "-1365"):
             self.assertNotIn(obsolete, all_text)
 
+        monthly = book["Current Month Recon"]
+        self.assertEqual(monthly["A2"].value, "P03 — September 2026")
+        self.assertEqual(monthly["H2"].value, "Included period: P03")
+        self.assertEqual(monthly["D3"].value, datetime(2026, 9, 1))
+        self.assertEqual(monthly["F6"].value, "P03\nLoan Activity (Net)")
+        self.assertEqual(monthly["G6"].value, "P03\nPayments")
+        self.assertIn("dated before this month", monthly["A16"].value)
+        self.assertIn("cumulative Loan Total", monthly["A29"].value)
+        for row in range(7, 14):
+            project = monthly.cell(row, 3).value
+            loan = book[f"{LOANS[project]} - {project}"]
+            last_1621 = 17 + list(LOANS).index(project)
+            before = f',\'{loan.title}\'!C10:C{last_1621},"<"&$D$3'
+            self.assertEqual(monthly.cell(row, 4).value,
+                             f'=IF(\'{loan.title}\'!F7="","",\'{loan.title}\'!F7'
+                             f'+SUMIFS(\'{loan.title}\'!F10:F{last_1621},\'{loan.title}\'!G10:G{last_1621},"Debit"{before})'
+                             f'-SUMIFS(\'{loan.title}\'!F10:F{last_1621},\'{loan.title}\'!G10:G{last_1621},"Credit"{before}))')
+            for column, labels in ((5, ("1621 — Unclassified",)),
+                                   (6, ("Loan Disbursement", "Loan Reversal")),
+                                   (7, ("Payment",)), (10, ("Interest on loans",)),
+                                   (11, ("Late fees on loans",))):
+                details = [cell.row for cell in loan["A"] if cell.value in labels]
+                first, last = min(details), max(details)
+                dates = f"'{loan.title}'!C{first}:C{last}"
+                self.assertEqual(monthly.cell(row, column).value,
+                                 f'=SUMIFS(\'{loan.title}\'!H{first}:H{last},'
+                                 f'{dates},">="&$D$3,{dates},"<"&EDATE($D$3,1))')
+            # Both views share the same layout, adjusted signs and cumulative GL.
+            for column in (1, 2, 3, 8, 12, 14, 16):
+                self.assertEqual(monthly.cell(row, column).value, summary.cell(row, column).value)
+            for column in (2, 4, 5, 6, 7):
+                self.assertEqual(monthly.cell(row + 13, column).value, summary.cell(row + 13, column).value)
+        self.assertEqual(monthly["D14"].value, summary["D14"].value)
+
+    def test_monthly_recon_handles_month_boundaries_and_fiscal_rollover(self):
+        from dataclasses import replace
+        from data_processing.csmf_loans.export import build_workbook
+
+        for year, prior, first, last, period in (
+            (2027, None, "2026-07-01", "2026-07-31", "P01"),
+            (2027, "2026-12-31", "2027-01-01", "2027-01-31", "P07"),
+            (2028, "2028-01-31", "2028-02-01", "2028-02-29", "P08"),
+            (2028, "2028-05-31", "2028-06-01", "2028-06-30", "P12"),
+        ):
+            with self.subTest(year=year, period=period):
+                rows = [journal_row(day=first, source="SIS", debit=100),
+                        journal_row(day=last, debit=None, credit=40)]
+                if prior:
+                    rows += [journal_row(day=prior, source="Unknown", debit=-5),
+                             journal_row(day=prior, debit=None, credit=-4)]
+                self.write_journal(rows)
+                activity = prepare_activity(read_journal(self.journal), year)
+                book = build_workbook(activity, replace(self.selection().balances, fiscal_year=year), app_version="test")
+                self.addCleanup(book.close)
+                monthly = book["Current Month Recon"]
+                self.assertEqual(monthly["D3"].value.isoformat(), first)
+                self.assertEqual(monthly["H2"].value, f"Included period: {period}")
+                self.assertEqual(monthly["F6"].value, f"{period}\nLoan Activity (Net)")
+                self.assertEqual(monthly["G6"].value, f"{period}\nPayments")
+                self.assertIn(',"<"&$D$3', monthly["D7"].value)
+                self.assertIn(',">="&$D$3', monthly["F7"].value)
+                self.assertIn(',"<"&EDATE($D$3,1)', monthly["F7"].value)
+                # Loans without any imported rows have zero monthly activity.
+                self.assertEqual([monthly.cell(8, col).value for col in (5, 6, 7, 10, 11)], [0] * 5)
+                self.assertEqual(book["Current FY Recon"]["H2"].value,
+                                 "Included periods: " + ", ".join(activity.periods))
+
     def test_recon_beginning_balance_includes_every_1621_source_and_uploaded_period(self):
         rows = []
         for project in LOANS:
@@ -727,7 +799,7 @@ class CsmfTests(unittest.TestCase):
         self.run_workflow()
         self.assertEqual(self.journal.read_bytes(), original)
         book = self.workbook()
-        summary = book["Current Month Recon"]
+        summary = book["Current FY Recon"]
         self.assertEqual(summary["A3"].value, "Reconciliation month")
         self.assertEqual(summary["D3"].value, datetime(2026, 12, 1))
         self.assertEqual(summary["D3"].number_format, "mmmm yyyy")
@@ -742,10 +814,14 @@ class CsmfTests(unittest.TestCase):
                              f'+SUMIFS(\'{loan.title}\'!F10:F22,\'{loan.title}\'!G10:G22,"Debit")'
                              f'-SUMIFS(\'{loan.title}\'!F10:F22,\'{loan.title}\'!G10:G22,"Credit"))')
             self.assertEqual(loan["F7"].value, 1000 + list(LOANS).index(project))
+        monthly = book["Current Month Recon"]
+        self.assertEqual(monthly["D3"].value, datetime(2026, 12, 1))
+        self.assertEqual(monthly["H2"].value, "Included period: P06")
+        self.assertIn(',"<"&$D$3', monthly["D7"].value)
 
-    def test_current_month_recon_retains_unisa_identifiers_in_both_sections(self):
+    def test_current_fy_recon_retains_unisa_identifiers_in_both_sections(self):
         self.run_workflow()
-        summary = self.workbook()["Current Month Recon"]
+        summary = self.workbook()["Current FY Recon"]
         self.assertEqual(summary["B6"].value, "Unisa\nAcct")
         self.assertEqual(summary["B19"].value, "Unisa\nAcct")
         expected = [("694511", "6304"), ("694512", "6308"), ("694513", "6309"),
@@ -759,12 +835,12 @@ class CsmfTests(unittest.TestCase):
                     self.assertNotIn(f"B{visible_row}", summary.merged_cells)
         self.assertIsNone(summary["B13"].value)
 
-    def test_current_month_recon_preserves_blank_openings_and_zero_activity_sections(self):
+    def test_current_fy_recon_preserves_blank_openings_and_zero_activity_sections(self):
         self.write_trial([["Project: 694511 Parsons", 0], ["Project: 694516 Bruce", None]])
         self.write_journal([journal_row(project="694516", account="1382", day="2026-07-31")])
         self.run_workflow()
         book = self.workbook()
-        summary = book["Current Month Recon"]
+        summary = book["Current FY Recon"]
         for row in range(7, 14):
             project = summary.cell(row, 3).value
             loan = book[f"{LOANS[project]} - {project}"]
@@ -778,8 +854,15 @@ class CsmfTests(unittest.TestCase):
                 target = formula.rsplit("!", 1)[1]
                 self.assertEqual(loan[target].value, 0)
         self.assertIn("Blank beginning balances remain unknown", summary["A29"].value)
+        monthly = book["Current Month Recon"]
+        self.assertEqual(monthly["H2"].value, "Included period: P01")
+        self.assertEqual(monthly["D14"].value, '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")')
+        for row in range(7, 14):
+            self.assertTrue(monthly.cell(row, 4).value.startswith('=IF('))
+            self.assertIn('!F7="","",', monthly.cell(row, 4).value)
+            self.assertEqual([monthly.cell(row, col).value for col in (5, 6, 7, 10, 11)], [0] * 5)
 
-    def test_current_month_recon_uses_selected_fy_and_all_twelve_periods(self):
+    def test_current_fy_recon_uses_selected_fy_and_all_twelve_periods(self):
         from dataclasses import replace
         from data_processing.csmf_loans.export import build_workbook
 
@@ -788,7 +871,7 @@ class CsmfTests(unittest.TestCase):
         activity = prepare_activity(read_journal(self.journal), 2028)
         book = build_workbook(activity, replace(self.selection().balances, fiscal_year=2028), app_version="test")
         self.addCleanup(book.close)
-        summary = book["Current Month Recon"]
+        summary = book["Current FY Recon"]
         self.assertEqual(summary["A2"].value, "FY2028 — All uploaded activity")
         self.assertEqual(summary["H2"].value, "Included periods: " + ", ".join(f"P{i:02d}" for i in range(1, 13)))
         self.assertEqual(summary["F6"].value, "FY2028\nLoan Activity (Net)")
@@ -807,7 +890,7 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual(store.path.read_bytes(), raw)
         for path in (self.output, self.root / "reuse.xlsx"):
             book = self.workbook(path)
-            summary = book["Current Month Recon"]
+            summary = book["Current FY Recon"]
             summary_rows = {summary.cell(row, 3).value: row for row in range(7, 14)}
             for row_number, ((project, loan), (amount, adjusted)) in enumerate(zip(LOANS.items(), cases), 2):
                 with self.subTest(workbook=path.name, project=project):
