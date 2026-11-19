@@ -24,10 +24,10 @@ from .allocation import CARD_PAYMENT_CODES, REPORT_COLUMNS, STUDENT_CHECK_MINIMU
 
 
 REFUND_SHEETS = (
-    "ACH or CC Refunds", "Refund by Check", "Check Refund < 25", "Check Address Review",
-    "Refund to Parent", "Direct Deposit",
-    "Third Party Reviews", "Refund Holds", "Future Term", "Payment Clearing", "ACH Clearing", "ACH Reviews",
-    "Mines Park Reviews", "Manual Reviews",
+    "ACH or CC Refunds", "Refund by Check", "Refund to Parent", "Direct Deposit",
+    "Manual Reviews", "Check Refund < 25", "Check Address Review", "Third Party Reviews",
+    "Refund Holds", "Future Term", "Payment Clearing", "ACH Clearing", "ACH Reviews",
+    "Mines Park Reviews",
 )
 REFUND_TAB_COLORS = {
     "Direct Deposit": "BDD7EE",  # Light blue
@@ -35,9 +35,17 @@ REFUND_TAB_COLORS = {
     "Refund by Check": "E2EFDA",  # Light green
     "Refund to Parent": "FCE4D6",  # Light orange
 }
-WORKBOOK_COLUMNS = REPORT_COLUMNS[:3] + [
+WORKBOOK_LEADING_COLUMNS = [
+    "cwid", "last_name", "first_name",
     "tab_delivery", "tab_refund_amount", "tab_review_note",
-] + REPORT_COLUMNS[3:]
+    "full_account_balance", "total_refund_amount", "title_iv_balance_due_note",
+    "proposed_student_delivery", "student_refund_amount",
+    "raw_delinquency_code", "active_ed_ind", "ed_activity_date", "plus_to_student_status",
+]
+# Staff-selected leading columns leave the allocator's report order unchanged.
+WORKBOOK_COLUMNS = WORKBOOK_LEADING_COLUMNS + [
+    column for column in REPORT_COLUMNS if column not in WORKBOOK_LEADING_COLUMNS
+]
 # Display changes leave allocation fields intact.
 WORKBOOK_HEADERS = {
     "cwid": "CWID",

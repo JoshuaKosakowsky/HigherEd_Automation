@@ -517,11 +517,16 @@ the live replica or Workday import. Updating Workday remains a staff action.
 
 ### Workbook tabs
 
-The workbook has these tabs, including headers when a category is empty:
+The workbook has these tabs in left-to-right order, including headers when a
+category is empty:
 
 - **ACH or CC Refunds** (light yellow tab): available ACH and credit-card portions.
 - **Refund by Check** (light green tab): student `RFND (CHECK)` portions meeting
   the minimum and without an address-review flag.
+- **Refund to Parent** (light orange tab): parent `RFDP` portions.
+- **Direct Deposit** (light blue tab): student `ARFD (Direct Deposit)` portions.
+- **Manual Reviews:** undetermined splits, unrecognized delivery methods, or
+  delivery components that do not reconcile to recipient amounts.
 - **Check Refund < 25:** student check portions below $25.00; do not issue a
   check for these amounts. From 0.28.4 the minimum applies to each student check
   portion after splitting by delivery method. Exactly $25.00 stays on Refund
@@ -530,8 +535,6 @@ The workbook has these tabs, including headers when a category is empty:
 - **Check Address Review:** flagged student check portions, with red
   **UPDATE WORKDAY** or **Withhold check refund** in Student Check Address Flag.
   Below-$25 portions also retain their minimum warning here.
-- **Refund to Parent** (light orange tab): parent `RFDP` portions.
-- **Direct Deposit** (light blue tab): student `ARFD (Direct Deposit)` portions.
 - **Third Party Reviews:** the entire account refund pending ownership review.
 - **Refund Holds:** the entire account refund when RH is present, including any
   student and parent portions. No portion remains on a delivery or other review
@@ -545,8 +548,6 @@ The workbook has these tabs, including headers when a category is empty:
   calculated CHCK/ACHK reserves appear on Payment Clearing.
 - **ACH Reviews:** ACH portions over 180 days old or requiring effective-date review.
 - **Mines Park Reviews:** the entire account refund pending housing review.
-- **Manual Reviews:** undetermined splits, unrecognized delivery methods, or
-  delivery components that do not reconcile to recipient amounts.
 
 RH takes precedence over every delivery and review tab, followed by Future Term.
 Otherwise, third-party review takes precedence over Mines Park review. All
@@ -573,12 +574,17 @@ Mixed refunds can appear on multiple tabs, but each account appears at most
 once per tab. **Detail_Code_Delivery** identifies that tab's method(s), and
 **Detail_Code_Refund_Amt** contains only that portion. Sum this portion across
 tabs; account-level totals repeat as context. **Detail_Code_Note** explains
-account review placement. Retained report columns keep their values and relative
-order after these three fields, which follow the student's name.
+account review placement. These three fields follow the student's name.
+
+From **0.30.17**, **Active RH**, **Active ED**, **ED Start**, and **PPL to Student**
+appear together in columns L–O, immediately after `student_refund_amount` in K.
+All other shared columns keep their relative order, with `plus_auth_activity_date`
+last. The seven sponsor-context columns remain appended only on **Third Party
+Reviews**. Column values, formats, and the underlying allocation report order
+are unchanged.
 
 All tabs use the following displayed-header mapping and retain the student/parent
-context fields listed below. Other retained columns keep their original order
-and names.
+context fields listed below.
 
 | Original field | Displayed header |
 | --- | --- |
