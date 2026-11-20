@@ -141,7 +141,9 @@ class CalendarGuiTests(unittest.TestCase):
         self.assertEqual(page.period.currentText(), "Nov–Jan (3 months)")
         page.grab()
 
-    def test_laptop_layout_reserves_space_for_timeline_and_keeps_panels_available(self):
+    @patch("app.gui.pages.operations_calendar.date", wraps=date)
+    def test_laptop_layout_reserves_space_for_timeline_and_keeps_panels_available(self, calendar_date):
+        calendar_date.today.return_value = date(2026, 9, 10)
         self.store.save(self.synthetic_calendar())
         window = self.keep(AutomationApplication(user_login_override="ADMIN", access_config_path=self.access_path))
         window.resize(1000, 700)
