@@ -70,6 +70,8 @@ These display changes do not modify shared calendar data or workflow rules.
   activity report dates similarly refresh before export unless explicitly edited.
 - `services/execution.py` runs one task at a time on a worker thread and converts
   exceptions into staff-safe messages while preserving tracebacks in the log.
+  The home screen loads workflow definitions first. The worker imports the
+  selected workflow service on first run, which can add a short first-run delay.
 - `shared/progress.py` supplies toolkit-independent progress updates;
   `progress.py` renders them in one shared Qt widget for all workflows.
 - workflow-specific service adapters translate form values into existing

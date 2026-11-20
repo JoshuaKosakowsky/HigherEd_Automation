@@ -19,7 +19,6 @@ from app.gui import APP_NAME, APP_VERSION
 from app.gui.models import WorkflowDefinition
 from app.gui.pages.access_management import AccessManagementPage
 from app.gui.pages.home import HomePage
-from app.gui.pages.connections import ConnectionsPage
 from app.gui.pages.workflow_detail import WorkflowDetailPage
 from app.gui.pages.updates import UpdatesPage
 from app.gui.pages.operations_calendar import OperationsCalendarPage
@@ -292,6 +291,8 @@ class AutomationApplication(QMainWindow):
         if not self._authorize_connections():
             self.show_home(reload=False)
             return
+        from app.gui.pages.connections import ConnectionsPage
+
         self.home_button.setChecked(False)
         self.access_button.setChecked(False)
         self.connections_button.setChecked(True)

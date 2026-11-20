@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
+from app.gui.models import MANUAL_SOURCE, SQL_SOURCE, WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.textbook_brokers.recon import BANNER_HEADERS, MONTH_PATTERN, build_recon
 from shared.insights.config import load_department_profiles
@@ -50,8 +50,6 @@ FIELD_NAMES = {
     "'Due Date'": "tbraccd_due_date",
     "'Activity Date'": "tbraccd_activity_date",
 }
-MANUAL_SOURCE = "manual"
-SQL_SOURCE = "sql"
 
 
 def _month_bounds(text: str) -> tuple[date, date]:

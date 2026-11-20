@@ -14,14 +14,14 @@ from PySide6.QtWidgets import (
     QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from app.gui.models import ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode
+from app.gui.models import (
+    MANUAL_SOURCE, SQL_SOURCE, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode,
+)
 from app.gui.parameter_defaults import ParameterDefaults
 from app.gui.progress import WorkflowProgressWidget
 from app.gui.services.drag_drop import FileInput
 from app.gui.services.execution import WorkflowExecutor
-from data_processing.csmf_loans.balances import balance_summary, prepare_opening_balances
 from app.gui.services.parameters import parse_parameters
-from app.gui.services.textbook_recon import MANUAL_SOURCE, SQL_SOURCE
 from app.gui.services.system import open_path
 from app.gui.theme import button, card, label
 from shared.mines_paths import MinesPathError
@@ -311,6 +311,8 @@ class WorkflowDetailPage(QScrollArea):
         form = QFormLayout(summary)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         if self.definition.workflow_id == "csmf_loans":
+            from data_processing.csmf_loans.balances import balance_summary
+
             form.addRow(label("Opening balances to use", "field"),
                         label(balance_summary(context.parameters["_opening_balances"])))
         if self._source_control is not None:
@@ -354,6 +356,8 @@ class WorkflowDetailPage(QScrollArea):
             self.parameter_defaults.refresh()
             parameters = self._parse_parameters()
             if self.definition.workflow_id == "csmf_loans":
+                from data_processing.csmf_loans.balances import prepare_opening_balances
+
                 parameters["_opening_balances"] = prepare_opening_balances(
                     parameters["fiscal_year"], parameters.get("trial_balance_file"))
         except (ValueError, OSError, MinesPathError) as error:

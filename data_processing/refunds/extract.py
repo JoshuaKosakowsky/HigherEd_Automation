@@ -13,6 +13,7 @@ from time import perf_counter, sleep
 from shared.cancellation import CancellationToken
 from shared.insights.client import InsightsAPIError
 from shared.progress import ProgressReporter
+from shared.workflow_errors import WorkflowUserError
 
 import pandas as pd
 
@@ -43,7 +44,7 @@ PARTITION_COLUMNS = {
 }
 
 
-class RefundExtractError(RuntimeError):
+class RefundExtractError(WorkflowUserError):
     """A safe-to-display extraction error; no account identifiers are included."""
 
 

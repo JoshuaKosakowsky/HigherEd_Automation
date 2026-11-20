@@ -12,9 +12,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
-from app.gui.models import WorkflowContext
+from app.gui.models import WorkflowContext, WorkflowResult
 from app.gui.pages.workflow_detail import WorkflowDetailPage
-from app.gui.services.csmf_loans import run_csmf_loans
 from app.gui.services.execution import WorkflowExecutor
 from app.gui.workflow_registry import get_workflow
 from data_processing.csmf_loans.balances import BalanceStore, prepare_opening_balances
@@ -117,7 +116,7 @@ class CsmfGuiTests(unittest.TestCase):
         self.assertIn("FY2028", self.page.error.text())
 
     def test_shared_path_errors_stay_in_form_and_do_not_start_run(self):
-        with patch("app.gui.pages.workflow_detail.prepare_opening_balances", side_effect=MinesPathError("Shared location unavailable")), patch.object(self.page, "_confirm") as confirm:
+        with patch("data_processing.csmf_loans.balances.prepare_opening_balances", side_effect=MinesPathError("Shared location unavailable")), patch.object(self.page, "_confirm") as confirm:
             self.page._run()
         confirm.assert_not_called()
         self.assertIn("Shared location unavailable", self.page.error.text())
@@ -136,11 +135,22 @@ class CsmfGuiTests(unittest.TestCase):
         definition = get_workflow("csmf_loans")
         self.assertEqual(definition.supported_modes, ())
         self.assertTrue(definition.cancellable)
-        self.assertIs(definition.runner, run_csmf_loans)
         self.assertFalse(next(p for p in definition.parameters if p.key == "trial_balance_file").required)
         path = get_shared_csmf_balances_directory({"OneDriveCommercial": "C:/Synthetic/Institution"})
         self.assertEqual(path.name, "csmf_opening_balances")
         self.assertIn(Path("C:/Synthetic/Institution"), path.parents)
+
+    def test_registry_runner_calls_csmf_service_on_first_run(self):
+        definition = get_workflow("csmf_loans")
+        context = WorkflowContext("csmf_loans", {})
+        with patch("app.gui.services.csmf_loans.run_csmf_loans",
+                   return_value=WorkflowResult(True, "Completed")) as run:
+            result = self.executor.run_async(definition, context).get(timeout=5)
+        self.assertTrue(result.success)
+        run.assert_called_once()
+        dispatched = run.call_args.args[0]
+        self.assertEqual(dispatched.workflow_id, context.workflow_id)
+        self.assertIsNotNone(dispatched.cancellation)
 
     def test_july_default_targets_previous_months_fy(self):
         definition = get_workflow("csmf_loans")

@@ -11,6 +11,10 @@ from shared.cancellation import CancellationToken
 from shared.progress import ProgressReporter
 
 
+MANUAL_SOURCE = "manual"
+SQL_SOURCE = "sql"
+
+
 class WorkflowMode(str, Enum):
     """Execution environments for workflows that have an environment choice."""
 

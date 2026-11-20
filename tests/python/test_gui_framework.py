@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -55,6 +56,22 @@ from shared.mines_paths import ensure_hidden_directory, get_shared_gui_access_pa
 
 
 class WorkflowRegistryTests(unittest.TestCase):
+    def test_gui_startup_imports_skip_workflow_backends(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-c", "import sys; import app.gui.main; print(*sys.modules)"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        deferred = {
+            "numpy", "pandas", "openpyxl", "requests",
+            "app.gui.pages.connections", "data_processing.refunds.extract",
+            "data_processing.csmf_loans.balances",
+        }
+        self.assertEqual(deferred.intersection(result.stdout.split()), set())
+
     def test_registry_ids_are_unique_and_initial_workflows_are_registered(self) -> None:
         workflows = get_workflows()
         ids = [workflow.workflow_id for workflow in workflows]

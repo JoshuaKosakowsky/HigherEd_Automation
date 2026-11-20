@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, date, timedelta
+from importlib import import_module
 from pathlib import Path
 
 from data_processing.population_testing.config import (
@@ -12,17 +13,10 @@ from data_processing.population_testing.config import (
     DEFAULT_STAFF_NAMES,
 )
 
-from app.gui.models import ParameterDefinition, ParameterKind, WorkflowDefinition, WorkflowMode
-from app.gui.services.canadian_tax import run_canadian_tax
-from app.gui.services.csmf_loans import run_csmf_loans
-from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
-from app.gui.services.wf_mines_balance_recon import run_wf_mines_balance_recon
-from app.gui.services.population_testing import run_population_testing
-from app.gui.services.refunds import run_refund_review
-from app.gui.services.trends import run_trends, run_refresh_detail_codes
-from app.gui.services.report_watcher import run_setup_report_watcher
-from app.gui.services.textbook_brokers import run_textbook_brokers
-from app.gui.services.textbook_recon import run_recon
+from app.gui.models import (
+    ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition,
+    WorkflowMode, WorkflowResult, WorkflowRunner,
+)
 from shared.banner.term import get_banner_term
 
 
@@ -42,11 +36,21 @@ def _last_completed_fiscal_year() -> str:
     return str(today.year - (today.month < 7))
 
 
+def _defer_runner(service: str, function: str) -> WorkflowRunner:
+    """Load the service when the workflow executor calls its runner."""
+    def run(context: WorkflowContext) -> WorkflowResult:
+        module = import_module(f"app.gui.services.{service}")
+        return getattr(module, function)(context)
+
+    return run
+
+
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="csmf_loans", name="CSMF Loans — R1",
         description="Build loan activity worksheets, Current FY Recon for all uploaded FY activity, and Current Month Recon for the latest uploaded month. Uses Workday uploads and saved FY opening balances, with interest and fees on each loan tab. AP, AR and variance calculations remain pending.",
-        category="Accounts Receivable", runner=run_csmf_loans, cancellable=True,
+        category="Accounts Receivable", cancellable=True,
+        runner=_defer_runner("csmf_loans", "run_csmf_loans"),
         parameters=(
             ParameterDefinition(key="fiscal_year", label="Fiscal year (ending year)", kind=ParameterKind.INTEGER,
                 minimum=1900, maximum=9998,
@@ -68,7 +72,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="refresh_detail_codes", name="Refresh Banner Detail Codes",
         description="Refresh the shared charge/payment classifications and categories used by Historical Trends directly from Banner. Validates the complete result before replacing the shared reference.",
-        category="Accounts Receivable", runner=run_refresh_detail_codes,
+        category="Accounts Receivable",
+        runner=_defer_runner("trends", "run_refresh_detail_codes"),
         administrator_only=True,
         supported_modes=(WorkflowMode.PRODUCTION,),
         production_warning="Reads Banner detail-code metadata from PROD Insights and updates detail_codes.json beside the shared GUI permissions file. No Banner records are changed. A failed refresh preserves the saved reference.",
@@ -76,7 +81,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="trends", name="Historical Trends",
         description="Analyze annual TGIACCD uploads or extract Banner activity by fiscal year (July–June Feed Dates) from PROD Insights in checked pages. Creates the existing analysis workbook; SQL runs also keep annual source CSVs. SQL balances are current replicated balances.",
-        category="Accounts Receivable", runner=run_trends,
+        category="Accounts Receivable",
+        runner=_defer_runner("trends", "run_trends"),
         administrator_only=True, cancellable=True,
         production_warning="Reads all account transactions for the selected fiscal years from PROD Insights and saves annual source files and an analysis workbook. No Banner records are changed. Balances are current, not historical year-end snapshots.",
         parameters=(
@@ -100,7 +106,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="canadian_tax", name="Canadian TL11A Review",
         description="Reconciles tuition paid from Insights, includes scholarships, checks course dates and converts USD to CAD using the published annual rate. Saves a review workbook and audit data.",
-        category="Accounts Receivable", runner=run_canadian_tax,
+        category="Accounts Receivable",
+        runner=_defer_runner("canadian_tax", "run_canadian_tax"),
         administrator_only=True, cancellable=True,
         supported_modes=(WorkflowMode.TEST, WorkflowMode.PRODUCTION),
         production_warning="This reads one student's account and enrollment from PROD Insights and saves a review. No Banner records are changed and no certificate is issued.",
@@ -122,7 +129,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             "assignments from the student population workbook."
         ),
         category="Testing",
-        runner=run_population_testing,
+        runner=_defer_runner("population_testing", "run_population_testing"),
         parameters=(
             ParameterDefinition(
                 key="input_file",
@@ -174,7 +181,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             "approve or issue refunds."
         ),
         category="Accounts Receivable",
-        runner=run_refund_review,
+        runner=_defer_runner("refunds", "run_refund_review"),
         cancellable=True,
         administrator_only=True,
         production_warning=(
@@ -260,7 +267,7 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             "transaction loading and archive the pending local and remote files."
         ),
         category="Payments",
-        runner=run_textbook_brokers,
+        runner=_defer_runner("textbook_brokers", "run_textbook_brokers"),
         parameters=(
             ParameterDefinition(
                 key="term_code",
@@ -282,12 +289,13 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
             "own computer and login, not an administrator's account."
         ),
         category="Cashier Tools",
-        runner=run_setup_report_watcher,
+        runner=_defer_runner("report_watcher", "run_setup_report_watcher"),
     ),
     WorkflowDefinition(
         workflow_id="textbook_recon_manual", name="Textbook Recon",
         description="Match the monthly Brokers workbook to Banner FRST and BOOK charges.",
-        category="Accounts Receivable", runner=run_recon,
+        category="Accounts Receivable",
+        runner=_defer_runner("textbook_recon", "run_recon"),
         production_warning="Run SQL reads production student account transactions from Insights and saves a recon workbook.",
         parameters=(
             ParameterDefinition(
@@ -321,7 +329,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="wf_mines_balance_recon", name="W&F - Banner Recon",
         description="Compare the combined Banner collections report with W&F principal amounts and returned accounts. Unisa verification files are omitted.",
-        category="Accounts Receivable", runner=run_wf_mines_balance_recon,
+        category="Accounts Receivable",
+        runner=_defer_runner("wf_mines_balance_recon", "run_wf_mines_balance_recon"),
         cancellable=True,
         production_warning="Reads the combined collections report from PROD Insights. W&F files must still be uploaded. Saves a reconciliation workbook without changing either system.",
         parameters=(
@@ -340,7 +349,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="graduate_contract_recon", name="1305 Graduate Contract Recon",
         description="Reconcile Workday 1305 activity to Banner feed documents and student detail. Creates a combined activity view and keeps both source exports.",
-        category="Accounts Receivable", runner=run_graduate_contract_recon,
+        category="Accounts Receivable",
+        runner=_defer_runner("graduate_contract_recon", "run_graduate_contract_recon"),
         cancellable=True,
         production_warning="Reads Banner activity from PROD Insights. Workday must still be uploaded. Saves a review workbook without changing either system.",
         parameters=(

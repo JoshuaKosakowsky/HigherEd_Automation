@@ -9,13 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowResult
-from data_processing.refunds.extract import RefundExtractError
 from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.progress import ProgressReporter, ProgressUpdate
+from shared.workflow_errors import WorkflowUserError
 
 
 def friendly_error_message(error: Exception) -> str:
-    if isinstance(error, RefundExtractError):
+    if isinstance(error, WorkflowUserError):
         return str(error)
     if isinstance(error, FileNotFoundError):
         return (
