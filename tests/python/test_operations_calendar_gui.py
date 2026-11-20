@@ -168,6 +168,15 @@ class CalendarGuiTests(unittest.TestCase):
         self.assertGreater(page.attention.rowCount(), 0)
         self.assertGreater(page.table.height(), 250)
 
+        reminders_height = page.attention.height()
+        window.resize(1000, 640)
+        self.qt.processEvents()
+        self.assertLess(page.attention.height(), reminders_height)
+        self.assertGreater(page.table.height(), page.attention.height())
+        page.attention.scrollToBottom()
+        last_reminder = page.attention.item(page.attention.rowCount() - 1, 1)
+        self.assertTrue(page.attention.viewport().rect().intersects(page.attention.visualItemRect(last_reminder)))
+
     def test_resizing_and_hidden_filters_preserve_calendar(self):
         self.store.save(self.synthetic_calendar())
         page = self.page()

@@ -807,14 +807,15 @@ class OperationsCalendarPage(QWidget):
         self.table.itemDoubleClicked.connect(self._activate_row)
         self.table.itemSelectionChanged.connect(self._selection)
         self.table.horizontalHeader().sectionResized.connect(self._resize_group_timelines)
-        layout.addWidget(self.table, 1)
+        # Give the timeline twice the vertical space of the scrollable reminders.
+        layout.addWidget(self.table, 2)
         self.attention = QTableWidget(0, 3)
         table_setup(self.attention, ("Date", "Event / coverage", "Reminder"))
         self.attention.setAccessibleName("Upcoming and recently passed dates")
         self.attention.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.attention.setMaximumHeight(190)
         self.attention.itemDoubleClicked.connect(lambda _: self._edit_attention())
-        layout.addWidget(self.attention)
+        layout.addWidget(self.attention, 1)
         self.attention.hide()
         self.reminders_button.toggled.connect(self.attention.setVisible)
         self.year.valueChanged.connect(self._render)
@@ -1071,7 +1072,7 @@ class OperationsCalendarPage(QWidget):
         self.attention_occurrences = [row.occurrence for row, _ in entries]
         self.reminders_button.setText(f"Reminders ({len(entries)})")
         self.attention.setRowCount(len(entries))
-        self.attention.setFixedHeight(min(190, max(80, 48 * len(entries) + 48)))
+        self.attention.setMaximumHeight(min(190, max(80, 48 * len(entries) + 48)))
         for index, (row, message) in enumerate(entries):
             group = next((g.name for g in self.data.groups if g.id == row.occurrence.event.group_id), None)
             title = f"{group} · {row.title}" if group else row.title
