@@ -403,9 +403,10 @@ As of 0.30.25, Pending Items compares raw and adjusted 1621 ending principal
 and calculates variance. As of 0.30.26, a missing FY opening contributes zero
 to the summary beginning and ending principal amounts. Total variance is
 total expected principal minus total GL principal.
-As of 0.30.27, **CSMF Payable** lists draft Workday journal lines by project
-for untransferred principal, interest, and late fees. Line memos use only the
-latest included month.
+**CSMF Payable - JR1XXXXXXXXX** lists draft Workday journal lines by project
+for untransferred principal, interest, and late fees. As of 0.30.28, it uses
+the legacy headers, keeps zero-dollar lines, and dates line memos by the
+month the workbook is generated.
 Notes and sign-off fields are blank for review.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for

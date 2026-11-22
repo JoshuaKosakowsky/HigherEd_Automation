@@ -4,7 +4,7 @@ import csv
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -621,7 +621,7 @@ class CsmfTests(unittest.TestCase):
         self.run_workflow()
         book = self.workbook()
         self.assertEqual(book.sheetnames[:10], [
-            "Current Month Recon", "Current FY Recon", "CSMF Payable",
+            "Current Month Recon", "Current FY Recon", "CSMF Payable - JR1XXXXXXXXX",
             *(f"{name} - {project}" for project, name in LOANS.items()),
         ])
         self.assertEqual(book.active.title, "Current Month Recon")
@@ -836,7 +836,10 @@ class CsmfTests(unittest.TestCase):
         self.assertIn('"<"&EDATE($D$3,1)', book["Current Month Recon"]["O9"].value)
         self.assertNotIn("EDATE", book["Current FY Recon"]["O9"].value)
 
-    def test_payable_draft_carries_untransferred_collections_and_uses_latest_month_memos(self):
+    def test_payable_draft_carries_untransferred_collections_and_uses_run_month_memos(self):
+        clock = patch("data_processing.csmf_loans.export.date")
+        clock.start().today.return_value = date(2026, 11, 22)
+        self.addCleanup(clock.stop)
         board = {"project": "694513", "debit": None, "memo": "Unisa pmt synthetic collections"}
         prior = {"project": "694513", "day": "2026-09-08", "journal": "PRIOR",
                  "source": "Manual Journal EIB", "memo": "CSM Board CSMF Payable Jul - Aug"}
@@ -864,39 +867,53 @@ class CsmfTests(unittest.TestCase):
         ]
         self.write_journal(rows)
         self.assertTrue(self.run_workflow().success)
-        sheet = self.workbook()["CSMF Payable"]
-        self.assertEqual(sheet["A2"].value, "FY2027 | Uploaded periods: P01, P02, P03, P04")
-        self.assertEqual(sheet["A3"].value, "Line memo month: October 2026")
+        sheet = self.workbook()["CSMF Payable - JR1XXXXXXXXX"]
+        self.assertEqual(list(sheet.iter_rows(min_row=1, max_row=6, max_col=3, values_only=True)), [
+            ("Banner Index", "=", "Grant, Proj, or Oper (only one, cannot be all)"),
+            ("Banner Fund", "=", "Additional Worktag"),
+            ("Banner Account", "=", "Ledger Account (balance sheet account) -OR- SC or RC "
+                                    "(one or the other) plus the Ledger Account of that SC or RC"),
+            ("Amount", "=", "Debit or Credit (only one, cannot be both)"),
+            ("Gray Fields", "=", "(will be blank for most JEs)"),
+            (None, None, None),
+        ])
+        self.assertEqual({str(merged) for merged in sheet.merged_cells.ranges},
+                         {f"C{row}:M{row}" for row in range(1, 6)})
+        self.assertEqual([sheet[f"A{row}"].font.color.rgb for row in range(1, 6)],
+                         ["FF00B050", "FFED7D31", "FF0070C0", "FF7030A0", "FFA5A5A5"])
         self.assertEqual(tuple(cell.value for cell in sheet[7]),
                          ("Ledger Acct", "Debit", "Credit", "Memo", "Ext Ref ID", "SC", "RC",
                           "Grant", "Proj", "Oper", "CC", "Bank Acct", "Additional Worktags"))
-        self.assertEqual(
-            [(a, b, c, rc, project) for a, b, c, _, _, _, rc, _, project, *_ in
-             sheet.iter_rows(min_row=8, max_row=13, values_only=True)],
-            [("2881", 110, None, None, "694513"), ("5909R", 11, None, "4580", "694513"),
-             ("8309R", 3, None, "4511", "694513"),
-             ("2402", None, "=ROUND(SUM(B8:B10),2)", None, "694513"),
-             ("2881", 90, None, None, "694514"),
-             ("2402", None, "=ROUND(SUM(B12:B12),2)", None, "694514")],
-        )
-        self.assertEqual([cell.value for cell in sheet["D"][7:13]],
-                         ["CSM Board CSMF Payable Oct"] * 4 + ["Welch CSMF Payable Oct"] * 2)
-        self.assertEqual([c.value for c in sheet[14][:3]],
-                         ["Totals", "=ROUND(SUM(B8:B13),2)", "=ROUND(SUM(C8:C13),2)"])
+        self.assertEqual([cell.font.color.rgb for cell in sheet[7]],
+                         ["FF0070C0", "FF7030A0", "FF7030A0", "FF000000", "FFA5A5A5",
+                          "FF0070C0", "FF0070C0", "FF00B050", "FF00B050", "FF00B050",
+                          "FFA5A5A5", "FFA5A5A5", "FFED7D31"])
+        expected_debits = {"694513": [110, 11, 3], "694514": [90, 0, 0]}
+        for first, project in zip(range(8, 36, 4), ("694511", "694512", "694513", "694514",
+                                                    "694518", "694521", "694516")):
+            lines = list(sheet.iter_rows(min_row=first, max_row=first + 3, values_only=True))
+            self.assertEqual([line[0] for line in lines], ["2881", "5909R", "8309R", "2402"])
+            self.assertEqual([line[1] for line in lines], [*expected_debits.get(project, [0, 0, 0]), None])
+            self.assertEqual([line[2] for line in lines], [None, None, None, f"=ROUND(SUM(B{first}:B{first + 2}),2)"])
+            self.assertEqual([line[3] for line in lines], [f"{LOANS[project]} CSMF Payable Nov"] * 4)
+            self.assertEqual([line[6] for line in lines], [None, "4580", "4511", None])
+            self.assertEqual([line[8] for line in lines], [project] * 4)
+        self.assertEqual([c.value for c in sheet[39][:3]], ["Totals:", "=SUM(B8:B38)", "=SUM(C8:C38)"])
 
-        # A subsequent upload includes the posted draft and removes it from the next draft.
+        # The next draft keeps the project lines and zeros out the posted amounts.
         for project, lines in (("694513", (("2881", 110), ("5909R", 11), ("8309R", 3))),
                                ("694514", (("2881", 90),))):
-            posted = {"project": project, "day": "2026-10-31", "journal": "OCT-PAYABLE",
-                      "source": "Manual Journal EIB", "memo": f"{LOANS[project]} CSMF Payable Oct"}
+            posted = {"project": project, "day": "2026-11-22", "journal": "NOV-PAYABLE",
+                      "source": "Manual Journal EIB", "memo": f"{LOANS[project]} CSMF Payable Nov"}
             rows.extend(journal_row(account=account, debit=debit, **posted) for account, debit in lines)
             rows.append(journal_row(account="2402", debit=None, credit=sum(debit for _, debit in lines), **posted))
         self.write_journal(rows)
         output = self.root / "after-payable.xlsx"
         self.assertTrue(self.run_workflow(output=output).success)
-        sheet = self.workbook(output)["CSMF Payable"]
-        self.assertEqual(sheet["A4"].value, "No untransferred collections in the uploaded periods.")
-        self.assertEqual([c.value for c in sheet[8][:3]], ["Totals", 0, 0])
+        sheet = self.workbook(output)["CSMF Payable - JR1XXXXXXXXX"]
+        self.assertEqual([sheet[f"B{r}"].value for r in range(8, 36) if r % 4 != 3], [0] * 21)
+        self.assertEqual([sheet[f"A{r}"].value for r in range(8, 36)],
+                         ["2881", "5909R", "8309R", "2402"] * 7)
 
     def test_payable_draft_flags_unposted_or_unmatched_transfers(self):
         unposted = {"source": "Manual Journal EIB", "journal": "IN-PROGRESS", "memo": "CSMF Payable Oct"}
@@ -909,10 +926,13 @@ class CsmfTests(unittest.TestCase):
             [*journal_row(project="694513", debit=None, credit=40, memo="Unisa pmt synthetic"), "In Progress"],
         ])
         self.assertTrue(self.run_workflow().success)
-        sheet = self.workbook()["CSMF Payable"]
-        self.assertEqual(sheet["A4"].value, "Review before posting — payable amounts omitted for Parsons, Combined.")
-        self.assertEqual([sheet[f"{column}8"].value for column in ("A", "B", "I")], ["2881", 25, "694513"])
-        self.assertEqual(sheet["A10"].value, "Totals")
+        sheet = self.workbook()["CSMF Payable - JR1XXXXXXXXX"]
+        self.assertEqual(sheet["A41"].value, "Review before posting — Parsons, Combined.")
+        for first in (8, 12):
+            self.assertEqual([sheet[f"B{row}"].value for row in range(first, first + 3)], ["Review"] * 3)
+            self.assertEqual(sheet[f"C{first + 3}"].value, "Review")
+        self.assertEqual([sheet[f"{column}16"].value for column in ("A", "B", "I")], ["2881", 25, "694513"])
+        self.assertEqual(sheet["A39"].value, "Totals:")
 
     def test_foundation_ar_separates_bookings_reclasses_and_receipts(self):
         welch = "694514"

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 from math import ceil
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles.numbers import BUILTIN_FORMATS
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -35,8 +37,10 @@ AP_REVIEW_PREFIX = "Review AP — "
 AP_PAID_ACCOUNTS = ("2881", "5909R", "8309R")
 PAYABLE_COLLECTION_ACCOUNTS = {"1621": "2881", "5909R": "5909R", "8309R": "8309R"}
 PAYABLE_REVENUE_CATEGORIES = {"5909R": "4580", "8309R": "4511"}
+PAYABLE_SHEET_NAME = "CSMF Payable - JR1XXXXXXXXX"
 PAYABLE_HEADERS = ("Ledger Acct", "Debit", "Credit", "Memo", "Ext Ref ID", "SC", "RC",
                    "Grant", "Proj", "Oper", "CC", "Bank Acct", "Additional Worktags")
+PAYABLE_AMOUNT_FORMAT = BUILTIN_FORMATS[43]  # Accounting format from the payable template.
 PRINCIPAL_SECTIONS = ("payment", "loan_activity", "1621")
 # Keep the reference summary's order without changing the existing loan tabs.
 RECON_LOAN_ORDER = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
@@ -348,56 +352,80 @@ def _append(sheet, values) -> int:
     return sheet.max_row
 
 
-def _payable_draft_sheet(
-    sheet: Worksheet, activity: LoanActivity, drafts: dict[str, dict[str, Decimal] | None],
-) -> None:
-    month = max(row.day for row in activity.rows)
-    sheet["A1"] = "CSMF Payable — Workday Journal Draft"
-    sheet["A2"] = f"FY{activity.fiscal_year} | Uploaded periods: {', '.join(activity.periods)}"
-    sheet["A3"] = f"Line memo month: {month:%B %Y}"
-    for row in range(1, 5):
-        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(PAYABLE_HEADERS))
-    for column, label in enumerate(PAYABLE_HEADERS, 1):
-        sheet.cell(7, column, label)
+def _payable_template_header(sheet: Worksheet) -> None:
+    green, orange, blue, purple, gray, black = (
+        "FF00B050", "FFED7D31", "FF0070C0", "FF7030A0", "FFA5A5A5", "FF000000",
+    )
+    instructions = (
+        ("Banner Index", "Grant, Proj, or Oper (only one, cannot be all)", green),
+        ("Banner Fund", "Additional Worktag", orange),
+        ("Banner Account", "Ledger Account (balance sheet account) -OR- SC or RC "
+                           "(one or the other) plus the Ledger Account of that SC or RC", blue),
+        ("Amount", "Debit or Credit (only one, cannot be both)", purple),
+        ("Gray Fields", "(will be blank for most JEs)", gray),
+    )
+    for row, (label, description, color) in enumerate(instructions, 1):
+        _append(sheet, [label, "=", description])
+        sheet.merge_cells(start_row=row, start_column=3, end_row=row, end_column=13)
+        for cell, horizontal in zip(sheet[row][:3], ("left", "center", "left")):
+            cell.font = Font(name="Trebuchet MS", size=10, color=color)
+            cell.alignment = Alignment(horizontal=horizontal, wrap_text=True if row == 3 else None)
+        sheet.cell(row, 2).number_format = PAYABLE_AMOUNT_FORMAT
+        sheet.cell(row, 3).number_format = PAYABLE_AMOUNT_FORMAT
+    sheet["C3"].alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    sheet.row_dimensions[4].height = 13.9
+    header_colors = (blue, purple, purple, black, gray, blue, blue,
+                     green, green, green, gray, gray, orange)
+    for column, (label, color) in enumerate(zip(PAYABLE_HEADERS, header_colors), 1):
+        cell = sheet.cell(7, column, label)
+        cell.font = Font(name="Trebuchet MS", size=10, bold=True, color=color)
+        cell.alignment = Alignment(horizontal="center")
+    sheet["B7"].number_format = PAYABLE_AMOUNT_FORMAT
+    sheet["C7"].number_format = PAYABLE_AMOUNT_FORMAT
+
+
+def _payable_draft_sheet(sheet: Worksheet, drafts: dict[str, dict[str, Decimal] | None]) -> None:
+    month = date.today()
+    _payable_template_header(sheet)
 
     review = []
     for project in RECON_LOAN_ORDER:
         amounts = drafts[project]
         if amounts is None:
             review.append(LOANS[project])
-        elif any(amounts.values()):
-            memo = f"{LOANS[project]} CSMF Payable {month:%b}"
-            first_debit = sheet.max_row + 1
-            for account, amount in amounts.items():
-                if amount:
-                    _append(sheet, [account, amount, None, memo, None, None,
-                                    PAYABLE_REVENUE_CATEGORIES.get(account), None, project])
-            credit = _append(sheet, ["2402", None, None, memo, None, None, None, None, project])
-            sheet.cell(credit, 3, f"=ROUND(SUM(B{first_debit}:B{credit - 1}),2)")
+        memo = f"{LOANS[project]} CSMF Payable {month:%b}"
+        first_debit = sheet.max_row + 1
+        for account in AP_PAID_ACCOUNTS:
+            debit = amounts[account] if amounts is not None else "Review"
+            _append(sheet, [account, debit, None, memo, None, None,
+                            PAYABLE_REVENUE_CATEGORIES.get(account), None, project])
+        credit = _append(sheet, ["2402", None, None, memo, None, None, None, None, project])
+        sheet.cell(credit, 3, "Review" if amounts is None else f"=ROUND(SUM(B{first_debit}:B{credit - 1}),2)")
 
-    last_line = sheet.max_row
+    total = sheet.max_row + 4
+    sheet.cell(total, 1, "Totals:")
+    for column, letter in ((2, "B"), (3, "C")):
+        sheet.cell(total, column, f"=SUM({letter}8:{letter}{total - 1})")
+    sheet.cell(total, 12, "Date:")
     if review:
-        sheet["A4"] = "Review before posting — payable amounts omitted for " + ", ".join(review) + "."
-    elif last_line == 7:
-        sheet["A4"] = "No untransferred collections in the uploaded periods."
-    total = _append(sheet, ["Totals", 0, 0])
-    if last_line >= 8:
-        for column, letter in ((2, "B"), (3, "C")):
-            sheet.cell(total, column, f"=ROUND(SUM({letter}8:{letter}{last_line}),2)")
-    apply_default_font(sheet)
-    style_header_row(sheet, row_number=7)
-    sheet["A1"].font = Font(name="Aptos", size=18, bold=True, color="21314D")
-    sheet.row_dimensions[1].height = 32
-    sheet.row_dimensions[7].height = 28
-    for column, width in enumerate((14, 16, 16, 38, 14, 9, 9, 10, 12, 10, 9, 14, 23), 1):
+        review_row = total + 2
+        sheet.merge_cells(start_row=review_row, start_column=1, end_row=review_row, end_column=13)
+        sheet.cell(review_row, 1, "Review before posting — " + ", ".join(review) + ".")
+    widths = (16.140625, 11.5703125, 12.28515625, 31, 14.140625, 7.5703125, 7.7109375,
+              10.28515625, 9.140625, 9.7109375, 7.7109375, 14.28515625, 23.5703125)
+    for column, width in enumerate(widths, 1):
         sheet.column_dimensions[get_column_letter(column)].width = width
-    for row in sheet.iter_rows(min_row=8, min_col=2, max_col=3):
+    body_font = Font(name="Trebuchet MS", size=10)
+    for row in sheet.iter_rows(min_row=8, max_row=total):
         for cell in row:
-            cell.number_format = CURRENCY_FORMAT
-    for cell in sheet[total]:
-        cell.fill = SUBTOTAL_FILL
-        cell.font = Font(name="Aptos", size=12, bold=True)
-    sheet.sheet_view.showGridLines = False
+            cell.font = body_font
+            if cell.column in (1, 2, 3, 7, 9) or cell.row == total:
+                cell.alignment = Alignment(horizontal="center")
+            if cell.column in (2, 3):
+                cell.number_format = PAYABLE_AMOUNT_FORMAT
+            if cell.row == total:
+                cell.fill = PatternFill("solid", fgColor="FFFFF2CC")
+    sheet.sheet_view.zoomScale = 130
     sheet.freeze_panes = "A8"
 
 
@@ -432,7 +460,7 @@ def build_workbook(
     book = Workbook()
     book.active.title = "Current Month Recon"
     book.create_sheet("Current FY Recon")
-    payable = book.create_sheet("CSMF Payable")
+    payable = book.create_sheet(PAYABLE_SHEET_NAME)
     book.properties.title = "CSMF Loans — R1"
     book.properties.description = f"Mines Bursar Automation {app_version}; source-value review, not a completed reconciliation."
     opening = dict(balances.values)
@@ -545,7 +573,7 @@ def build_workbook(
         cancellation.check()
     _current_recon_sheet(book["Current Month Recon"], activity, subtotal_rows, detail_rows, monthly=True)
     _current_recon_sheet(book["Current FY Recon"], activity, subtotal_rows, detail_rows)
-    _payable_draft_sheet(payable, activity, payable_drafts)
+    _payable_draft_sheet(payable, payable_drafts)
     snapshot = book.create_sheet("Opening Balances")
     _append(snapshot, ["Fiscal Year", "Project", "Loan", "Opening Balance", "Last Uploaded/Updated", "Source"])
     for project, balance in balances.projects:
