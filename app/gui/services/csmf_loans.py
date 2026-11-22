@@ -38,7 +38,7 @@ def run_csmf_loans(context: WorkflowContext) -> WorkflowResult:
     activity = prepare_activity(journal, year)
     context.progress.report("Building loan worksheets")
     book = build_workbook(activity, selection.balances, app_version=APP_VERSION,
-                          trial_source=selection.trial_source, cancellation=context.cancellation)
+                          cancellation=context.cancellation)
     store = BalanceStore(year)
 
     def publish() -> None:
@@ -70,5 +70,5 @@ def run_csmf_loans(context: WorkflowContext) -> WorkflowResult:
            if activity.other_account_count else "")
         + (f"{unclassified_count:,} 1621 rows have unclassified sources; review 1621 — Unclassified. "
            if unclassified_count else "")
-        + "Current FY Recon summarizes all uploaded FY activity; Current Month Recon shows the latest uploaded month. "
+        + "Current FY Recon summarizes all uploaded FY activity. "
         + "AP and AR show due and paid through the report month. Pending Items compares raw and adjusted 1621 principal.", output)

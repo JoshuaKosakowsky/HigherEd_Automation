@@ -385,19 +385,17 @@ update only included projects after a successful run; omitted projects retain
 their saved values/dates. An included blank/null amount clears that project's
 balance. Cached runs do not refresh timestamps. No prior output workbook or
 TEST/PROD selection is used.
-Output includes seven loan tabs, source evidence, **Current Month Recon** and
-**Current FY Recon**. As of 0.30.16, the monthly view opens first and shows activity
-for the latest included Accounting Date month; its beginning balance is the raw FY
-opening plus 1621 debits minus credits dated before that month. The FY view
-retains all uploaded activity and its existing calculations. Both share the
-supplied reconciliation layout. The loan tabs show the cumulative all-account
-Loan Totals.
+As of 0.30.31, the workbook opens on **CSMF Payable**, followed by
+**CSMF Receivable**, **Current FY Recon**, and the seven loan tabs. **Journal
+Lines** shows the GA columns and import status with text wrapping turned off.
+**Opening Balances** is the final tab and captures each project's Trial Balance
+amount and provenance. The FY view summarizes all uploaded activity.
 As of 0.30.5, 1621 SIS debits are Loan Disbursements and SIS credits are Loan
 Reversals. Sources containing Journal are Payments; other 1621 sources remain
 unclassified. As of 0.30.8, Adjusted Amount reverses every debit's sign across
 all accounts and sources, including footnoted payments, and preserves credits.
-As of 0.30.23, both views show Foundation AP and AR due and paid separately
-through the report month. AP uses matched Workday payable journal entries and
+Current FY Recon shows Foundation AP and AR due and paid through the report
+month. AP uses matched Workday payable journal entries and
 flags incomplete matches for review. Prior-year items remain footnote only.
 As of 0.30.25, Pending Items compares raw and adjusted 1621 ending principal
 and calculates variance. As of 0.30.26, a missing FY opening contributes zero

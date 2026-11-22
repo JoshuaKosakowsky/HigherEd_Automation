@@ -1,4 +1,4 @@
-"""R1 loan worksheets and fiscal-year/monthly reconciliation summaries."""
+"""R1 loan worksheets, journal drafts, and fiscal-year reconciliation."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from openpyxl.styles.numbers import BUILTIN_FORMATS
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from data_processing.shared.source_exports import SourceData, fiscal_scope
+from data_processing.shared.source_exports import SourceData
 from data_processing.shared.xlsx_output_format import (
     CURRENCY_FORMAT, apply_default_font, format_table_columns, style_header_row,
 )
@@ -132,35 +132,19 @@ def _payable_draft_amounts(project_rows: list[Activity], labels: dict[int, str])
     return amounts
 
 
-def _adjusted_through_report_month(
-    loan_sheet: str, subtotal: int, bounds: tuple[int, int], *, monthly: bool,
-) -> str:
-    if not monthly:
-        return f"{loan_sheet}!H{subtotal}"
-    first, last = bounds
-    if last < first:
-        return "0"
-    return f'SUMIF({loan_sheet}!C{first}:C{last},"<"&EDATE($D$3,1),{loan_sheet}!H{first}:H{last})'
-
-
-def _foundation_payable_formulas(
-    loan_sheet: str, totals: dict[str, int], detail_rows: dict[str, tuple[int, int]], *, monthly: bool,
-) -> tuple[str, str]:
+def _foundation_payable_formulas(loan_sheet: str, totals: dict[str, int]) -> tuple[str, str]:
     end = totals["loan"] - 1
     amounts = f"{loan_sheet}!H10:H{end}"
     labels = f"{loan_sheet}!A10:A{end}"
-    cutoff = f',{loan_sheet}!C10:C{end},"<"&EDATE($D$3,1)' if monthly else ""
-
     def sum_labeled(label: str) -> str:
-        return f'SUMIFS({amounts},{labels},"{label}"{cutoff})'
+        return f'SUMIFS({amounts},{labels},"{label}")'
 
     # The signed interest subtotal already includes its transfer debit. The
     # principal transfer is in 2881, so subtract it from collections separately.
     due = [sum_labeled(AP_DUE_LABEL), sum_labeled(AP_PAID_PREFIX + "2881")]
-    due.extend(_adjusted_through_report_month(loan_sheet, totals[section], detail_rows[section], monthly=monthly)
-               for section in ("payment", "5909R"))
+    due.extend(f"{loan_sheet}!H{totals[section]}" for section in ("payment", "5909R"))
     paid = ",".join(sum_labeled(AP_PAID_PREFIX + account) for account in AP_PAID_ACCOUNTS)
-    review = "+".join(f'COUNTIFS({labels},"{AP_REVIEW_PREFIX}{account}"{cutoff})'
+    review = "+".join(f'COUNTIFS({labels},"{AP_REVIEW_PREFIX}{account}")'
                       for account in ("2402", *AP_PAID_ACCOUNTS))
     return (
         f'=IF({review}>0,"Review",ROUND(SUM({",".join(due)}),2))',
@@ -168,29 +152,26 @@ def _foundation_payable_formulas(
     )
 
 
-def _raw_principal_balance(loan_sheet: str, last_1621: int, *, before: str = "") -> str:
+def _raw_principal_balance(loan_sheet: str, last_1621: int) -> str:
     # Only the three 1621 sections are in range. Their subtotal rows have no
     # Debit/Credit marker, so the raw rollforward counts detail only.
     amounts = f"{loan_sheet}!F10:F{last_1621}"
     directions = f"{loan_sheet}!G10:G{last_1621}"
-    cutoff = f',{loan_sheet}!C10:C{last_1621},"<"&{before}' if before else ""
-    return (f'{loan_sheet}!F7+SUMIFS({amounts},{directions},"Debit"{cutoff})'
-            f'-SUMIFS({amounts},{directions},"Credit"{cutoff})')
+    return (f'{loan_sheet}!F7+SUMIFS({amounts},{directions},"Debit")'
+            f'-SUMIFS({amounts},{directions},"Credit")')
 
 
 def _current_recon_sheet(
     sheet: Worksheet, activity: LoanActivity, subtotal_rows: dict[str, dict[str, int]],
-    detail_rows: dict[str, dict[str, tuple[int, int]]], *, monthly: bool = False,
+    receivable_rows: dict[str, tuple[int, int]],
 ) -> None:
-    """Share the layout while keeping FY totals and monthly activity distinct."""
+    """Summarize all uploaded activity for the fiscal year."""
     month = max(row.day for row in activity.rows).replace(day=1)
-    _, period, _ = fiscal_scope(month)
-    scope = period if monthly else f"FY{activity.fiscal_year}"
+    scope = f"FY{activity.fiscal_year}"
     sheet.sheet_view.showGridLines = False
     sheet["A1"] = "Donor Restricted Student Loans - Administered by School"
-    sheet["A2"] = (f"{period} — {month:%B %Y}" if monthly
-                   else f"FY{activity.fiscal_year} — All uploaded activity")
-    sheet["H2"] = f"Included period: {period}" if monthly else "Included periods: " + ", ".join(activity.periods)
+    sheet["A2"] = f"{scope} — All uploaded activity"
+    sheet["H2"] = "Included periods: " + ", ".join(activity.periods)
     sheet["A3"] = "Reconciliation month"
     sheet["D3"] = month
     sheet["D3"].number_format = "mmmm yyyy"
@@ -205,8 +186,7 @@ def _current_recon_sheet(
         "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
         "D19": "Expected Ending\nPrincipal", "E19": "GL Principal\n(1621)", "F19": "Variance",
         "G19": "Notes / Outstanding Items", "A27": "Totals",
-        "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only."
-                if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month."),
+        "A16": "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month.",
         "A17": "Net AP and Net AR add the signed due and paid amounts. Review flagged AP journal lines. Prior-year activity is footnoted.",
         "A29": ("Pending Items compares raw and adjusted 1621 principal through the report month. "
                 "Missing openings contribute $0.00."),
@@ -226,52 +206,36 @@ def _current_recon_sheet(
         sheet.cell(row, 1, LOANS[project].upper())
         sheet.cell(row, 2, RECON_UNISA_ACCOUNTS[project])
         sheet.cell(row, 3, project)
-        # Monthly openings stop before the report month; FY openings retain
-        # every uploaded period. Both use raw amounts, independent of edits to H.
+        # FY opening uses raw amounts, independent of edits to Adjusted Amount.
         opening = f"{loan_sheet}!F7"
         last_1621 = totals["1621"] - 1
-        beginning = _raw_principal_balance(loan_sheet, last_1621, before="$D$3" if monthly else "")
+        beginning = _raw_principal_balance(loan_sheet, last_1621)
         sheet.cell(row, 4, f'=IF({opening}="",0,{beginning})')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):
-            if not monthly:
-                sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")
-                continue
-            first, last = detail_rows[project][section]
-            if last < first:
-                sheet.cell(row, column, 0)
-            else:
-                dates = f"{loan_sheet}!C{first}:C{last}"
-                sheet.cell(row, column, f'=SUMIFS({loan_sheet}!H{first}:H{last},'
-                                       f'{dates},">="&$D$3,{dates},"<"&EDATE($D$3,1))')
+            sheet.cell(row, column, f"={loan_sheet}!H{totals[section]}")
         # All three columns already carry the confirmed Adjusted Amount signs.
         sheet.cell(row, 8, f"=SUM(E{row}:G{row})")
         sheet.cell(row, 12, f"=SUM(J{row}:K{row})")
-        due, paid = _foundation_payable_formulas(loan_sheet, totals, detail_rows[project], monthly=monthly)
+        due, paid = _foundation_payable_formulas(loan_sheet, totals)
         sheet.cell(row, 14, due)
         sheet.cell(row, 15, paid)
-        first_ar, last_ar = detail_rows[project]["1382"]
+        first_ar, last_ar = receivable_rows[project]
         for column, direction in ((17, "Debit"), (18, "Credit")):
             if last_ar < first_ar:
                 sheet.cell(row, column, 0)
                 continue
             amounts = f"{loan_sheet}!H{first_ar}:H{last_ar}"
             directions = f"{loan_sheet}!G{first_ar}:G{last_ar}"
-            # The monthly view includes both earlier FY bookings and receipts.
-            cutoff = f',{loan_sheet}!C{first_ar}:C{last_ar},"<"&EDATE($D$3,1)' if monthly else ""
-            sheet.cell(row, column, f'=ROUND(-SUMIFS({amounts},{directions},"{direction}"{cutoff}),2)')
+            sheet.cell(row, column, f'=ROUND(-SUMIFS({amounts},{directions},"{direction}"),2)')
         pending = row + 13
         sheet.merge_cells(f"G{pending}:L{pending}")
         sheet.cell(pending, 1, f"=A{row}")
         sheet.cell(pending, 2, f'=IF(B{row}="","",B{row})')
         sheet.cell(pending, 3, f"=C{row}")
-        expected = _raw_principal_balance(loan_sheet, last_1621, before="EDATE($D$3,1)") if monthly else beginning
         adjusted_opening = f"{loan_sheet}!H7"
-        adjusted_activity = ",".join(
-            _adjusted_through_report_month(loan_sheet, totals[section], detail_rows[project][section], monthly=monthly)
-            for section in PRINCIPAL_SECTIONS
-        )
-        sheet.cell(pending, 4, f'=IF({opening}="",0,ROUND({expected},2))')
+        adjusted_activity = ",".join(f"{loan_sheet}!H{totals[section]}" for section in PRINCIPAL_SECTIONS)
+        sheet.cell(pending, 4, f'=IF({opening}="",0,ROUND({beginning},2))')
         sheet.cell(pending, 5, f'=IF({adjusted_opening}="",0,ROUND(-SUM({adjusted_opening},{adjusted_activity}),2))')
         sheet.cell(pending, 6, f'=ROUND(D{pending}-E{pending},2)')
 
@@ -471,44 +435,35 @@ def _finish_journal_sheet(sheet: Worksheet, total: int, widths: tuple[float, ...
                 cell.fill = PatternFill("solid", fgColor="FFFFF2CC")
 
 
-def _source_sheet(book: Workbook, name: str, source: SourceData) -> None:
-    sheet = book.create_sheet(name)
-    _append(sheet, ["Source Row", *source.headers, "Import Status"])
+def _journal_lines_sheet(book: Workbook, source: SourceData) -> None:
+    sheet = book.create_sheet("Journal Lines")
+    headers = [*source.headers, "Import Status"]
+    _append(sheet, headers)
+    width = len(source.headers)
     for number, values in source.rows:
-        width = len(source.headers)
-        _append(sheet, [number, *(values + [None] * width)[:width], source.dispositions.get(number, "")])
+        _append(sheet, [*(values + [None] * width)[:width], source.dispositions.get(number, "")])
     apply_default_font(sheet)
     style_header_row(sheet)
-    format_table_columns(sheet, headers=["Source Row", *source.headers, "Import Status"])
+    format_table_columns(sheet, headers=headers)
     sheet.sheet_view.showGridLines = False
-    for row in sheet.iter_rows():
-        lines = 1
-        for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-            width = sheet.column_dimensions[get_column_letter(cell.column)].width
-            # Preserve the complete tag/memo text while making it readable in
-            # the source sheet, including literal HTML break tags from Workday.
-            lines = max(lines, sum(max(1, ceil(len(part) / max(1, width - 3)))
-                                   for part in str(cell.value or "").split("\n")))
-        sheet.row_dimensions[row[0].row].height = max(22, 18 * lines)
-    sheet.freeze_panes = "B2"
+    sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
 
 
 def build_workbook(
     activity: LoanActivity, balances: OpeningBalances, *, app_version: str,
-    trial_source: SourceData | None = None, cancellation: CancellationToken | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> Workbook:
     book = Workbook()
-    book.active.title = "Current Month Recon"
-    book.create_sheet("Current FY Recon")
-    payable = book.create_sheet(PAYABLE_SHEET_NAME)
+    payable = book.active
+    payable.title = PAYABLE_SHEET_NAME
     receivable = book.create_sheet(RECEIVABLE_SHEET_NAME)
+    current = book.create_sheet("Current FY Recon")
     book.properties.title = "CSMF Loans — R1"
     book.properties.description = f"Mines Bursar Automation {app_version}; source-value review, not a completed reconciliation."
     opening = dict(balances.values)
     subtotal_rows = {}
-    detail_rows = {}
+    receivable_rows = {}
     payable_drafts = {}
     receivable_drafts = {}
     for project, loan in LOANS.items():
@@ -531,7 +486,6 @@ def build_workbook(
         _append(sheet, [])
         totals = [8]
         subtotal_rows[project] = {"opening": 8}
-        detail_rows[project] = {}
         project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_activity]
         footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_activity]
         receivable_transfers, receivable_drafts[project] = _foundation_receivable_activity(project_rows)
@@ -552,7 +506,8 @@ def build_workbook(
                 _append(sheet, [label, row.journal, row.day, row.source, row.description,
                                 row.amount, row.direction, row.adjusted_amount])
             last = sheet.max_row
-            detail_rows[project][section] = (first, last)
+            if section == "1382":
+                receivable_rows[project] = (first, last)
             total_label = "1382 Totals" if section == "1382" else f"{title} Total"
             total_row = _append(sheet, [total_label, None, None, None, None, None, None,
                                         0 if last < first else None])
@@ -615,11 +570,11 @@ def build_workbook(
         sheet.page_setup.fitToHeight = 0
     if cancellation:
         cancellation.check()
-    _current_recon_sheet(book["Current Month Recon"], activity, subtotal_rows, detail_rows, monthly=True)
-    _current_recon_sheet(book["Current FY Recon"], activity, subtotal_rows, detail_rows)
+    _current_recon_sheet(current, activity, subtotal_rows, receivable_rows)
     memo_month = (date.today().replace(day=1) - timedelta(days=1)).strftime("%b")
     _payable_draft_sheet(payable, payable_drafts, memo_month)
     _receivable_draft_sheet(receivable, receivable_drafts, memo_month)
+    _journal_lines_sheet(book, activity.source)
     snapshot = book.create_sheet("Opening Balances")
     _append(snapshot, ["Fiscal Year", "Project", "Loan", "Opening Balance", "Last Uploaded/Updated", "Source"])
     for project, balance in balances.projects:
@@ -631,8 +586,4 @@ def build_workbook(
     snapshot.column_dimensions["E"].width = 32
     snapshot.sheet_view.showGridLines = False
     snapshot.freeze_panes = "A2"
-    _source_sheet(book, "Journal Lines", activity.source)
-    if trial_source is not None:
-        _source_sheet(book, "Trial Balance", trial_source)
-    book.active = 0
     return book

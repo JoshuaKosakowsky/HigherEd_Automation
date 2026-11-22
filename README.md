@@ -115,14 +115,10 @@ can stay blank while their loan tabs and activity remain available.
 As of 0.30.5, 1621 SIS rows are Loan Activity (disbursements or reversals), and
 sources containing Journal are Payments; other 1621 sources remain unclassified.
 As of 0.30.8, every debit has its sign flipped in Adjusted Amount, while credits
-retain their source value. As of 0.30.16, **Current FY Recon** preserves the
-summary of all uploaded FY activity, while **Current Month Recon** shows activity
-for the latest uploaded month. Its beginning balance uses the raw FY opening plus
-1621 debits minus credits dated before that month. Both tabs show Foundation
-AP and AR due and paid through the report month. As of 0.30.25, Pending Items
-compares raw and adjusted 1621 ending principal. The **CSMF Payable** and
-**CSMF Receivable** tabs draft Workday journals for untransferred collections
-and unbilled disbursements. See the
+retain their source value. As of 0.30.31, the workbook opens on **CSMF Payable**
+and lists **CSMF Receivable** and **Current FY Recon** before the loan tabs.
+Current FY Recon summarizes all uploaded FY activity, including Foundation AP
+and AR. Pending Items compares raw and adjusted 1621 ending principal. See the
 [CSMF technical guide](data_processing/csmf_loans/README.md).
 
 **W&F - Banner Recon** (0.23.4) compares one combined Banner collections

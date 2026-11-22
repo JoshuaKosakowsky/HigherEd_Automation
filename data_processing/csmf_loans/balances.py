@@ -15,7 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from collections.abc import Iterator
 
-from data_processing.shared.source_exports import SourceData, money
+from data_processing.shared.source_exports import money
 from shared.mines_paths import get_shared_csmf_balances_directory
 from .sources import LOANS, opening_values, read_trial_balance, validate_fiscal_year
 
@@ -52,7 +52,6 @@ class BalanceSelection:
     balances: OpeningBalances
     expected_digest: str | None
     trial_path: Path | None = None
-    trial_source: SourceData | None = None
     uploaded_projects: tuple[str, ...] = ()
 
 
@@ -180,7 +179,7 @@ def prepare_opening_balances(
     for project, amount in values:
         projects[project] = ProjectBalance(amount, stamp, trial_path.name, digest)
     balances = OpeningBalances(store.fiscal_year, tuple(projects.items()), stamp, trial_path.name, digest)
-    return BalanceSelection(balances, expected, trial_path.resolve(), source,
+    return BalanceSelection(balances, expected, trial_path.resolve(),
                             tuple(project for project, _ in values))
 
 
