@@ -71,4 +71,4 @@ def run_csmf_loans(context: WorkflowContext) -> WorkflowResult:
         + (f"{unclassified_count:,} 1621 rows have unclassified sources; review 1621 — Unclassified. "
            if unclassified_count else "")
         + "Current FY Recon summarizes all uploaded FY activity; Current Month Recon shows the latest uploaded month. "
-        + "AP, AR and variance calculations remain pending.", output)
+        + "AP and AR carry forward within the FY. AP clearing and variance remain pending.", output)

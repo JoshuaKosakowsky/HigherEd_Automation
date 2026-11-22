@@ -386,8 +386,8 @@ their saved values/dates. An included blank/null amount clears that project's
 balance. Cached runs do not refresh timestamps. No prior output workbook or
 TEST/PROD selection is used.
 Output includes seven loan tabs, source evidence, **Current Month Recon** and
-**Current FY Recon**. As of 0.30.16, the monthly view opens first and shows only
-the latest included Accounting Date month; its beginning balance is the raw FY
+**Current FY Recon**. As of 0.30.16, the monthly view opens first and shows activity
+for the latest included Accounting Date month; its beginning balance is the raw FY
 opening plus 1621 debits minus credits dated before that month. The FY view
 retains all uploaded activity and its existing calculations. Both share the
 supplied reconciliation layout and cumulative Loan Totals from the loan tabs.
@@ -395,8 +395,9 @@ As of 0.30.5, 1621 SIS debits are Loan Disbursements and SIS credits are Loan
 Reversals. Sources containing Journal are Payments; other 1621 sources remain
 unclassified. As of 0.30.8, Adjusted Amount reverses every debit's sign across
 all accounts and sources, including footnoted payments, and preserves credits.
-AP, AR and variance calculations remain pending; comparison balances, notes and
-sign-off fields are blank for review. Full reconciliation remains deferred.
+As of 0.30.21, both views show outstanding Foundation AP and AR with carryforward
+within the FY. Prior-year items remain footnote only. AP clearing and variance
+remain pending. Comparison balances, notes and sign-off fields are blank for review.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for
 source mappings, persistence, limitations and acceptance examples.

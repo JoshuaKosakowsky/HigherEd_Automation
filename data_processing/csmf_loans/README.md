@@ -135,8 +135,9 @@ are **Payment**, **Loan Activity**, **1621 — Unclassified**,
 Accounting Date; sections sort **newest to oldest** by that date. Same-date rows
 retain ascending journal number and original source-row order as tie-breakers.
 2100 and 2402 remain distinguishable in Activity labels. Qualifying prior-year
-2100 payments appear in the footnote block described below. 2881's recipient is
-unspecified. Following owner clarification in 0.30.9, ledger **1382** is included
+2100 payments appear in the footnote block described below. Column N uses 2881
+debits only when they are part of the verified type of 2402 transfer described
+below. Following owner clarification in 0.30.9, ledger **1382** is included
 as **AR** immediately after Payables (2881), replacing its earlier exclusion.
 Its debit/credit sign rule and newest-first ordering match the other sections.
 The subtotal is labeled **1382 Totals** as of 0.30.10. It sums non-footnoted AR
@@ -176,11 +177,10 @@ summary. This supersedes the empty-summary scope in
 [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44).
 In 0.30.16, the owner requested separate FY and monthly views. **Current FY Recon**
 preserves the previous summary's **all uploaded FY activity** calculations.
-**Current Month Recon** shows only the latest included Accounting Date month,
-with a beginning balance rolled forward using earlier uploaded 1621 activity.
-**AP, AR and variance calculations** remain explicitly deferred until their
-accounting treatment is agreed. These are evolving views, not a completed
-reconciliation or an independent GL tie-out.
+**Current Month Recon** shows activity for the latest included Accounting Date
+month, with a beginning balance rolled forward using earlier uploaded 1621
+activity. As of 0.30.21, both views show outstanding Foundation AP and AR.
+AP clearing, variance, and an independent GL tie-out remain deferred.
 
 The summary retains the reference's title, Loan Information, Interest and Fees,
 AP/AR columns, Pending Items and Reconciliation Dates blocks. Its loan order is
@@ -209,6 +209,8 @@ The existing **Current FY Recon** mappings are:
 | Interest | Interest on loans Total (5909R) from that loan's own tab |
 | Late Charges | Late fees on loans Total (8309R) from that loan's own tab |
 | Total Interest and Fees | Sum of those two amounts; no separate interest/fee worksheets |
+| AP / Total Due to Foundation (N) | Posted 2402 credits plus untransferred principal payments and interest within the FY |
+| AR / Total Due From Foundation (P) | Debits minus credits on regular 1382 activity within the FY |
 | Pending Items: Unisa Ending Balance | Blank editable input; no calculation or Unisa report import |
 | Pending Items: GL | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
 
@@ -249,8 +251,8 @@ the raw FY opening, raw 1621 Amounts and their Debit/Credit labels. The header
 lists the selected FY and exactly the uploaded periods, including gaps. It does
 not assert complete FY coverage.
 
-AP/AR amounts and totals, Unisa Ending Balance total, and variances display
-**Pending**, without a calculation. Unisa ending balances, review notes and
+The Unisa Ending Balance total and variances display **Pending**.
+Unisa ending balances, review notes and
 completion/review fields are blank editable cells. Entering a Unisa ending
 balance does not activate a variance formula in this iteration. The aggregate
 beginning balance is also Pending if any loan's opening balance is missing;
@@ -268,10 +270,8 @@ Synthetic acceptance examples:
   Interest credit 10 and fee debit 2 give Total Interest and Fees 8, without
   changing the 1621 beginning-balance calculation.
 - Adding offsetting 2100/2402 amounts (-5 and 5), 2881 credit 7, regular 1382
-  credit 11 and Other debit 4 gives Loan Total (summary GL) -1,016. Prior-year 2100/1382
-  footnotes do not enter this total. The AP/AR and variance fields remain
-  Pending rather than treating these components as amounts owed to/from the
-  Foundation before their treatment is confirmed.
+  credit 11 and Other debit 4 gives Loan Total (summary GL) -1,016. Prior-year
+  2100/1382 footnotes do not enter this total. Variance remains Pending.
 - A blank Bruce FY opening keeps D blank; a supplied zero FY opening permits
   the debits-minus-credits calculation. The aggregate D14 stays Pending until
   all seven FY openings are supplied; existing loan activity totals remain
@@ -307,8 +307,7 @@ Adjusted Amount affect the corresponding month and FY summaries; edits to raw
 **GL remains the cumulative Loan Total through the latest uploaded month in
 both views**, with the existing adjusted opening and footnote exclusions. It
 is a balance, not a current-month activity subtotal. Unisa ending balances,
-notes and sign-off inputs are independent between the two summaries. AP, AR
-and variance remain Pending in both.
+notes and sign-off inputs are independent between the two summaries.
 
 Synthetic acceptance: raw FY opening 1,000, July SIS debit 100 and July Journal
 credit 40 give September Beginning Balance **1,060**. September SIS credit 25
@@ -319,6 +318,47 @@ included in September activity; August 31 enters the opening only. January
 uses December history, February includes leap day where applicable, and June
 retains P12. Gaps in uploaded history are not filled or assumed to be complete;
 the FY view continues to list the periods actually supplied.
+
+#### Foundation balances (0.30.21)
+
+The owner confirmed the AP and AR treatment for all loans after reviewing the
+Welch Workday entries with the Bursar. Both tabs show amounts outstanding at
+the report cutoff and sum the individual loan balances in row 14. **Current FY
+Recon** uses all uploaded FY activity. **Current Month Recon** carries earlier
+uploaded FY activity into the month and applies the current month's changes,
+including for a loan with no postings that month. These balances use the
+uploaded data, with no separate opening AP or AR input. Prior-year items
+identified by the footnote rules below stay out of both columns.
+
+- **N, Total Due to Foundation** adds signed 1621 Payment and 5909R Interest
+  activity and posted 2402 credits. A `Manual Journal EIB` 2881 debit reduces
+  untransferred principal when it shares a populated Journal Number, Accounting
+  Date and Project with a `Manual Journal EIB` 2402 credit. Interest transfer
+  debits reduce the signed 5909R amount. This counts a transfer into 2402 once.
+  Source and Journal Number matching trim surrounding spaces and ignore case.
+  8309R stays in the late-fee section. Any amount already included in a posted
+  2402 credit is counted with that credit. 2100 activity and 2402 debits do not
+  reduce N while the AP settlement rule is deferred.
+- **P, Total Due From Foundation** starts when a debit is booked to 1382.
+  Subsequent 1382 credits, including CashNet receipts, reduce it. The SIS
+  disbursement and the balancing 2881 credit are evidence of the transaction
+  and do not add another receivable. The signed total displays a credit excess
+  as a negative amount for review.
+
+Both formulas use the loan tabs' editable Adjusted Amount cells. The hidden
+**Foundation Recon** column identifies eligible detail rows; subtotals and
+footnotes have no marker and are excluded from N and P.
+
+Synthetic acceptance: principal 300 and interest 30 are transferred by a
+2881 debit of 300, a 5909R debit of 30 and a 2402 credit of 330. N remains 330
+through the transfer, then rises to 385 when 55 in additional payments and
+interest arrives. It carries at 385 into a later month without AP postings.
+A 100 SIS disbursement leaves P at zero until a 100 debit is booked to 1382.
+1382 CashNet credits of 35 and 65 reduce P to 65 and then zero. A footnoted July
+2100 payment or 1382 receipt does not enter either balance. See the open
+[source rules #25](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/25)
+and [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44)
+for the remaining accounting work.
 
 ### Prior fiscal year payment footnote
 
@@ -448,9 +488,9 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
 
 ## Deferred work and verification
 
-Additional 1621 classifications (including any Adjustment category), final
-Current Month Recon accounting rules (AP, AR and variance), further Adjusted
-Amount rules, 2100/2402 net-zero checks and JE preparation remain deferred.
+Additional 1621 classifications (including any Adjustment category), AP
+clearing after a 2402 booking, variance, further Adjusted Amount rules,
+2100/2402 net-zero checks and JE preparation remain deferred.
 Section subtotals sum the editable Adjusted Amount cells; they are not completed
 reconciled balances.
 
