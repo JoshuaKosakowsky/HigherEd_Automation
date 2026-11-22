@@ -620,8 +620,9 @@ class CsmfTests(unittest.TestCase):
         self.write_journal([journal_row(memo='=HYPERLINK("https://invalid.example")')])
         self.run_workflow()
         book = self.workbook()
-        self.assertEqual(book.sheetnames[:10], [
+        self.assertEqual(book.sheetnames[:11], [
             "Current Month Recon", "Current FY Recon", "CSMF Payable - JR1XXXXXXXXX",
+            "CSMF Receivable - JR1XXXXXXXXX",
             *(f"{name} - {project}" for project, name in LOANS.items()),
         ])
         self.assertEqual(book.active.title, "Current Month Recon")
@@ -1010,6 +1011,77 @@ class CsmfTests(unittest.TestCase):
                     self.assertEqual(booking_lines, ["AR reclass — 2881", "AR"])
                     other = book[f"{LOANS[combined]} - {combined}"]
                     self.assertIn("Payables (2881)", [cell.value for cell in other["A"]])
+
+    def test_receivable_draft_bills_only_unbooked_net_sis_disbursements(self):
+        prior = {"project": "694513", "source": "Manual Journal EIB",
+                 "journal": "PRIOR-AR", "day": "2026-09-08"}
+        rows = [
+            journal_row(project="694513", day="2026-08-31", debit=100, source="SIS"),
+            journal_row(project="694513", day="2026-08-31", debit=None, credit=10, source="SIS"),
+            journal_row(account="1382", debit=90, **prior),
+            journal_row(account="2881", debit=None, credit=90, **prior),
+            journal_row(project="694513", account="1382", day="2026-10-31", debit=None, credit=90, source="CashNet"),
+            journal_row(project="694513", day="2026-09-30", debit=200, source="SIS"),
+            journal_row(project="694513", day="2026-10-31", debit=None, credit=25, source="SIS"),
+            journal_row(project="694512", day="2026-09-30", debit=300, source="SIS"),
+            journal_row(project="694512", day="2026-10-31", debit=90, source="SIS"),
+            journal_row(project="694511", day="2026-10-31", debit=65, memo="Unrelated manual adjustment"),
+        ]
+        self.write_journal(rows)
+        with patch("data_processing.csmf_loans.export.date") as clock:
+            clock.today.return_value = date(2026, 11, 22)
+            self.assertTrue(self.run_workflow().success)
+        book = self.workbook()
+        sheet = book["CSMF Receivable - JR1XXXXXXXXX"]
+        payable = book["CSMF Payable - JR1XXXXXXXXX"]
+        for row in range(1, 8):
+            self.assertEqual([(cell.value, cell.style_id) for cell in sheet[row]],
+                             [(cell.value, cell.style_id) for cell in payable[row]])
+        self.assertEqual({str(merged) for merged in sheet.merged_cells.ranges},
+                         {f"C{row}:M{row}" for row in range(1, 6)})
+        projects = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
+        for row, project, amount in zip(range(8, 22, 2), projects, (0, 390, 175, 0, 0, 0, 0)):
+            name = "Board" if project == "694513" else LOANS[project]
+            self.assertEqual([cell.value for cell in sheet[row]],
+                             ["1382", amount, None, f"Req {name} funds for new loans - Oct",
+                              None, None, None, None, project, None, None, None, None])
+            self.assertEqual([cell.value for cell in sheet[row + 1]],
+                             ["2881", None, f"=B{row}", f"+{name} loan adminstr'd for CSMF - Oct",
+                              None, None, None, None, project, None, None, None, None])
+        self.assertEqual([cell.value for cell in sheet[26][:3]], ["Totals:", "=SUM(B8:B25)", "=SUM(C8:C25)"])
+        self.assertEqual(sheet["L26"].value, "Date:")
+        self.assertIsNone(sheet["D26"].value)
+        self.assertIsNone(sheet["M26"].value)
+
+        for project, amount in (("694512", 390), ("694513", 175)):
+            booked = {"project": project, "source": "Manual Journal EIB",
+                      "day": "2026-11-22", "journal": "DRAFT-POSTED"}
+            rows.extend([journal_row(account="1382", debit=amount, **booked),
+                         journal_row(account="2881", debit=None, credit=amount, **booked)])
+        self.write_journal(rows)
+        output = self.root / "after-receivable.xlsx"
+        self.assertTrue(self.run_workflow(output=output).success)
+        sheet = self.workbook(output)["CSMF Receivable - JR1XXXXXXXXX"]
+        self.assertEqual([sheet[f"A{row}"].value for row in range(8, 22)], ["1382", "2881"] * 7)
+        self.assertEqual([sheet[f"B{row}"].value for row in range(8, 22, 2)], [0] * 7)
+
+    def test_receivable_draft_marks_incomplete_and_unposted_bookings_for_review(self):
+        unposted = {"project": "694512", "source": "Manual Journal EIB",
+                    "journal": "IN-PROGRESS", "day": "2026-09-30"}
+        write_csv(self.journal, JOURNAL_HEADERS + ["Status"], [
+            [*journal_row(source="SIS"), "Posted"],
+            [*journal_row(account="1382", source="Manual Journal EIB", day="2026-09-30"), "Posted"],
+            [*journal_row(project="694512", source="SIS"), "Posted"],
+            [*journal_row(account="1382", **unposted), "Posted"],
+            [*journal_row(account="2881", debit=None, credit=100, **unposted), "In Progress"],
+            [*journal_row(project="694513", source="SIS", debit=40), "Posted"],
+            [*journal_row(project="694513", source="SIS", debit=60), "In Progress"],
+        ])
+        self.assertTrue(self.run_workflow().success)
+        sheet = self.workbook()["CSMF Receivable - JR1XXXXXXXXX"]
+        self.assertEqual([sheet[address].value for address in ("B8", "C9", "B10", "C11")], ["Review"] * 4)
+        self.assertEqual(sheet["B12"].value, 40)
+        self.assertEqual(sheet["A28"].value, "Review before posting — Parsons, Combined.")
 
     def test_monthly_recon_handles_month_boundaries_and_fiscal_rollover(self):
         from dataclasses import replace

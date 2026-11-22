@@ -116,6 +116,10 @@ class Activity:
     status: str = ""
 
     @property
+    def is_posted(self) -> bool:
+        return self.status.casefold() in {"", "posted"}
+
+    @property
     def label(self) -> str:
         if self.section == "loan_activity":
             return "Loan Disbursement" if self.direction == "Debit" else "Loan Reversal"

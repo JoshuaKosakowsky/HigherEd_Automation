@@ -407,6 +407,9 @@ total expected principal minus total GL principal.
 for untransferred principal, interest, and late fees. It uses the legacy
 headers and keeps zero-dollar lines. As of 0.30.29, line memos use the
 calendar month before the workbook is generated.
+As of 0.30.30, **CSMF Receivable - JR1XXXXXXXXX** drafts 1382/2881 journal
+lines for disbursements still to bill. It keeps the legacy headers and
+zero-dollar lines and uses the same previous-month memo rule.
 Notes and sign-off fields are blank for review.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for

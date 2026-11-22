@@ -38,9 +38,10 @@ AP_PAID_ACCOUNTS = ("2881", "5909R", "8309R")
 PAYABLE_COLLECTION_ACCOUNTS = {"1621": "2881", "5909R": "5909R", "8309R": "8309R"}
 PAYABLE_REVENUE_CATEGORIES = {"5909R": "4580", "8309R": "4511"}
 PAYABLE_SHEET_NAME = "CSMF Payable - JR1XXXXXXXXX"
-PAYABLE_HEADERS = ("Ledger Acct", "Debit", "Credit", "Memo", "Ext Ref ID", "SC", "RC",
+RECEIVABLE_SHEET_NAME = "CSMF Receivable - JR1XXXXXXXXX"
+JOURNAL_HEADERS = ("Ledger Acct", "Debit", "Credit", "Memo", "Ext Ref ID", "SC", "RC",
                    "Grant", "Proj", "Oper", "CC", "Bank Acct", "Additional Worktags")
-PAYABLE_AMOUNT_FORMAT = BUILTIN_FORMATS[43]  # Accounting format from the payable template.
+JOURNAL_AMOUNT_FORMAT = BUILTIN_FORMATS[43]  # Accounting format from the journal templates.
 PRINCIPAL_SECTIONS = ("payment", "loan_activity", "1621")
 # Keep the reference summary's order without changing the existing loan tabs.
 RECON_LOAN_ORDER = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
@@ -51,20 +52,34 @@ RECON_UNISA_ACCOUNTS = {
 }
 
 
-def _foundation_receivable_transfers(project_rows: list[Activity]) -> set[int]:
-    # The 2881 credit explains how the receivable was booked. Keep its audit
-    # label separate from the 1382 booking and the subsequent cash receipt.
+def _foundation_receivable_activity(project_rows: list[Activity]) -> tuple[set[int], Decimal | None]:
+    """Identify 2881 booking credits and calculate the principal still to bill."""
     journals = defaultdict(list)
     for row in project_rows:
-        if (row.journal and row.source.casefold() == "manual journal eib"
+        if (row.source.casefold() == "manual journal eib"
                 and (row.account, row.direction) in {("1382", "Debit"), ("2881", "Credit")}):
             journals[(row.day, row.journal.casefold())].append(row)
-    return {
-        row.source_row for entries in journals.values()
-        if any(row.account == "1382" and row.amount for row in entries)
-        and sum(row.adjusted_amount for row in entries) == 0
-        for row in entries if row.account == "2881"
-    }
+    booking_credits = set()
+    booked = Decimal("0.00")
+    review = False
+    for (_, journal), entries in journals.items():
+        debits = [row for row in entries if row.account == "1382" and row.amount]
+        if not debits:
+            continue
+        if not journal or sum(row.adjusted_amount for row in entries) != 0:
+            review = True
+            continue
+        # Preserve the loan-tab label for a balanced booking. An unposted
+        # booking still needs review before drafting a second entry.
+        booking_credits.update(row.source_row for row in entries if row.account == "2881")
+        if any(not row.is_posted for row in entries):
+            review = True
+        else:
+            booked += sum(row.amount for row in debits)
+    disbursed = -sum((row.adjusted_amount for row in project_rows
+                      if row.section == "loan_activity" and row.is_posted), Decimal("0.00"))
+    remaining = disbursed - booked
+    return booking_credits, None if review or remaining < 0 else remaining
 
 
 def _foundation_payable_labels(project_rows: list[Activity]) -> dict[int, str]:
@@ -103,12 +118,11 @@ def _payable_draft_amounts(project_rows: list[Activity], labels: dict[int, str])
     amounts = dict.fromkeys(AP_PAID_ACCOUNTS, Decimal("0.00"))
     for row in project_rows:
         label = labels.get(row.source_row, "")
-        posted = row.status.casefold() in {"", "posted"}
-        if label.startswith(AP_REVIEW_PREFIX) or (label and not posted):
+        if label.startswith(AP_REVIEW_PREFIX) or (label and not row.is_posted):
             return None
         if label.startswith(AP_PAID_PREFIX):
             amounts[row.account] -= row.amount
-        elif (posted and row.account in PAYABLE_COLLECTION_ACCOUNTS and row.direction == "Credit"
+        elif (row.is_posted and row.account in PAYABLE_COLLECTION_ACCOUNTS and row.direction == "Credit"
               and row.source.casefold() == "manual journal"
               and re.match(r"^unisa\s+pmt\b", row.description, re.IGNORECASE)):
             amounts[PAYABLE_COLLECTION_ACCOUNTS[row.account]] += row.amount
@@ -352,7 +366,7 @@ def _append(sheet, values) -> int:
     return sheet.max_row
 
 
-def _payable_template_header(sheet: Worksheet) -> None:
+def _journal_template_header(sheet: Worksheet) -> None:
     green, orange, blue, purple, gray, black = (
         "FF00B050", "FFED7D31", "FF0070C0", "FF7030A0", "FFA5A5A5", "FF000000",
     )
@@ -370,30 +384,31 @@ def _payable_template_header(sheet: Worksheet) -> None:
         for cell, horizontal in zip(sheet[row][:3], ("left", "center", "left")):
             cell.font = Font(name="Trebuchet MS", size=10, color=color)
             cell.alignment = Alignment(horizontal=horizontal, wrap_text=True if row == 3 else None)
-        sheet.cell(row, 2).number_format = PAYABLE_AMOUNT_FORMAT
-        sheet.cell(row, 3).number_format = PAYABLE_AMOUNT_FORMAT
+        sheet.cell(row, 2).number_format = JOURNAL_AMOUNT_FORMAT
+        sheet.cell(row, 3).number_format = JOURNAL_AMOUNT_FORMAT
     sheet["C3"].alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     sheet.row_dimensions[4].height = 13.9
     header_colors = (blue, purple, purple, black, gray, blue, blue,
                      green, green, green, gray, gray, orange)
-    for column, (label, color) in enumerate(zip(PAYABLE_HEADERS, header_colors), 1):
+    for column, (label, color) in enumerate(zip(JOURNAL_HEADERS, header_colors), 1):
         cell = sheet.cell(7, column, label)
         cell.font = Font(name="Trebuchet MS", size=10, bold=True, color=color)
         cell.alignment = Alignment(horizontal="center")
-    sheet["B7"].number_format = PAYABLE_AMOUNT_FORMAT
-    sheet["C7"].number_format = PAYABLE_AMOUNT_FORMAT
+    sheet["B7"].number_format = JOURNAL_AMOUNT_FORMAT
+    sheet["C7"].number_format = JOURNAL_AMOUNT_FORMAT
 
 
-def _payable_draft_sheet(sheet: Worksheet, drafts: dict[str, dict[str, Decimal] | None]) -> None:
-    month = date.today().replace(day=1) - timedelta(days=1)
-    _payable_template_header(sheet)
+def _payable_draft_sheet(
+    sheet: Worksheet, drafts: dict[str, dict[str, Decimal] | None], memo_month: str,
+) -> None:
+    _journal_template_header(sheet)
 
     review = []
     for project in RECON_LOAN_ORDER:
         amounts = drafts[project]
         if amounts is None:
             review.append(LOANS[project])
-        memo = f"{LOANS[project]} CSMF Payable {month:%b}"
+        memo = f"{LOANS[project]} CSMF Payable {memo_month}"
         first_debit = sheet.max_row + 1
         for account in AP_PAID_ACCOUNTS:
             debit = amounts[account] if amounts is not None else "Review"
@@ -402,7 +417,38 @@ def _payable_draft_sheet(sheet: Worksheet, drafts: dict[str, dict[str, Decimal] 
         credit = _append(sheet, ["2402", None, None, memo, None, None, None, None, project])
         sheet.cell(credit, 3, "Review" if amounts is None else f"=ROUND(SUM(B{first_debit}:B{credit - 1}),2)")
 
-    total = sheet.max_row + 4
+    widths = (16.140625, 11.5703125, 12.28515625, 31, 14.140625, 7.5703125, 7.7109375,
+              10.28515625, 9.140625, 9.7109375, 7.7109375, 14.28515625, 23.5703125)
+    _finish_journal_sheet(sheet, 39, widths, review)
+    sheet.sheet_view.zoomScale = 130
+    sheet.freeze_panes = "A8"
+
+
+def _receivable_draft_sheet(
+    sheet: Worksheet, drafts: dict[str, Decimal | None], memo_month: str,
+) -> None:
+    _journal_template_header(sheet)
+    review = []
+    for project in RECON_LOAN_ORDER:
+        loan = LOANS[project]
+        memo_name = "Board" if loan == "CSM Board" else loan
+        amount = drafts[project]
+        if amount is None:
+            review.append(loan)
+        debit = _append(sheet, ["1382", "Review" if amount is None else amount, None,
+                                f"Req {memo_name} funds for new loans - {memo_month}",
+                                None, None, None, None, project])
+        credit = _append(sheet, ["2881", None, None, f"+{memo_name} loan adminstr'd for CSMF - {memo_month}",
+                                 None, None, None, None, project])
+        sheet.cell(credit, 3, "Review" if amount is None else f"=B{debit}")
+    widths = (14.28515625, 11.42578125, 15.5703125, 32.28515625, 9.7109375, 5, 5,
+              7, 7, 7, 6, 9.7109375, 19.7109375)
+    _finish_journal_sheet(sheet, 26, widths, review)
+    sheet.freeze_panes = "A9"
+    sheet["M26"].number_format = "mm-dd-yy"
+
+
+def _finish_journal_sheet(sheet: Worksheet, total: int, widths: tuple[float, ...], review: list[str]) -> None:
     sheet.cell(total, 1, "Totals:")
     for column, letter in ((2, "B"), (3, "C")):
         sheet.cell(total, column, f"=SUM({letter}8:{letter}{total - 1})")
@@ -411,8 +457,6 @@ def _payable_draft_sheet(sheet: Worksheet, drafts: dict[str, dict[str, Decimal] 
         review_row = total + 2
         sheet.merge_cells(start_row=review_row, start_column=1, end_row=review_row, end_column=13)
         sheet.cell(review_row, 1, "Review before posting — " + ", ".join(review) + ".")
-    widths = (16.140625, 11.5703125, 12.28515625, 31, 14.140625, 7.5703125, 7.7109375,
-              10.28515625, 9.140625, 9.7109375, 7.7109375, 14.28515625, 23.5703125)
     for column, width in enumerate(widths, 1):
         sheet.column_dimensions[get_column_letter(column)].width = width
     body_font = Font(name="Trebuchet MS", size=10)
@@ -422,11 +466,9 @@ def _payable_draft_sheet(sheet: Worksheet, drafts: dict[str, dict[str, Decimal] 
             if cell.column in (1, 2, 3, 7, 9) or cell.row == total:
                 cell.alignment = Alignment(horizontal="center")
             if cell.column in (2, 3):
-                cell.number_format = PAYABLE_AMOUNT_FORMAT
+                cell.number_format = JOURNAL_AMOUNT_FORMAT
             if cell.row == total:
                 cell.fill = PatternFill("solid", fgColor="FFFFF2CC")
-    sheet.sheet_view.zoomScale = 130
-    sheet.freeze_panes = "A8"
 
 
 def _source_sheet(book: Workbook, name: str, source: SourceData) -> None:
@@ -461,12 +503,14 @@ def build_workbook(
     book.active.title = "Current Month Recon"
     book.create_sheet("Current FY Recon")
     payable = book.create_sheet(PAYABLE_SHEET_NAME)
+    receivable = book.create_sheet(RECEIVABLE_SHEET_NAME)
     book.properties.title = "CSMF Loans — R1"
     book.properties.description = f"Mines Bursar Automation {app_version}; source-value review, not a completed reconciliation."
     opening = dict(balances.values)
     subtotal_rows = {}
     detail_rows = {}
     payable_drafts = {}
+    receivable_drafts = {}
     for project, loan in LOANS.items():
         if cancellation:
             cancellation.check()
@@ -490,7 +534,7 @@ def build_workbook(
         detail_rows[project] = {}
         project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_activity]
         footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_activity]
-        receivable_transfers = _foundation_receivable_transfers(project_rows)
+        receivable_transfers, receivable_drafts[project] = _foundation_receivable_activity(project_rows)
         payable_labels = _foundation_payable_labels(project_rows)
         payable_drafts[project] = _payable_draft_amounts(project_rows, payable_labels)
         sections = dict(SECTIONS)
@@ -573,7 +617,9 @@ def build_workbook(
         cancellation.check()
     _current_recon_sheet(book["Current Month Recon"], activity, subtotal_rows, detail_rows, monthly=True)
     _current_recon_sheet(book["Current FY Recon"], activity, subtotal_rows, detail_rows)
-    _payable_draft_sheet(payable, payable_drafts)
+    memo_month = (date.today().replace(day=1) - timedelta(days=1)).strftime("%b")
+    _payable_draft_sheet(payable, payable_drafts, memo_month)
+    _receivable_draft_sheet(receivable, receivable_drafts, memo_month)
     snapshot = book.create_sheet("Opening Balances")
     _append(snapshot, ["Fiscal Year", "Project", "Loan", "Opening Balance", "Last Uploaded/Updated", "Source"])
     for project, balance in balances.projects:

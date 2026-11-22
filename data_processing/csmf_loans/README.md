@@ -422,6 +422,27 @@ interest 11, and fees 3 produce a 2402 credit of 124 with `Oct` in the memo
 on a November run. After the new journal is posted and included in GA, those
 four lines remain on the draft with zero amounts.
 
+### CSMF Receivable journal draft
+
+As of 0.30.30, **CSMF Receivable - JR1XXXXXXXXX** drafts the Workday journal
+for disbursements still to bill to the Foundation. It uses posted SIS 1621
+disbursements less SIS reversals and subtracts amounts already booked in
+balanced, posted 1382 debit and 2881 credit **Manual Journal EIB** entries
+for the same project, Accounting Date, and Journal Number. Prior-year
+footnotes remain separate. CashNet receipts reduce open AR on the recon tabs.
+
+The draft retains the legacy header, unused columns, and two rows per
+project, including zero amounts. The **1382** debit is the amount to bill.
+The **2881** credit links to that debit. Both line memos append the calendar
+month before workbook generation to the legacy text. Unmatched or unposted
+1382 bookings and amounts already booked beyond the net disbursements are
+marked **Review** for the affected project.
+
+For example, 100 in SIS disbursements and 10 in reversals leave 90 to bill.
+After 90 is booked in a matched journal, both draft lines show zero.
+If 200 in disbursements and 25 in reversals follow, the draft shows 175 on
+each side, including after the Foundation pays the earlier 90.
+
 ### Prior fiscal year payment footnote
 
 Owner clarification in 0.30.7 moves a journal line to the bottom of its loan tab
@@ -552,8 +573,7 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
 
 Additional 1621 classifications (including any Adjustment category), AP
 activity outside the confirmed payable journal pattern, independent balance
-tie-outs, further Adjusted Amount rules, and receivable journal preparation
-remain deferred.
+tie-outs, and further Adjusted Amount rules remain deferred.
 Section subtotals sum the editable Adjusted Amount cells; they are not completed
 reconciled balances.
 
