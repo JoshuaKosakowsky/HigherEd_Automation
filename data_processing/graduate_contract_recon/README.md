@@ -18,21 +18,23 @@ selection rules and public source-module imports remain unchanged.
   workbook must contain exactly one matching source worksheet for each input.
   XLSX/XLSM readers scan actual worksheet contents even when an export stores
   an incorrect used range, such as A1 for a full Workday report.
-- Workday requires Accounting Date, Ledger Account, Journal Source, Memo, and
-  debit/credit amounts. Workday Debit/Credit Amount, Ledger Debit/Credit Amount,
+- **Trial Balance (1305)** accepts Workday transaction detail with Accounting
+  Date, Ledger Account, Journal Source, Memo, and debit/credit amounts.
+  Workday Debit/Credit Amount, Ledger Debit/Credit Amount,
   and Line Memo are supported header aliases. Journal Entry/Number, External
   Reference/ID, CWID and Journal Line ID are used when supplied. Workbooks with
   competing amount columns or missing ledger accounts are not guessed into shape.
   Previously edited reconciliation reports may not be valid original inputs.
-- Banner requires ID, Description, Detail Code, Amount, Feed Document, Feed Date.
+- **Banner Activity by Date & Detail Code download** requires ID, Description,
+  Detail Code, Amount, Feed Document and Feed Date.
   The current Insights report's quoted headers, transaction description and
   final Transaction User field are supported. Metadata's detail-code description
   does not replace the transaction Description. Additional source columns stay
   in the raw source tab. Legacy header layouts are accepted internally, but the
   staff form advertises only the Insights download.
-- Workday uploads (1305 export and optional Grad Contract Worktag) are grouped
-  together in a pale-blue section, followed by the Banner source section.
-  The form is titled **Inputs**; the save location has its own **Outputs** section.
+- The **Workday uploads** section precedes the **Insights Report** selector.
+  **Report settings…** beside each Workday input shows the report filters and
+  identifies the year and periods the operator selects in Workday.
 - Use **Browse…** or drag and drop to select multiple files for either Workday
   input. Each file must have the headers for its report. Choose 1305 exports
   with nonoverlapping coverage to avoid double-counting activity. The workflow
@@ -57,9 +59,10 @@ selection rules and public source-module imports remain unchanged.
   periods, quarters, years, or multiple years. The fiscal calendar follows
   `shared/fiscal_period.ps1`: July P01, June P12, fiscal year named for its ending
   year, and three periods per fiscal quarter. Adjusting periods are not inferred.
-- **Grad Contract Worktag** optionally accepts one or more Workday **Find Journal Lines**
-  exports. Line Memo and Worktags supply the assignments (M and O in the supplied layout;
-  mapping uses headers). Student CWIDs are eight digits beginning with `10`.
+- **Find Journal Lines (Previously used worktags)** optionally accepts one or
+  more Workday Find Journal Lines exports. Line Memo and Worktags supply the
+  assignments (M and O in the supplied layout). The importer locates them by
+  header. Student CWIDs are eight digits beginning with `10`.
   SU/FA/SP/WI plus two-digit year are separated into term code and description
   (for example SU26 → Summer 2026). Names and unrelated source fields are omitted.
   Only Grant, Project and Operating Account with six-digit numbers are kept;

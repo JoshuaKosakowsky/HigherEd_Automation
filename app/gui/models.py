@@ -48,6 +48,7 @@ class ParameterDefinition:
     file_types: tuple[tuple[str, str], ...] = ()
     default_extension: str = ""
     default_factory: Callable[[], Any] | None = field(default=None, repr=False)
+    report_settings: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -20,7 +20,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl, QTimer
 from PySide6.QtGui import QDropEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QPushButton, QSpinBox, QStatusBar
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QStatusBar,
+)
 
 from app.gui.main import AutomationApplication
 from app.gui.models import ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode, WorkflowResult
@@ -281,9 +284,16 @@ class QtGuiTests(unittest.TestCase):
         page = window.current_page
         self.assertEqual(page.recon_source.count(), 1)
         self.assertEqual(page.recon_source.currentData(), "manual")
+        self.assertEqual(page.recon_source.accessibleName(), "Insights Report")
+        self.assertEqual(page.inputs["banner_file"].accessibleName(),
+                         "Banner Activity by Date & Detail Code download")
+        banner_label = next(label for label in page.findChildren(QLabel)
+                            if label.buddy() is page.inputs["banner_file"].editor)
+        self.assertEqual(banner_label.text(), "Banner Activity by Date && Detail Code download")
         self.assertFalse(page.inputs["banner_file"].isHidden())
         self.assertEqual(page.inputs["detail_codes"].text(), "TPDT, TPLE, Z0LE")
-        self.assertEqual(page.inputs["worktag_file"].accessibleName(), "Grad Contract Worktag")
+        self.assertEqual(page.inputs["workday_file"].accessibleName(), "Trial Balance (1305)")
+        self.assertEqual(page.inputs["worktag_file"].accessibleName(), "Find Journal Lines (Previously used worktags)")
         self.assertFalse(page.inputs["worktag_file"].isHidden())
         self.assertEqual(page.mode.count(), 0)
         self.assertTrue(page.inputs["start_date"].calendarPopup())
@@ -296,7 +306,7 @@ class QtGuiTests(unittest.TestCase):
         banner = self.root / "banner.csv"
         banner.touch()
         page.inputs["banner_file"].setText(str(banner))
-        with self.assertRaisesRegex(ValueError, "Workday 1305 export is required"):
+        with self.assertRaisesRegex(ValueError, r"Trial Balance \(1305\) is required"):
             page._parse_parameters()
         for key in ("workday_file", "worktag_file"):
             paths = tuple(self.root / f"{key}_{year}.csv" for year in (2025, 2026))
@@ -306,6 +316,52 @@ class QtGuiTests(unittest.TestCase):
                        return_value=([str(path) for path in paths], "")):
                 page.inputs[key]._browse()
             self.assertEqual(page._parse_parameters()[key], paths)
+
+    def test_1305_report_settings_buttons_open_the_matching_workday_filters(self):
+        window = self.open_app()
+        window.show_workflow(get_workflow("graduate_contract_recon"))
+        page = window.current_page
+        expected_settings = {
+            "Report settings for Trial Balance (1305)": (
+                ("Company", "Colorado School of Mines"),
+                ("Ledger", "Actuals"),
+                ("Book", "Common Book"),
+                ("Year", "The year being reconciled"),
+                ("Ledger Account/Summary", "1305:Graduate Contract Receivable"),
+                ("Translation Currency", "USD"),
+            ),
+            "Report settings for Find Journal Lines (Previously used worktags)": (
+                ("Company", "Colorado School of Mines"),
+                ("Year", "The year being reconciled"),
+                ("Period", "The period(s) being reconciled"),
+                ("Ledgers", "1631E:Graduate RA TA Tuition Account Fringe\n5893E:Fellowships"),
+            ),
+        }
+        buttons = {control.accessibleName(): control for control in page.findChildren(QPushButton)
+                   if control.text() == "Report settings…"}
+        self.assertEqual(buttons.keys(), expected_settings.keys())
+        shown = {}
+
+        def inspect_dialog():
+            dialog = QApplication.activeModalWidget()
+            try:
+                form = dialog.findChild(QFormLayout)
+                shown[dialog.windowTitle()] = tuple(
+                    (form.itemAt(row, QFormLayout.ItemRole.LabelRole).widget().text(),
+                     form.itemAt(row, QFormLayout.ItemRole.FieldRole).widget().text())
+                    for row in range(form.rowCount())
+                )
+                dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Close).click()
+            finally:
+                if dialog.isVisible():
+                    dialog.reject()
+
+        for control in buttons.values():
+            QTimer.singleShot(0, inspect_dialog)
+            control.click()
+        self.assertEqual(shown, expected_settings)
+        self.assertEqual(page.inputs["workday_file"].text(), "")
+        self.assertEqual(page.inputs["worktag_file"].text(), "")
 
     def test_admin_1305_offers_upload_and_prod_without_optional_banner_file(self):
         window = self.open_app()

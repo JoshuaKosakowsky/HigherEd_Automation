@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDate, QTimer, Signal
+from PySide6.QtCore import QDate, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QFrame, QLineEdit, QMessageBox, QPlainTextEdit,
@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.models import (
-    MANUAL_SOURCE, SQL_SOURCE, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode,
+    MANUAL_SOURCE, SQL_SOURCE, ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode,
 )
 from app.gui.parameter_defaults import ParameterDefaults
 from app.gui.progress import WorkflowProgressWidget
@@ -95,14 +95,9 @@ class WorkflowDetailPage(QScrollArea):
                     form_layout.addWidget(frame)
                     input_groups[group] = group_layout
                     if group == "Banner":
-                        group_layout.addWidget(label(
-                            "Insights data source" if definition.workflow_id == "wf_mines_balance_recon" else "Banner data source",
-                            "field",
-                        ))
+                        group_layout.addWidget(label(self._source_heading, "field"))
                         self.recon_source = QComboBox()
-                        self.recon_source.setAccessibleName(
-                            "Insights data source" if definition.workflow_id == "wf_mines_balance_recon" else "Banner data source"
-                        )
+                        self.recon_source.setAccessibleName(self._source_heading)
                         self.recon_source.addItem(
                             "Upload annual TGIACCD files" if definition.workflow_id == "trends" else
                             "Upload combined Insights report" if definition.workflow_id == "wf_mines_balance_recon" else
@@ -113,8 +108,22 @@ class WorkflowDetailPage(QScrollArea):
                             self.recon_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
                         group_layout.addWidget(self.recon_source)
                 parameter_layout = input_groups[group]
-            field_label = label(parameter.label, "field")
-            parameter_layout.addWidget(field_label)
+            # Qt treats ampersands as keyboard mnemonics on labels with a buddy.
+            field_label = label(parameter.label.replace("&", "&&"), "field")
+            parameter_widgets = [field_label]
+            if parameter.report_settings:
+                heading = QHBoxLayout()
+                heading.addWidget(field_label, 1)
+                settings = button(
+                    "Report settings…",
+                    lambda checked=False, item=parameter: self._show_report_settings(item),
+                )
+                settings.setAccessibleName(f"Report settings for {parameter.label}")
+                heading.addWidget(settings)
+                parameter_layout.addLayout(heading)
+                parameter_widgets.append(settings)
+            else:
+                parameter_layout.addWidget(field_label)
             if parameter.kind in (
                 ParameterKind.INPUT_FILE, ParameterKind.MULTI_INPUT_FILE, ParameterKind.OUTPUT_FILE
             ):
@@ -144,19 +153,17 @@ class WorkflowDetailPage(QScrollArea):
             if parameter.default_factory is not None:
                 self.parameter_defaults.track(parameter.key, control, parameter.default_factory)
             parameter_layout.addWidget(control)
-            if self._is_sql_source_parameter(parameter.key):
-                self.sql_banner_widgets.extend((field_label, control))
-            if self._is_manual_source_parameter(parameter.key):
-                self.manual_banner_widgets.extend((field_label, control))
+            parameter_widgets.append(control)
             if parameter.help_text:
                 help_label = label(parameter.help_text, "muted")
                 parameter_layout.addWidget(help_label)
-                if self._is_sql_source_parameter(parameter.key):
-                    self.sql_banner_widgets.append(help_label)
-                if self._is_manual_source_parameter(parameter.key):
-                    self.manual_banner_widgets.append(help_label)
-            if not self._is_sql_source_parameter(parameter.key):
+                parameter_widgets.append(help_label)
+            if self._is_sql_source_parameter(parameter.key):
+                self.sql_banner_widgets.extend(parameter_widgets)
+            else:
                 parameter_layout.addSpacing(8)
+            if self._is_manual_source_parameter(parameter.key):
+                self.manual_banner_widgets.extend(parameter_widgets)
             if parameter.key == "brokers_file" and definition.workflow_id == "textbook_recon_manual":
                 form_layout.addWidget(label("Banner data source", "field"))
                 self.recon_source = QComboBox()
@@ -236,6 +243,15 @@ class WorkflowDetailPage(QScrollArea):
     def _source_control(self) -> QComboBox | None:
         return self.refund_source if self.refund_source is not None else self.recon_source
 
+    @property
+    def _source_heading(self) -> str:
+        if self.refund_source is not None:
+            return "Refund data source"
+        return {
+            "graduate_contract_recon": "Insights Report",
+            "wf_mines_balance_recon": "Insights data source",
+        }.get(self.definition.workflow_id, "Banner data source")
+
     def _is_manual_source_parameter(self, key: str) -> bool:
         return (
             self.definition.workflow_id == "textbook_recon_manual" and key in ("frst_file", "book_file")
@@ -294,6 +310,30 @@ class WorkflowDetailPage(QScrollArea):
             parsed["step"] = self.textbook_step.currentData()
         return parsed
 
+    def _show_report_settings(self, parameter: ParameterDefinition) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Report settings for {parameter.label}")
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(14)
+        layout.addWidget(label(parameter.label, "section"))
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(8)
+        for name, value in parameter.report_settings:
+            setting = label(value)
+            setting.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            form.addRow(label(name, "field", wrap=False), setting)
+        layout.addLayout(form)
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        controls.rejected.connect(dialog.reject)
+        layout.addWidget(controls)
+        dialog.resize(590, dialog.sizeHint().height())
+        dialog.exec()
+        dialog.deleteLater()
+
     def _confirm(self, context: WorkflowContext) -> bool:
         dialog = QDialog(self)
         dialog.setWindowTitle("Review workflow")
@@ -317,10 +357,7 @@ class WorkflowDetailPage(QScrollArea):
                         label(balance_summary(context.parameters["_opening_balances"])))
         if self._source_control is not None:
             source_label = "Run SQL from PROD Insights" if self._source_control.currentData() == SQL_SOURCE else self._source_control.currentText()
-            source_heading = ("Refund data source" if self.refund_source is not None else
-                              "Insights data source" if self.definition.workflow_id == "wf_mines_balance_recon" else
-                              "Banner data source")
-            form.addRow(label(source_heading, "field"), label(source_label))
+            form.addRow(label(self._source_heading, "field"), label(source_label))
         if self.textbook_step is not None:
             form.addRow(label("Workflow step", "field"), label(self.textbook_step.currentText()))
         for parameter in self.definition.parameters:

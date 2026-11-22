@@ -48,14 +48,14 @@ def _read_uploads(
 def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     source = context.parameters.get("banner_source")
     if source not in {"manual", "sql"}:
-        raise ValueError("Choose the Banner data source.")
+        raise ValueError("Choose an Insights Report option.")
     parameters = BannerActivityParameters.from_inputs(
         context.parameters.get("start_date"), context.parameters.get("end_date"),
         context.parameters.get("detail_codes"),
     ) if source == "sql" else None
     workday_paths = _upload_paths(context.parameters.get("workday_file"))
     if not workday_paths:
-        raise ValueError("Upload at least one Workday 1305 export.")
+        raise ValueError("Upload at least one Trial Balance (1305) transaction-detail export.")
     worktag_paths = _upload_paths(context.parameters.get("worktag_file"))
     output = Path(context.parameters["output_file"])
     banner_path = Path(context.parameters["banner_file"]) if source == "manual" else None
@@ -71,16 +71,16 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
             raise ValueError("1305 Banner SQL extraction requires PROD Insights.")
     elif context.mode is not None:
         raise ValueError("File upload reconciliation does not use TEST or PROD.")
-    context.progress.report("Reading Workday 1305 exports")
+    context.progress.report("Reading Trial Balance (1305) exports")
     workday = _read_uploads(workday_paths, "Workday", context.cancellation)
     worktags = None
     if worktag_paths:
-        context.progress.report("Reading Grad Contract Worktag exports")
+        context.progress.report("Reading Find Journal Lines worktag exports")
         worktags = prepare_worktags(*_read_uploads(worktag_paths, "Worktags", context.cancellation))
     if context.cancellation:
         context.cancellation.check()
     if source == "manual":
-        context.progress.report("Reading Banner Insights download")
+        context.progress.report("Reading Banner Activity by Date & Detail Code download")
         banner = read_source(banner_path, "Banner")
         parameters = uploaded_scope(workday, banner)
     else:

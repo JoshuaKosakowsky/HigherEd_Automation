@@ -443,13 +443,16 @@ Document Difference is Banner minus Workday. Period Totals compares Banner again
 Workday (SIS plus Other) and keeps a blank **Notes** column for staff comments.
 See the [1305 technical guide](../../data_processing/graduate_contract_recon/README.md)
 for mappings, exceptions and synthetic acceptance examples.
-Select or drop one or more original exports into **Workday 1305 export**.
+Select or drop one or more transaction-detail exports into **Trial Balance (1305)**.
 If you select several, use nonoverlapping report date ranges. The app combines
 them by Accounting Date and records each row's export and worksheet on Workday Data.
-The optional **Grad Contract Worktag** input accepts one or more Find Journal Lines
-exports to add a cleaned Worktags tab and separate **Project**, **Grant**, and **Operating Account**
+The optional **Find Journal Lines (Previously used worktags)** input accepts one
+or more exports and adds a Worktags tab and **Project**, **Grant**, and **Operating Account**
 columns on CWID Recon. Each type keeps all distinct numbers per CWID, including
 leading zeros; missing types stay blank. Names and unrelated export columns are discarded.
+Open **Report settings…** beside either Workday upload for the filters to use in
+Workday. Under **Insights Report**, use **Banner Activity by Date & Detail Code
+download** to upload the corresponding Banner activity.
 Inclusive dates and detail codes appear only for **Run SQL from PROD Insights**.
 SQL detail codes default to **TPDT, TPLE, Z0LE** and remain editable; at least one
 code is required. File upload mode uses all valid Banner codes and the dates
