@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from math import ceil
 
@@ -385,7 +385,7 @@ def _payable_template_header(sheet: Worksheet) -> None:
 
 
 def _payable_draft_sheet(sheet: Worksheet, drafts: dict[str, dict[str, Decimal] | None]) -> None:
-    month = date.today()
+    month = date.today().replace(day=1) - timedelta(days=1)
     _payable_template_header(sheet)
 
     review = []

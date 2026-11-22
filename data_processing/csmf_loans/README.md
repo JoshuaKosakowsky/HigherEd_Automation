@@ -409,16 +409,16 @@ Each project gets debit lines for its remaining **2881** principal, **5909R**
 interest with **RC 4580**, and **8309R** late fees with **RC 4511**. The
 **2402** credit sums that project's debits. As of 0.30.28, the sheet follows
 the legacy payable header and retains all four lines per project, including
-zero amounts. The bottom row totals both sides. Line memos use
-`<Loan> CSMF Payable <Mon>` with the workstation's current month when the
-workbook is generated. The sheet uses imported GA values, so rerun after a
+zero amounts. The bottom row totals both sides. As of 0.30.29, line memos use
+`<Loan> CSMF Payable <Mon>` with the calendar month before the workbook is
+generated. The sheet uses imported GA values, so rerun after a
 posting appears in GA to refresh the draft.
 
 Unmatched or unposted payable journals and transfers that exceed verified
 collections mark the amounts for the affected project as **Review**.
 For example, if a September journal transfers August principal 300,
 interest 30, and fees 5, later untransferred collections of principal 110,
-interest 11, and fees 3 produce a 2402 credit of 124 with `Nov` in the memo
+interest 11, and fees 3 produce a 2402 credit of 124 with `Oct` in the memo
 on a November run. After the new journal is posted and included in GA, those
 four lines remain on the draft with zero amounts.
 

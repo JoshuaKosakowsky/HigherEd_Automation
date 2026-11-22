@@ -836,9 +836,10 @@ class CsmfTests(unittest.TestCase):
         self.assertIn('"<"&EDATE($D$3,1)', book["Current Month Recon"]["O9"].value)
         self.assertNotIn("EDATE", book["Current FY Recon"]["O9"].value)
 
-    def test_payable_draft_carries_untransferred_collections_and_uses_run_month_memos(self):
+    def test_payable_draft_carries_untransferred_collections_and_uses_previous_month_memos(self):
         clock = patch("data_processing.csmf_loans.export.date")
-        clock.start().today.return_value = date(2026, 11, 22)
+        today = clock.start().today
+        today.return_value = date(2026, 11, 22)
         self.addCleanup(clock.stop)
         board = {"project": "694513", "debit": None, "memo": "Unisa pmt synthetic collections"}
         prior = {"project": "694513", "day": "2026-09-08", "journal": "PRIOR",
@@ -895,7 +896,7 @@ class CsmfTests(unittest.TestCase):
             self.assertEqual([line[0] for line in lines], ["2881", "5909R", "8309R", "2402"])
             self.assertEqual([line[1] for line in lines], [*expected_debits.get(project, [0, 0, 0]), None])
             self.assertEqual([line[2] for line in lines], [None, None, None, f"=ROUND(SUM(B{first}:B{first + 2}),2)"])
-            self.assertEqual([line[3] for line in lines], [f"{LOANS[project]} CSMF Payable Nov"] * 4)
+            self.assertEqual([line[3] for line in lines], [f"{LOANS[project]} CSMF Payable Oct"] * 4)
             self.assertEqual([line[6] for line in lines], [None, "4580", "4511", None])
             self.assertEqual([line[8] for line in lines], [project] * 4)
         self.assertEqual([c.value for c in sheet[39][:3]], ["Totals:", "=SUM(B8:B38)", "=SUM(C8:C38)"])
@@ -904,16 +905,18 @@ class CsmfTests(unittest.TestCase):
         for project, lines in (("694513", (("2881", 110), ("5909R", 11), ("8309R", 3))),
                                ("694514", (("2881", 90),))):
             posted = {"project": project, "day": "2026-11-22", "journal": "NOV-PAYABLE",
-                      "source": "Manual Journal EIB", "memo": f"{LOANS[project]} CSMF Payable Nov"}
+                      "source": "Manual Journal EIB", "memo": f"{LOANS[project]} CSMF Payable Oct"}
             rows.extend(journal_row(account=account, debit=debit, **posted) for account, debit in lines)
             rows.append(journal_row(account="2402", debit=None, credit=sum(debit for _, debit in lines), **posted))
         self.write_journal(rows)
         output = self.root / "after-payable.xlsx"
+        today.return_value = date(2027, 1, 1)
         self.assertTrue(self.run_workflow(output=output).success)
         sheet = self.workbook(output)["CSMF Payable - JR1XXXXXXXXX"]
         self.assertEqual([sheet[f"B{r}"].value for r in range(8, 36) if r % 4 != 3], [0] * 21)
         self.assertEqual([sheet[f"A{r}"].value for r in range(8, 36)],
                          ["2881", "5909R", "8309R", "2402"] * 7)
+        self.assertTrue(all(sheet[f"D{row}"].value.endswith(" Dec") for row in range(8, 36)))
 
     def test_payable_draft_flags_unposted_or_unmatched_transfers(self):
         unposted = {"source": "Manual Journal EIB", "journal": "IN-PROGRESS", "memo": "CSMF Payable Oct"}
