@@ -135,9 +135,9 @@ def _current_recon_sheet(
     sheet["D3"] = month
     sheet["D3"].number_format = "mmmm yyyy"
     labels = {
-        "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
+        "N4": "AP", "Q4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
         "N5": "Total Due to\nFoundation", "O5": "Total Paid to\nFoundation",
-        "P5": "Total Due From\nFoundation", "Q5": "Total Paid From\nFoundation",
+        "P5": "Net AP", "Q5": "Total Due From\nFoundation", "R5": "Total Paid From\nFoundation", "S5": "Net AR",
         "A6": "Loan", "B6": "Unisa\nAcct", "C6": "Project", "D6": "Beginning\nBalance",
         "E6": "Adjustments/\nReclass", "F6": f"{scope}\nLoan Activity (Net)",
         "G6": f"{scope}\nPayments", "H6": "Net Change\nin Principal",
@@ -147,7 +147,7 @@ def _current_recon_sheet(
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
         "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only."
                 if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month."),
-        "A17": "AP and AR balances are due plus paid through the report month. Review flagged AP journal lines. Prior-year activity is footnoted.",
+        "A17": "Net AP and Net AR add the signed due and paid amounts. Review flagged AP journal lines. Prior-year activity is footnoted.",
         "A29": ("Blank beginning balances remain unknown; GL is the cumulative Loan Total through this month. Shaded blanks are review inputs."
                 if monthly else "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs."),
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
@@ -155,9 +155,9 @@ def _current_recon_sheet(
     }
     for cell, label in labels.items():
         sheet[cell] = label
-    for region in ("A1:Q1", "A2:G2", "H2:Q2", "A3:C3", "N4:O4", "P4:Q4", "A5:H5",
-                   "J5:L5", "N5:N6", "O5:O6", "P5:P6", "Q5:Q6", "A14:C14",
-                   "A16:Q16", "A17:Q17", "A18:L18", "G19:L19", "A27:C27", "A29:Q29", "A31:D31"):
+    for region in ("A1:S1", "A2:G2", "H2:S2", "A3:C3", "N4:P4", "Q4:S4", "A5:H5",
+                   "J5:L5", "N5:N6", "O5:O6", "P5:P6", "Q5:Q6", "R5:R6", "S5:S6", "A14:C14",
+                   "A16:S16", "A17:S17", "A18:L18", "G19:L19", "A27:C27", "A29:S29", "A31:D31"):
         sheet.merge_cells(region)
 
     for row, project in enumerate(RECON_LOAN_ORDER, 7):
@@ -197,7 +197,7 @@ def _current_recon_sheet(
         sheet.cell(row, 14, due)
         sheet.cell(row, 15, paid)
         first_ar, last_ar = detail_rows[project]["1382"]
-        for column, direction in ((16, "Debit"), (17, "Credit")):
+        for column, direction in ((17, "Debit"), (18, "Credit")):
             if last_ar < first_ar:
                 sheet.cell(row, column, 0)
                 continue
@@ -216,7 +216,7 @@ def _current_recon_sheet(
         sheet.cell(pending, 5, f"={loan_sheet}!H{totals['loan']}")
         sheet.cell(pending, 6, "Pending")
 
-    for column in (5, 6, 7, 8, 10, 11, 12, 16, 17):
+    for column in (5, 6, 7, 8, 10, 11, 12, 17, 18):
         letter = get_column_letter(column)
         sheet.cell(14, column, f"=SUM({letter}7:{letter}13)")
     # A partial opening-balance sum must not masquerade as a complete control.
@@ -224,6 +224,10 @@ def _current_recon_sheet(
     for column in ("N", "O"):
         cells = f"{column}7:{column}13"
         sheet[f"{column}14"] = f'=IF(COUNT({cells})=ROWS({cells}),SUM({cells}),"Review")'
+    for row in range(7, 15):
+        ap = f"N{row}:O{row}"
+        sheet[f"P{row}"] = f'=IF(COUNT({ap})=2,ROUND(SUM({ap}),2),"Review")'
+        sheet[f"S{row}"] = f"=ROUND(SUM(Q{row}:R{row}),2)"
     sheet["E27"] = "=SUM(E20:E26)"
     for row in range(32, 36):
         sheet.merge_cells(f"A{row}:B{row}")
@@ -238,16 +242,17 @@ def _current_recon_sheet(
         sheet.row_dimensions[row[0].row].height = 27
     for column, width in {"A": 17, "B": 9, "C": 13, "D": 18, "E": 18, "F": 18,
                           "G": 18, "H": 18, "I": 3, "J": 18, "K": 18, "L": 18,
-                          "M": 3, "N": 20, "O": 20, "P": 20, "Q": 20}.items():
+                          "M": 3, "N": 20, "O": 20, "P": 18, "Q": 20, "R": 20, "S": 18}.items():
         sheet.column_dimensions[column].width = width
-    for first, last, columns in ((7, 14, (4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17)),
+    summary_amount_columns = (4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 18, 19)
+    for first, last, columns in ((7, 14, summary_amount_columns),
                                  (20, 27, (4, 5, 6))):
         for row in range(first, last + 1):
             for column in columns:
                 sheet.cell(row, column).number_format = CURRENCY_FORMAT
                 sheet.cell(row, column).alignment = Alignment(horizontal="right", vertical="center")
     for region, color in (("A5:H5", "E2EFDA"), ("J5:L5", "DDEBF7"),
-                          ("N5:O14", "D9D9D9"), ("P5:Q14", "FCE4D6"),
+                          ("N5:P14", "D9D9D9"), ("Q5:S14", "FCE4D6"),
                           ("A18:L18", "FFF2CC"), ("A31:D31", "FFF2CC")):
         for row in sheet[region]:
             for cell in row:
@@ -257,9 +262,9 @@ def _current_recon_sheet(
             if cell.value is not None:
                 cell.font = Font(name="Aptos", size=12, bold=True)
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    for column in ("N", "P"):
+    for column in ("N", "Q"):
         sheet[f"{column}4"].alignment = Alignment(horizontal="center", vertical="center")
-    for row_number, columns in ((14, (1, 4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17)),
+    for row_number, columns in ((14, (1, *summary_amount_columns)),
                                 (27, (1, 4, 5, 6))):
         for column in columns:
             cell = sheet.cell(row_number, column)
@@ -281,7 +286,7 @@ def _current_recon_sheet(
     sheet.row_dimensions[2].height = max(30, 18 * ceil(len(sheet["H2"].value) / 75))
     sheet.row_dimensions[6].height = 64
     sheet.row_dimensions[19].height = 48
-    sheet.print_area = "A1:Q35"
+    sheet.print_area = "A1:S35"
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.orientation = "landscape"
     sheet.page_setup.paperSize = sheet.PAPERSIZE_A3

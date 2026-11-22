@@ -212,8 +212,10 @@ The existing **Current FY Recon** mappings are:
 | Total Interest and Fees | Sum of those two amounts; no separate interest/fee worksheets |
 | AP / Total Due to Foundation (N) | Matched 2402 credits plus untransferred principal payments and interest |
 | AP / Total Paid to Foundation (O) | Matched 2881, 5909R and 8309R debits, negative for normal payments |
-| AR / Total Due From Foundation (P) | Regular 1382 debits, positive for a normal booking |
-| AR / Total Paid From Foundation (Q) | Regular 1382 credits, negative for a normal receipt |
+| Net AP (P) | Signed sum of N and O, or Review if either AP amount is under review |
+| AR / Total Due From Foundation (Q) | Regular 1382 debits, positive for a normal booking |
+| AR / Total Paid From Foundation (R) | Regular 1382 credits, negative for a normal receipt |
+| Net AR (S) | Signed sum of Q and R |
 | Pending Items: Unisa Ending Balance | Blank editable input; no calculation or Unisa report import |
 | Pending Items: GL | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
 
@@ -324,9 +326,9 @@ the FY view continues to list the periods actually supplied.
 
 #### Foundation activity
 
-**Total Due From Foundation (P)** shows amounts booked as 1382 debits.
-**Total Paid From Foundation (Q)** shows 1382 credits, including CashNet
-receipts. Add P and Q to read the remaining receivable. Both formulas use the
+**Total Due From Foundation (Q)** shows amounts booked as 1382 debits.
+**Total Paid From Foundation (R)** shows 1382 credits, including CashNet
+receipts. **Net AR (S)** adds Q and R. Both underlying formulas use the
 existing Debit/Credit and Adjusted Amount columns on the loan tab. The FY view
 uses all uploaded FY activity and the monthly view includes earlier activity
 from the same FY through the displayed month. Row 14 sums each AR column.
@@ -337,7 +339,7 @@ the offset for booking AR on disbursements already made in Banner. On each
 loan tab, 2881 EIB credits that balance 1382 EIB debits in the same journal and
 Accounting Date are labeled **AR reclass — 2881**. Their 2881 subtotal stays
 intact. Only the 1382 side contributes to the AR summary. The SIS disbursements
-remain in Loan Activity and the eventual 1382 cash receipt is shown in Q.
+remain in Loan Activity and the eventual 1382 cash receipt is shown in R.
 
 In 0.30.23 the owner confirmed that a **2402 credit** in a Foundation payable
 journal is due to the Foundation. Its **2881 principal**, **5909R interest**,
@@ -356,9 +358,11 @@ untransferred principal and interest. Signed Payment and Interest activity
 includes the interest transfer debit; the matched 2881 debit also reduces
 untransferred principal. **Total Paid to Foundation (O)** sums the matched
 2881, 5909R and 8309R debits. Late fees enter N through the posted 2402 credit
-and enter O through the matching debit. Add N and O to read the remaining
-payable. Both columns carry forward within the selected FY through the report
-month and update from Adjusted Amount. Prior-year items remain footnote only.
+and enter O through the matching debit. **Net AP (P)** adds N and O and displays
+**Review** if the AP figures are under review. Both net columns also calculate
+the total in row 14. Due and paid amounts carry forward within the selected FY
+through the report month and update from Adjusted Amount. Prior-year items
+remain footnote only.
 
 Synthetic AP example: principal 300 and interest 30 are transferred with an
 additional late fee of 5. A matching 2402 credit of 335 and debits of 300,
@@ -366,11 +370,11 @@ additional late fee of 5. A matching 2402 credit of 335 and debits of 300,
 55 bring N to 390, O stays -335, and the open balance is 55. A CashNet receipt
 whose memo also mentions CSMF and payment still belongs only in AR.
 
-Synthetic acceptance: two SIS disbursements totaling 100 leave P and Q at
+Synthetic acceptance: two SIS disbursements totaling 100 leave Q and R at
 zero until a 100 debit is booked to 1382. The matching 2881 credit is labeled
 AR reclass and excluded from the summary. A CashNet credit of 35 leaves
-P at 100 and puts -35 in Q. After a further receipt of 65, Q is -100 and the
-two columns sum to zero. Opening-July 1382 and 2100 footnotes are excluded.
+Q at 100 and puts -35 in R, giving Net AR of 65. After a further receipt of 65,
+R is -100 and Net AR is zero. Opening-July 1382 and 2100 footnotes are excluded.
 See the open
 [source rules #25](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/25)
 and [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44)

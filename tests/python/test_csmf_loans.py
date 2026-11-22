@@ -692,7 +692,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(summary.cell(row, 12).value, f"=SUM(J{row}:K{row})")
                 self.assertEqual(summary.cell(row + 13, 5).value, f"='{loan.title}'!{total_cells['Loan Total']}")
                 ar_row, = [cell.row for cell in loan["A"] if cell.value == "AR"]
-                for column, direction in ((16, "Debit"), (17, "Credit")):
+                for column, direction in ((17, "Debit"), (18, "Credit")):
                     self.assertEqual(summary.cell(row, column).value,
                                      f'=ROUND(-SUMIFS(\'{loan.title}\'!H{ar_row}:H{ar_row},'
                                      f'\'{loan.title}\'!G{ar_row}:G{ar_row},"{direction}"),2)')
@@ -705,8 +705,8 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual([summary[cell].value for cell in ("C32", "C33", "C34", "C35")], [None] * 4)
         self.assertEqual(summary["C33"].number_format, "mm/dd/yyyy")
         self.assertEqual(summary.page_setup.orientation, "landscape")
-        self.assertIn("$A$1:$Q$35", str(summary.print_area))
-        self.assertTrue({"A1:Q1", "A5:H5", "J5:L5", "A18:L18", "A31:D31"}.issubset(
+        self.assertIn("$A$1:$S$35", str(summary.print_area))
+        self.assertTrue({"A1:S1", "A5:H5", "J5:L5", "N4:P4", "Q4:S4", "A18:L18", "A31:D31"}.issubset(
             {str(region) for region in summary.merged_cells}))
         all_text = " ".join(str(cell.value) for row in summary for cell in row if cell.value is not None)
         for obsolete in ("Banner", "Acct 4580", "Acct 4511", "'A 4580'", "'A 4511'", "[1]", "-1360", "-1365"):
@@ -744,7 +744,7 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(monthly.cell(row, column).value, summary.cell(row, column).value)
             ar_row, = [cell.row for cell in loan["A"] if cell.value == "AR"]
             cutoff = f',\'{loan.title}\'!C{ar_row}:C{ar_row},"<"&EDATE($D$3,1)'
-            for column in (16, 17):
+            for column in (17, 18):
                 fy_formula = summary.cell(row, column).value
                 self.assertEqual(monthly.cell(row, column).value,
                                  fy_formula.removesuffix("),2)") + cutoff + "),2)")
@@ -752,10 +752,17 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(monthly.cell(row + 13, column).value, summary.cell(row + 13, column).value)
         self.assertEqual(monthly["D14"].value, summary["D14"].value)
         for sheet in (monthly, summary):
+            self.assertEqual([cell.value for cell in sheet[5][13:19]], [
+                "Total Due to\nFoundation", "Total Paid to\nFoundation", "Net AP",
+                "Total Due From\nFoundation", "Total Paid From\nFoundation", "Net AR",
+            ])
             self.assertEqual(sheet["N14"].value, '=IF(COUNT(N7:N13)=ROWS(N7:N13),SUM(N7:N13),"Review")')
             self.assertEqual(sheet["O14"].value, '=IF(COUNT(O7:O13)=ROWS(O7:O13),SUM(O7:O13),"Review")')
-            self.assertEqual(sheet["P14"].value, "=SUM(P7:P13)")
             self.assertEqual(sheet["Q14"].value, "=SUM(Q7:Q13)")
+            self.assertEqual(sheet["R14"].value, "=SUM(R7:R13)")
+            for row in range(7, 15):
+                self.assertEqual(sheet[f"P{row}"].value, f'=IF(COUNT(N{row}:O{row})=2,ROUND(SUM(N{row}:O{row}),2),"Review")')
+                self.assertEqual(sheet[f"S{row}"].value, f"=ROUND(SUM(Q{row}:R{row}),2)")
 
     def test_foundation_ap_matches_memo_qualified_journals_including_late_fees(self):
         board = "694513"
