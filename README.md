@@ -120,7 +120,8 @@ summary of all uploaded FY activity, while **Current Month Recon** shows activit
 for the latest uploaded month. Its beginning balance uses the raw FY opening plus
 1621 debits minus credits dated before that month. Both tabs show Foundation
 AP and AR due and paid through the report month. As of 0.30.25, Pending Items
-compares raw and adjusted 1621 ending principal. See the
+compares raw and adjusted 1621 ending principal. As of 0.30.27, **CSMF Payable**
+drafts the Workday journal for untransferred Foundation collections. See the
 [CSMF technical guide](data_processing/csmf_loans/README.md).
 
 **W&F - Banner Recon** (0.23.4) compares one combined Banner collections

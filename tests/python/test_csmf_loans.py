@@ -620,7 +620,10 @@ class CsmfTests(unittest.TestCase):
         self.write_journal([journal_row(memo='=HYPERLINK("https://invalid.example")')])
         self.run_workflow()
         book = self.workbook()
-        self.assertEqual(book.sheetnames[:9], ["Current Month Recon", "Current FY Recon", *(f"{name} - {project}" for project, name in LOANS.items())])
+        self.assertEqual(book.sheetnames[:10], [
+            "Current Month Recon", "Current FY Recon", "CSMF Payable",
+            *(f"{name} - {project}" for project, name in LOANS.items()),
+        ])
         self.assertEqual(book.active.title, "Current Month Recon")
         self.assertEqual(book["Parsons - 694511"]["E10"].data_type, "s")
         self.assertEqual(book["Journal Lines"]["G2"].data_type, "s")
@@ -832,6 +835,84 @@ class CsmfTests(unittest.TestCase):
             self.assertIn('"Review AP — 2881"', summary["N10"].value)
         self.assertIn('"<"&EDATE($D$3,1)', book["Current Month Recon"]["O9"].value)
         self.assertNotIn("EDATE", book["Current FY Recon"]["O9"].value)
+
+    def test_payable_draft_carries_untransferred_collections_and_uses_latest_month_memos(self):
+        board = {"project": "694513", "debit": None, "memo": "Unisa pmt synthetic collections"}
+        prior = {"project": "694513", "day": "2026-09-08", "journal": "PRIOR",
+                 "source": "Manual Journal EIB", "memo": "CSM Board CSMF Payable Jul - Aug"}
+        ar = {"project": "694514", "day": "2026-09-20", "journal": "AR",
+              "source": "Manual Journal EIB", "memo": "Synthetic receivable"}
+        rows = [
+            journal_row(day="2026-08-31", credit=300, **board),
+            journal_row(day="2026-08-31", account="5909R", credit=30, **board),
+            journal_row(day="2026-07-31", account="8309R", credit=5, **board),
+            journal_row(account="2402", debit=None, credit=335, **prior),
+            journal_row(account="2881", debit=300, **prior),
+            journal_row(account="5909R", debit=30, **prior),
+            journal_row(account="8309R", debit=5, **prior),
+            journal_row(day="2026-09-30", credit=50, **board),
+            journal_row(day="2026-09-30", account="5909R", credit=5, **board),
+            journal_row(day="2026-10-31", credit=60, **board),
+            journal_row(day="2026-10-31", account="5909R", credit=6, **board),
+            journal_row(day="2026-10-31", account="8309R", credit=3, **board),
+            journal_row(project="694514", day="2026-09-30", debit=None, credit=90,
+                        memo="UNISA PMT synthetic principal"),
+            journal_row(project="694514", day="2026-10-15", debit=100, source="SIS"),
+            journal_row(project="694514", day="2026-10-16", debit=None, credit=40, memo="Write-off"),
+            journal_row(account="1382", debit=100, **ar),
+            journal_row(account="2881", debit=None, credit=100, **ar),
+        ]
+        self.write_journal(rows)
+        self.assertTrue(self.run_workflow().success)
+        sheet = self.workbook()["CSMF Payable"]
+        self.assertEqual(sheet["A2"].value, "FY2027 | Uploaded periods: P01, P02, P03, P04")
+        self.assertEqual(sheet["A3"].value, "Line memo month: October 2026")
+        self.assertEqual(tuple(cell.value for cell in sheet[7]),
+                         ("Ledger Acct", "Debit", "Credit", "Memo", "Ext Ref ID", "SC", "RC",
+                          "Grant", "Proj", "Oper", "CC", "Bank Acct", "Additional Worktags"))
+        self.assertEqual(
+            [(a, b, c, rc, project) for a, b, c, _, _, _, rc, _, project, *_ in
+             sheet.iter_rows(min_row=8, max_row=13, values_only=True)],
+            [("2881", 110, None, None, "694513"), ("5909R", 11, None, "4580", "694513"),
+             ("8309R", 3, None, "4511", "694513"),
+             ("2402", None, "=ROUND(SUM(B8:B10),2)", None, "694513"),
+             ("2881", 90, None, None, "694514"),
+             ("2402", None, "=ROUND(SUM(B12:B12),2)", None, "694514")],
+        )
+        self.assertEqual([cell.value for cell in sheet["D"][7:13]],
+                         ["CSM Board CSMF Payable Oct"] * 4 + ["Welch CSMF Payable Oct"] * 2)
+        self.assertEqual([c.value for c in sheet[14][:3]],
+                         ["Totals", "=ROUND(SUM(B8:B13),2)", "=ROUND(SUM(C8:C13),2)"])
+
+        # A subsequent upload includes the posted draft and removes it from the next draft.
+        for project, lines in (("694513", (("2881", 110), ("5909R", 11), ("8309R", 3))),
+                               ("694514", (("2881", 90),))):
+            posted = {"project": project, "day": "2026-10-31", "journal": "OCT-PAYABLE",
+                      "source": "Manual Journal EIB", "memo": f"{LOANS[project]} CSMF Payable Oct"}
+            rows.extend(journal_row(account=account, debit=debit, **posted) for account, debit in lines)
+            rows.append(journal_row(account="2402", debit=None, credit=sum(debit for _, debit in lines), **posted))
+        self.write_journal(rows)
+        output = self.root / "after-payable.xlsx"
+        self.assertTrue(self.run_workflow(output=output).success)
+        sheet = self.workbook(output)["CSMF Payable"]
+        self.assertEqual(sheet["A4"].value, "No untransferred collections in the uploaded periods.")
+        self.assertEqual([c.value for c in sheet[8][:3]], ["Totals", 0, 0])
+
+    def test_payable_draft_flags_unposted_or_unmatched_transfers(self):
+        unposted = {"source": "Manual Journal EIB", "journal": "IN-PROGRESS", "memo": "CSMF Payable Oct"}
+        write_csv(self.journal, JOURNAL_HEADERS + ["Status"], [
+            [*journal_row(debit=None, credit=100, memo="Unisa pmt synthetic"), "Posted"],
+            [*journal_row(account="2402", debit=None, credit=100, **unposted), "In Progress"],
+            [*journal_row(account="2881", debit=100, **unposted), "In Progress"],
+            [*journal_row(project="694512", account="2402", debit=None, credit=75, **unposted), "Posted"],
+            [*journal_row(project="694513", debit=None, credit=25, memo="Unisa pmt synthetic"), "Posted"],
+            [*journal_row(project="694513", debit=None, credit=40, memo="Unisa pmt synthetic"), "In Progress"],
+        ])
+        self.assertTrue(self.run_workflow().success)
+        sheet = self.workbook()["CSMF Payable"]
+        self.assertEqual(sheet["A4"].value, "Review before posting — payable amounts omitted for Parsons, Combined.")
+        self.assertEqual([sheet[f"{column}8"].value for column in ("A", "B", "I")], ["2881", 25, "694513"])
+        self.assertEqual(sheet["A10"].value, "Totals")
 
     def test_foundation_ar_separates_bookings_reclasses_and_receipts(self):
         welch = "694514"

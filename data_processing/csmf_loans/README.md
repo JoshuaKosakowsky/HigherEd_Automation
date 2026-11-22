@@ -394,6 +394,33 @@ See the open
 and [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44)
 for the remaining accounting work.
 
+### CSMF Payable journal draft
+
+As of 0.30.27, **CSMF Payable** drafts the Workday journal for collections
+still awaiting transfer. Upload the FY activity through the report month,
+including the source collections and any already-posted payable journals.
+The draft counts credits in 1621, 5909R, and 8309R from **Manual Journal** with
+a line memo beginning `Unisa pmt`. When supplied, **Status** identifies
+posted activity. The draft subtracts matched payable journal debits by
+project and account, using the same journal match as the recon summaries.
+SIS activity, AR reclasses, and other adjustments are outside this draft.
+
+Each project gets debit lines for its remaining **2881** principal, **5909R**
+interest with **RC 4580**, and **8309R** late fees with **RC 4511**. The
+**2402** credit sums that project's debits. Zero lines are omitted and the
+bottom row totals both sides. Line memos use `<Loan> CSMF Payable <Mon>`
+with the latest included Accounting Date month, even when collections span
+several periods. The sheet uses imported GA values, so rerun after a posting
+appears in GA to refresh the draft.
+
+Unmatched or unposted payable journals and transfers that exceed verified
+collections flag the affected project for review and omit its draft lines.
+For example, if a September journal transfers August principal 300,
+interest 30, and fees 5, later untransferred collections of principal 110,
+interest 11, and fees 3 produce a 2402 credit of 124 with `Oct` in the memo
+on an October run. Once the new journal is posted and included in GA, those
+collections no longer produce draft lines.
+
 ### Prior fiscal year payment footnote
 
 Owner clarification in 0.30.7 moves a journal line to the bottom of its loan tab
@@ -524,7 +551,8 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
 
 Additional 1621 classifications (including any Adjustment category), AP
 activity outside the confirmed payable journal pattern, independent balance
-tie-outs, further Adjusted Amount rules, and JE preparation remain deferred.
+tie-outs, further Adjusted Amount rules, and receivable journal preparation
+remain deferred.
 Section subtotals sum the editable Adjusted Amount cells; they are not completed
 reconciled balances.
 

@@ -63,7 +63,8 @@ def project_number(value: object, *, worktags: bool = False) -> str:
 
 
 def read_journal(path: Path) -> SourceData:
-    return read_source_table(path, "Find Journal Lines - GA", JOURNAL_ALIASES, tuple(JOURNAL_ALIASES))
+    return read_source_table(path, "Find Journal Lines - GA",
+                             JOURNAL_ALIASES | {"status": ("Status",)}, tuple(JOURNAL_ALIASES))
 
 
 def read_trial_balance(path: Path) -> SourceData:
@@ -112,6 +113,7 @@ class Activity:
     direction: str
     source_row: int
     prior_year_activity: bool = False
+    status: str = ""
 
     @property
     def label(self) -> str:
@@ -205,7 +207,8 @@ def prepare_activity(source: SourceData, fiscal_year: int) -> LoanActivity:
                                     and journal_source.casefold() == "supplier invoice payment")))
         rows.append(Activity(project, account, section, text(source.value(row, "journal")), day,
                              journal_source, text(source.value(row, "memo")),
-                             amount, direction, number, prior_year_activity=prior_year_activity))
+                             amount, direction, number, prior_year_activity=prior_year_activity,
+                             status=text(source.value(row, "status"))))
         periods.add(period)
         if prior_year_activity:
             kind = "accounts receivable activity" if account == "1382" else "payment"
