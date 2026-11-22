@@ -20,7 +20,7 @@ from app.gui.models import (
 from shared.banner.term import get_banner_term
 from shared.mines_paths import (
     MinesPathError, get_csmf_foundation_filing_directory, get_graduate_contract_recon_directory,
-    get_refund_review_directory,
+    get_refund_review_directory, get_wf_recon_filing_directory,
 )
 
 
@@ -66,6 +66,15 @@ def _refund_review_output() -> Path | str:
         return ""
     term = get_banner_term(now.date()).code
     return directory / f"refund_review_{term}_{now:%Y%m%d_%H%M%S}.xlsx"
+
+
+def _wf_recon_output() -> Path | str:
+    now = datetime.now()
+    try:
+        directory = get_wf_recon_filing_directory(now.date())
+    except MinesPathError:
+        return ""
+    return directory / f"WF_Banner_Recon_{now:%Y%m%d_%H%M%S}.xlsx"
 
 
 def _defer_runner(service: str, function: str) -> WorkflowRunner:
@@ -367,9 +376,9 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 file_types=(("CSV or Excel files", "*.csv *.xls *.xlsx *.xlsm"),),
                 help_text="Drop CSV, XLS, XLSX or XLSM files together; no manual conversion needed. Names route recognized reports to Collections or Returned tabs; other files stay separate."),
             ParameterDefinition(key="output_file", label="Save reconciliation as", kind=ParameterKind.OUTPUT_FILE,
-                default_factory=lambda: PROJECT_ROOT / "data" / f"WF_Banner_Recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                default_factory=_wf_recon_output,
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
-                help_text="Choose a new filename in an approved folder. Source files and existing results are never overwritten."),
+                help_text="Defaults to the current fiscal period in shared OneDrive. If blank, sync the W&F Quarterly Recon folder or choose an existing approved output folder."),
         ),
     ),
     WorkflowDefinition(

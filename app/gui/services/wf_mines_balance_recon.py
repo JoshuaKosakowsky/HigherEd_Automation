@@ -1,6 +1,7 @@
 """Upload-based W&F review, with administrator-only complete PROD extracts."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from app.gui import APP_VERSION
@@ -19,7 +20,9 @@ from shared.insights.query_catalog import get_query
 from shared.insights.report_results import InsightsReportResultError, checked_report_result
 from shared.insights.session_auth import InsightsSessionError, build_authenticated_client
 from shared.insights.session_cache import InsightsCredentialError
-from shared.mines_paths import get_shared_gui_access_path
+from shared.mines_paths import (
+    MinesPathError, get_shared_gui_access_path, get_shared_wf_quarterly_recon_directory,
+)
 
 
 def _safe_extraction_failure(error: Exception, stage: str) -> str:
@@ -60,6 +63,32 @@ def _safe_extraction_failure(error: Exception, stage: str) -> str:
             'You can upload the complete combined Insights export instead. No workbook was saved.')
 
 
+def _ensure_shared_output_folder(output: Path) -> None:
+    if not output.is_absolute() or output.suffix.lower() != '.xlsx' or output.parent.is_dir():
+        return
+    try:
+        base = get_shared_wf_quarterly_recon_directory().resolve()
+        folder = output.parent.resolve()
+        fiscal_year, period = folder.relative_to(base).parts
+    except (MinesPathError, ValueError):
+        return
+    if (re.fullmatch(r'FY[0-9]{2}', fiscal_year) is None
+            or re.fullmatch(r'P(?:0[1-9]|1[0-2]) - [A-Z][a-z]+ [0-9]{4}', period) is None):
+        return
+    if not base.is_dir():
+        raise ValueError(
+            'The shared OneDrive W&F Quarterly Recon folder is unavailable. '
+            'Check that the Bursar library is synced or choose an existing approved output folder.'
+        )
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ValueError(
+            f'Could not create the W&F output folder: {folder}. '
+            'Check OneDrive sync and folder permissions.'
+        ) from error
+
+
 def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
     percentage = load_submission_percentage()
     source = context.parameters.get('banner_source')
@@ -87,6 +116,7 @@ def run_wf_mines_balance_recon(context: WorkflowContext) -> WorkflowResult:
     if any(not path.is_file() for path in manual_paths):
         raise ValueError('Upload the combined Insights report before running.')
     output = Path(context.parameters['output_file'])
+    _ensure_shared_output_folder(output)
     validate_output(output, (*files, *manual_paths))
     if source == 'manual':
         context.progress.report('Reading the combined Insights upload')

@@ -21,7 +21,19 @@ change Banner or W&F records.
   Every file whose name contains `12007`, `12009`, `12559` or `12561` is omitted
   completely, including extra worksheets, because these are Unisa verifications.
   All files may remain selected in the upload batch; source files are untouched.
-- **Outputs**: choose an approved existing folder and a new XLSX filename.
+- **Outputs** (0.30.37): **Save reconciliation as** defaults to the workstation's
+  current fiscal period in shared Mines OneDrive. For a November 2026 run, the
+  workbook goes in:
+
+  ```text
+  %OneDriveCommercial%\GRP-Bursar Office - General\Y-Brswork\Collections\W&F\Quarterly Recon\FY27\P05 - November 2026
+  ```
+
+  Fiscal years use the ending year, with July as P01 and June as P12. The confirmed
+  run creates missing fiscal year and period folders beneath the existing synced
+  **Quarterly Recon** folder. The timestamped `WF_Banner_Recon` filename is
+  prefilled. If the shared folder is unavailable, choose a new XLSX filename in
+  an existing approved folder.
 
 Administrators can choose **Run SQL from PROD Insights** instead of uploading
 Banner data. It runs the combined `collections_tracking` query once, with fixed

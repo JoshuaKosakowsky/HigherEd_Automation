@@ -56,10 +56,11 @@ class QtGuiTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.enterContext(patch.dict(os.environ, {"OneDriveCommercial": str(self.root / "OneDrive")}))
-        self.refund_folder = (
-            self.root / "OneDrive" / "GRP-Bursar Office - General" / "Y-Brswork" / "Refund" / "RFND"
-        )
+        bursar = self.root / "OneDrive" / "GRP-Bursar Office - General" / "Y-Brswork"
+        self.refund_folder = bursar / "Refund" / "RFND"
         self.refund_folder.mkdir(parents=True)
+        self.wf_quarterly_recon = bursar / "Collections" / "W&F" / "Quarterly Recon"
+        self.wf_quarterly_recon.mkdir(parents=True)
         self.policy = self.root / "policy.json"
         self.payload = {
             "schemaVersion": 3,
@@ -490,6 +491,7 @@ class QtGuiTests(unittest.TestCase):
         parameters = page._parse_parameters()
         self.assertEqual(parameters['wf_files'], tuple(paths))
         self.assertEqual(parameters['banner_source'], 'manual')
+        self.assertEqual(parameters['output_file'].parents[2], self.wf_quarterly_recon)
         self.assertNotIn('detail_codes', parameters)
 
     def test_wf_admin_queries_combined_report_but_keeps_agency_upload_and_prod_review(self):
@@ -512,6 +514,7 @@ class QtGuiTests(unittest.TestCase):
         with patch.object(page, '_confirm', side_effect=lambda context: captured.append(context) or False):
             page._run()
         self.assertEqual(captured[0].mode, WorkflowMode.PRODUCTION)
+        self.assertEqual(captured[0].parameters['output_file'].parents[2], self.wf_quarterly_recon)
         page.recon_source.setCurrentIndex(page.recon_source.findData('manual'))
         self.assertFalse(page.inputs['banner_file'].isHidden())
         self.assertNotIn('detail_codes', page.inputs)

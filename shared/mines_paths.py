@@ -134,6 +134,27 @@ def get_csmf_foundation_filing_directory(
     return base / fiscal_year / period
 
 
+def get_shared_wf_quarterly_recon_directory(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    return (get_mines_onedrive_root(environment) / BURSAR_RELATIVE_DIRECTORY
+            / "Collections" / "W&F" / "Quarterly Recon")
+
+
+def get_wf_recon_filing_directory(
+    day: date, environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Build the fiscal filing path beneath the synced W&F Quarterly Recon folder."""
+    base = get_shared_wf_quarterly_recon_directory(environment)
+    if not base.is_dir():
+        raise MinesPathError(
+            f"The shared OneDrive W&F Quarterly Recon folder is unavailable: {base}. "
+            "Check that the Bursar library is synced."
+        )
+    fiscal_year, period = _fiscal_folder_names(day)
+    return base / fiscal_year / period
+
+
 def ensure_hidden_directory(
     directory: Path,
     *,

@@ -79,6 +79,47 @@ class WFMinesBalanceTests(unittest.TestCase):
     def context(self, mode=None, cancellation=None):
         return WorkflowContext('wf_mines_balance_recon', self.params, mode, cancellation=cancellation)
 
+    def test_creates_missing_fiscal_folders_for_shared_quarterly_recon(self):
+        onedrive = self.root / 'OneDrive'
+        base = (onedrive / 'GRP-Bursar Office - General' / 'Y-Brswork'
+                / 'Collections' / 'W&F' / 'Quarterly Recon')
+        base.mkdir(parents=True)
+        output = base / 'FY27' / 'P05 - November 2026' / 'WF_Banner_Recon_20261122_090000.xlsx'
+        self.params['output_file'] = output
+        token = CancellationToken()
+        token.request()
+        with patch.dict('os.environ', {'OneDriveCommercial': str(onedrive)}):
+            with self.assertRaises(WorkflowCancelled):
+                run_wf_mines_balance_recon(self.context(cancellation=token))
+            self.assertFalse((base / 'FY27').exists())
+            result = run_wf_mines_balance_recon(self.context())
+            self.assertEqual(result.output_path, output)
+            self.assertTrue(result.success)
+            original = output.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'Output already exists'):
+                run_wf_mines_balance_recon(self.context())
+            self.assertEqual(output.read_bytes(), original)
+        book = load_workbook(output, read_only=True)
+        try:
+            self.assertEqual(book.sheetnames[:2], ['Reconciliation', 'Students in Collections'])
+        finally:
+            book.close()
+
+    def test_creation_requires_existing_shared_quarterly_recon_folder(self):
+        onedrive = self.root / 'OneDrive'
+        base = (onedrive / 'GRP-Bursar Office - General' / 'Y-Brswork'
+                / 'Collections' / 'W&F' / 'Quarterly Recon')
+        base.parent.mkdir(parents=True)
+        with patch.dict('os.environ', {'OneDriveCommercial': str(onedrive)}):
+            self.params['output_file'] = base / 'FY27' / 'P05 - November 2026' / 'review.xlsx'
+            with self.assertRaisesRegex(ValueError, 'Quarterly Recon folder is unavailable'):
+                run_wf_mines_balance_recon(self.context())
+            self.assertFalse(base.exists())
+            self.params['output_file'] = self.root / 'other' / 'FY27' / 'P05 - November 2026' / 'review.xlsx'
+            with self.assertRaisesRegex(ValueError, 'output folder does not exist'):
+                run_wf_mines_balance_recon(self.context())
+            self.assertFalse((self.root / 'other').exists())
+
     def test_manual_combines_every_worksheet_preserves_values_formats_without_sources_tab(self):
         originals = {path: path.read_bytes() for path in (self.holds, self.activity, self.agency)}
         with patch('app.gui.services.wf_mines_balance_recon.build_authenticated_client') as auth:

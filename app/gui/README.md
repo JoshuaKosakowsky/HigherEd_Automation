@@ -355,6 +355,12 @@ PROD query for administrators. Staff use upload mode; the existing
 `wf_mines_balance_recon` permission remains unchanged. Legacy separate holds and
 transaction exports must be replaced with the combined report.
 
+As of 0.30.37, **Save reconciliation as** defaults to the run date's fiscal
+folder in shared OneDrive. A November 2026 run uses
+`GRP-Bursar Office - General\Y-Brswork\Collections\W&F\Quarterly Recon\FY27\P05 - November 2026`.
+The confirmed run creates missing fiscal year and period folders. Staff can
+also choose a new workbook path in an existing approved folder.
+
 The W&F section accepts batch CSV/XLS/XLSX/XLSM files. From patch 0.23.5,
 commission is maintained by administrators in
 `config/institutions/mines/wf_reconciliation.json` (0.25 = 25%), outside the

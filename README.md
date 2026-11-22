@@ -127,6 +127,8 @@ report with batch Williams and Fudge uploads. Administrators may query PROD;
 staff upload the combined report. Output includes Students in Collections,
 W&F Collections/Returned and Reconciliation, with fee-adjusted principal totals,
 account differences and returned flags. Unisa verification filenames are omitted.
+As of 0.30.37, the default output is the current fiscal year and period under
+`Collections\W&F\Quarterly Recon` in shared Mines OneDrive.
 See the [W&F workflow guide](data_processing/wf_mines_balance_recon/README.md).
 
 Administrators can run **Historical Trends** with direct PROD Insights extraction,

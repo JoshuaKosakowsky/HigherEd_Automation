@@ -29,9 +29,9 @@ class WorkflowDefaultTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        onedrive = self.root / "OneDrive"
-        self.enterContext(patch.dict(os.environ, {"OneDriveCommercial": str(onedrive)}))
-        (onedrive / "GRP-Bursar Office - General" / "Y-Brswork" / "Refund" / "RFND").mkdir(parents=True)
+        self.onedrive = self.root / "OneDrive"
+        self.enterContext(patch.dict(os.environ, {"OneDriveCommercial": str(self.onedrive)}))
+        (self.onedrive / "GRP-Bursar Office - General" / "Y-Brswork" / "Refund" / "RFND").mkdir(parents=True)
         self.executor = WorkflowExecutor(logging.getLogger("test-defaults"), self.root / "test.log")
         clock_patch = patch("app.gui.workflow_registry.date")
         self.clock = clock_patch.start()
@@ -144,6 +144,31 @@ class WorkflowDefaultTests(unittest.TestCase):
         self.assertEqual(str(result["output_file"]), original_output)
         self.assertEqual(self.review(graduate)["start_date"], original_date.toString("yyyy-MM-dd"))
         self.assertEqual(self.review(trends)["first_fiscal_year"], original_year)
+
+    def test_wf_output_default_refreshes_before_review_without_creating_folders(self):
+        quarterly_recon = (self.onedrive / "GRP-Bursar Office - General" / "Y-Brswork"
+                           / "Collections" / "W&F" / "Quarterly Recon")
+        quarterly_recon.mkdir(parents=True)
+        self.clock.today.return_value = date(2026, 6, 30)
+        page = self.page("wf_mines_balance_recon")
+        self.assertEqual(Path(page.inputs["output_file"].text()),
+                         quarterly_recon / "FY26" / "P12 - June 2026" / "WF_Banner_Recon_20260630_000000.xlsx")
+        for today, period in (
+            (date(2026, 7, 1), "P01 - July 2026"),
+            (date(2026, 11, 22), "P05 - November 2026"),
+        ):
+            with self.subTest(today=today):
+                self.clock.today.return_value = today
+                self.assertEqual(self.review(page)["output_file"],
+                                 quarterly_recon / "FY27" / period / f"WF_Banner_Recon_{today:%Y%m%d}_000000.xlsx")
+        self.assertEqual(list(quarterly_recon.iterdir()), [])
+
+    def test_wf_output_allows_an_explicit_path_without_the_synced_folder(self):
+        page = self.page("wf_mines_balance_recon")
+        self.assertEqual(page.inputs["output_file"].text(), "")
+        output = self.root / "chosen.xlsx"
+        page.inputs["output_file"].setText(str(output))
+        self.assertEqual(self.review(page)["output_file"], output)
 
     def test_returning_to_visible_form_refreshes_defaults_but_not_an_active_run(self):
         page = self.page("textbook_brokers")
