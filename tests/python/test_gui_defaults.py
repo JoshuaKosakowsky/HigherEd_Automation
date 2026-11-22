@@ -5,7 +5,7 @@ import os
 import queue
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,11 +29,16 @@ class WorkflowDefaultTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        onedrive = self.root / "OneDrive"
+        self.enterContext(patch.dict(os.environ, {"OneDriveCommercial": str(onedrive)}))
+        (onedrive / "GRP-Bursar Office - General" / "Y-Brswork" / "Refund" / "RFND").mkdir(parents=True)
         self.executor = WorkflowExecutor(logging.getLogger("test-defaults"), self.root / "test.log")
         clock_patch = patch("app.gui.workflow_registry.date")
         self.clock = clock_patch.start()
         self.addCleanup(clock_patch.stop)
         self.clock.today.return_value = date(2026, 10, 31)
+        timestamp = self.enterContext(patch("app.gui.workflow_registry.datetime"))
+        timestamp.now.side_effect = lambda: datetime.combine(self.clock.today.return_value, time())
 
     def page(self, workflow_id):
         page = WorkflowDetailPage(None, get_workflow(workflow_id), self.executor,

@@ -56,6 +56,10 @@ class QtGuiTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.enterContext(patch.dict(os.environ, {"OneDriveCommercial": str(self.root / "OneDrive")}))
+        self.refund_folder = (
+            self.root / "OneDrive" / "GRP-Bursar Office - General" / "Y-Brswork" / "Refund" / "RFND"
+        )
+        self.refund_folder.mkdir(parents=True)
         self.policy = self.root / "policy.json"
         self.payload = {
             "schemaVersion": 3,
@@ -281,6 +285,31 @@ class QtGuiTests(unittest.TestCase):
         page.refund_source.setCurrentIndex(0)
         self.assertFalse(page.inputs["transaction_file"].isHidden())
         self.assertTrue(page.production_warning.isHidden())
+
+    def test_refund_review_refreshes_shared_output_for_fiscal_rollover(self):
+        window = self.open_app()
+        with patch("app.gui.workflow_registry.datetime") as clock:
+            clock.now.return_value = datetime(2026, 6, 30, 23, 59)
+            window.show_workflow(get_workflow("refund_review"))
+            page = window.current_page
+            june = self.refund_folder / "FY26" / "Daily Pending Refunds" / "P12 - June 2026"
+            self.assertEqual(Path(page.inputs["output_file"].text()).parent, june)
+            page.refund_source.setCurrentIndex(page.refund_source.findData("sql"))
+            clock.now.return_value = datetime(2026, 7, 1, 0, 1)
+            with patch.object(page, "_confirm", return_value=False) as confirmation:
+                page._run()
+            output = confirmation.call_args.args[0].parameters["output_file"]
+            july = self.refund_folder / "FY27" / "Daily Pending Refunds" / "P01 - July 2026"
+            self.assertEqual(output.parent, july)
+            self.assertTrue(output.name.endswith("_20260701_000100.xlsx"))
+            self.assertEqual(list(self.refund_folder.iterdir()), [])
+
+    def test_refund_form_offers_no_default_when_shared_refund_folder_is_missing(self):
+        self.refund_folder.rmdir()
+        window = self.open_app()
+        window.show_workflow(get_workflow("refund_review"))
+        self.assertEqual(window.current_page.inputs["output_file"].text(), "")
+        self.assertFalse(self.refund_folder.exists())
 
     def test_refund_is_admin_only_even_with_explicit_staff_grant(self):
         self.payload["views"]["analyst"]["workflows"] = ["refund_review"]

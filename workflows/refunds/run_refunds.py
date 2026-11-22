@@ -14,6 +14,7 @@ from data_processing.refunds.pipeline import (
 from data_processing.refunds.terms import RefundParameters, derive_target_term, validate_term
 from shared.insights.config import InsightsSettings
 from shared.insights.session_auth import build_authenticated_client
+from shared.mines_paths import MinesPathError, get_refund_review_directory
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run one account for validation. The value is not written to logs.",
     )
     parser.add_argument("--extract-dir", type=Path)
-    parser.add_argument("--output-file", type=Path)
+    parser.add_argument(
+        "--output-file", type=Path,
+        help="Workbook path (default: the current fiscal period in shared Mines OneDrive).",
+    )
     parser.add_argument(
         "--transactions-file",
         type=Path,
@@ -99,13 +103,17 @@ def main() -> int:
     run_date = arguments.run_date
     target_term = arguments.target_term or derive_target_term(run_date)
     batch_count = 1 if arguments.cwid else arguments.batch_count
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     extract_directory = arguments.extract_dir or (
         REPOSITORY_ROOT / "data" / "refunds" / f"extract_{target_term}"
     )
-    output_file = arguments.output_file or (
-        REPOSITORY_ROOT / "data" / "refunds" / f"refund_review_{target_term}_{timestamp}.xlsx"
-    )
+    output_file = arguments.output_file
+    if output_file is None:
+        now = datetime.now()
+        try:
+            directory = get_refund_review_directory(now.date())
+        except MinesPathError as error:
+            parser.error(f"{error} Use --output-file to specify an approved location.")
+        output_file = directory / f"refund_review_{target_term}_{now:%Y%m%d_%H%M%S}.xlsx"
     parameters = RefundParameters(
         target_term=target_term,
         previous_term_override=arguments.previous_term,

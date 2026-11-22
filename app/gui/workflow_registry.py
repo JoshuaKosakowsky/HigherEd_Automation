@@ -18,7 +18,9 @@ from app.gui.models import (
     WorkflowMode, WorkflowResult, WorkflowRunner,
 )
 from shared.banner.term import get_banner_term
-from shared.mines_paths import MinesPathError, get_graduate_contract_recon_directory
+from shared.mines_paths import (
+    MinesPathError, get_graduate_contract_recon_directory, get_refund_review_directory,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +46,16 @@ def _graduate_contract_output() -> Path | str:
     except MinesPathError:
         return ""
     return directory / f"1305_recon_{now:%Y%m%d_%H%M%S}.xlsx"
+
+
+def _refund_review_output() -> Path | str:
+    now = datetime.now()
+    try:
+        directory = get_refund_review_directory(now.date())
+    except MinesPathError:
+        return ""
+    term = get_banner_term(now.date()).code
+    return directory / f"refund_review_{term}_{now:%Y%m%d_%H%M%S}.xlsx"
 
 
 def _defer_runner(service: str, function: str) -> WorkflowRunner:
@@ -250,17 +262,11 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 key="output_file",
                 label="Save refund review as",
                 kind=ParameterKind.OUTPUT_FILE,
-                default_factory=lambda: (
-                    PROJECT_ROOT
-                    / "data"
-                    / "refunds"
-                    / (
-                        f"refund_review_{_current_term_code()}_"
-                        f"{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-                    )
-                ),
+                default_factory=_refund_review_output,
                 help_text=(
-                    "For safety, an existing review workbook will not be overwritten."
+                    "Defaults to the current fiscal period in shared OneDrive. "
+                    "If blank, sync the Bursar Refund/RFND folder or choose an approved output location. "
+                    "Existing review workbooks are protected from overwrite."
                 ),
                 file_types=(("Excel workbook", "*.xlsx"),),
                 default_extension=".xlsx",

@@ -81,17 +81,36 @@ def get_shared_reconciliations_directory(
     return get_mines_onedrive_root(environment) / BURSAR_RELATIVE_DIRECTORY / "Reconciliations"
 
 
-def get_graduate_contract_recon_directory(
-    day: date, environment: Mapping[str, str] | None = None,
-) -> Path:
-    """Build the shared 1305 filing directory for the workstation's run date."""
+def _fiscal_folder_names(day: date) -> tuple[str, str]:
     # Keep workbook imports out of the app's startup path.
     from data_processing.shared.source_exports import fiscal_scope
 
     fiscal_year, period, _ = fiscal_scope(day)
     month = _MONTH_NAMES[day.month - 1]
-    return (get_shared_reconciliations_directory(environment) / f"FY{fiscal_year % 100:02d}"
-            / GRADUATE_CONTRACT_RECON_FOLDER / f"{period} - {month} {day.year}")
+    return f"FY{fiscal_year % 100:02d}", f"{period} - {month} {day.year}"
+
+
+def get_graduate_contract_recon_directory(
+    day: date, environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Build the shared 1305 filing directory for the workstation's run date."""
+    fiscal_year, period = _fiscal_folder_names(day)
+    return (get_shared_reconciliations_directory(environment) / fiscal_year
+            / GRADUATE_CONTRACT_RECON_FOLDER / period)
+
+
+def get_refund_review_directory(
+    day: date, environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Build the fiscal filing path under the synced Bursar RFND folder."""
+    base = get_mines_onedrive_root(environment) / BURSAR_RELATIVE_DIRECTORY / "Refund" / "RFND"
+    if not base.is_dir():
+        raise MinesPathError(
+            f"The shared OneDrive refund folder is unavailable: {base}. "
+            "Check that the Bursar library is synced."
+        )
+    fiscal_year, period = _fiscal_folder_names(day)
+    return base / fiscal_year / "Daily Pending Refunds" / period
 
 
 def ensure_hidden_directory(

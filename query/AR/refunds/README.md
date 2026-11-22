@@ -14,9 +14,10 @@ complete result of each as XLSX or CSV:
   student mailing addresses, and Parent PLUS authorization.
 
 Python then performs the priority, fiscal-year, Title IV, Parent PLUS, and
-delivery calculations locally and creates an Excel workbook under
-`data/refunds`. That directory and its CSV extracts are ignored by Git because
-they contain student-account data.
+delivery calculations locally and creates an Excel workbook in the current
+fiscal-period folder in shared Mines OneDrive. See the [refund workflow run
+instructions](../../../workflows/refunds/README.md#run) for the filing path.
+Local CSV extracts are ignored by Git because they contain student-account data.
 
 The workbook separates refund methods and review queues into plain worksheets,
 without Excel tables. All tabs retain the student/parent amount and parent-delivery

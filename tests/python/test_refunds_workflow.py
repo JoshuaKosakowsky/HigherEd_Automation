@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -31,6 +33,7 @@ from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.insights.client import InsightsAPIError
 from shared.progress import ProgressReporter
 from data_processing.refunds.terms import derive_target_term, fiscal_year_start, previous_term
+from workflows.refunds.run_refunds import main as run_refunds
 
 
 TRANSACTION_COLUMNS = [
@@ -2037,6 +2040,52 @@ class RefundSubdivisionTests(unittest.TestCase):
                 self.extract(client)
         query.assert_called_once()
         self.assertFalse((self.settings.extract_directory / "transactions_000.csv").exists())
+
+
+class RefundLauncherOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        onedrive = self.root / "OneDrive"
+        self.enterContext(patch.dict("os.environ", {"OneDriveCommercial": str(onedrive)}))
+        self.refund_folder = onedrive / "GRP-Bursar Office - General" / "Y-Brswork" / "Refund" / "RFND"
+        transactions = self.root / "transactions.csv"
+        context = self.root / "context.csv"
+        metadata = ["extract_row_count", "extract_target_term"]
+        pd.DataFrame(columns=metadata + TRANSACTION_COLUMNS).to_csv(transactions, index=False)
+        pd.DataFrame(columns=metadata + CONTEXT_COLUMNS).to_csv(context, index=False)
+        self.arguments = [
+            "run_refunds", "--target-term", "202680", "--run-date", "2026-10-31",
+            "--transactions-file", str(transactions), "--context-file", str(context),
+        ]
+        self.enterContext(redirect_stdout(StringIO()))
+
+    def test_default_publishes_workbook_and_creates_fiscal_folders(self):
+        self.refund_folder.mkdir(parents=True)
+        with patch("sys.argv", self.arguments), patch("workflows.refunds.run_refunds.datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 22, 9)
+            self.assertEqual(run_refunds(), 0)
+        output = (self.refund_folder / "FY27" / "Daily Pending Refunds" / "P05 - November 2026"
+                  / "refund_review_202680_20261122_090000.xlsx")
+        workbook = load_workbook(output)
+        try:
+            self.assertIn("Direct Deposit", workbook.sheetnames)
+        finally:
+            workbook.close()
+        self.assertEqual(list(output.parent.iterdir()), [output])
+
+    def test_missing_shared_folder_requires_an_explicit_output(self):
+        with patch("sys.argv", self.arguments), redirect_stderr(StringIO()) as errors:
+            with self.assertRaises(SystemExit) as exit_result:
+                run_refunds()
+        self.assertEqual(exit_result.exception.code, 2)
+        self.assertIn("The shared OneDrive refund folder is unavailable", errors.getvalue())
+        self.assertFalse(self.refund_folder.exists())
+
+        output = self.root / "chosen.xlsx"
+        with patch("sys.argv", self.arguments + ["--output-file", str(output)]):
+            self.assertEqual(run_refunds(), 0)
+        self.assertTrue(output.is_file())
+        self.assertFalse(self.refund_folder.exists())
 
 
 class RefundCancellationTests(unittest.TestCase):

@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 3,
+  "metadata": {
+    "ownerLogin": "M20001563",
+    "updatedAt": "2026-11-22T22:50:12+00:00",
+    "updatedBy": "JPHOU"
+  },
+  "ownerProtection": null,
+  "users": {
+    "AALVARDO": {
+      "displayName": "Ashley",
+      "jobTitle": "AR Analyst",
+      "view": "analyst",
+      "active": true
+    },
+    "JPHOU": {
+      "displayName": "Jenny",
+      "jobTitle": "Bursar",
+      "view": "administrator",
+      "active": true
+    },
+    "M20000889": {
+      "displayName": "Lacey",
+      "jobTitle": "Grad Accountant",
+      "view": "grad contract sponsor",
+      "active": true
+    },
+    "M20001407": {
+      "displayName": "Shawnti",
+      "jobTitle": "Cashier",
+      "view": "cashier",
+      "active": true
+    },
+    "M20001563": {
+      "displayName": "Josh",
+      "jobTitle": "Assistant Bursar",
+      "view": "administrator",
+      "active": true
+    },
+    "SCHEUNG": {
+      "displayName": "Stanley",
+      "jobTitle": "Accounting Manager",
+      "view": "administrator",
+      "active": true
+    }
+  },
+  "views": {
+    "administrator": {
+      "workflows": [
+        "*"
+      ]
+    },
+    "analyst": {
+      "workflows": []
+    },
+    "cashier": {
+      "workflows": []
+    },
+    "grad contract sponsor": {
+      "workflows": [
+        "graduate_contract_recon"
+      ]
+    }
+  }
+}

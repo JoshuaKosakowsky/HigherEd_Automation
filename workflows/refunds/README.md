@@ -661,9 +661,23 @@ Then run from the repository root:
     -ContextFile ".\data\refunds\input\refund_context.xlsx"
 ```
 
-The output workbook is written under `data/refunds` by default. CSV and Excel
-files are excluded by `.gitignore`; never commit or move these student-account
-extracts into the repository as another file type.
+Both the desktop app and PowerShell launcher default to the current fiscal
+period in shared Mines OneDrive. A workbook generated in November 2026 goes to
+the following folder.
+
+```text
+%OneDriveCommercial%\GRP-Bursar Office - General\Y-Brswork\Refund\RFND\FY27\Daily Pending Refunds\P05 - November 2026
+```
+
+The workstation date determines the filing period, with July as P01 and the
+fiscal year named for its ending year. `-RunDate` still controls the refund
+calculation and extract recovery date. The shared `Refund\RFND` folder must be
+synced. The workflow creates missing folders below it when saving the workbook.
+To file elsewhere, choose **Save refund review as** in the app or pass
+`-OutputFile` to the launcher.
+
+CSV and Excel files are excluded by `.gitignore`. Keep student-account
+extracts out of Git.
 
 The files may remain in Downloads instead. Pass their complete paths to
 `-TransactionsFile` and `-ContextFile`; Python does not require a particular

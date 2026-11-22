@@ -134,6 +134,11 @@ The integrated workflows are:
   existing output workbooks are never overwritten. Explicit resume/offline
   options and single-account API validation remain available through the
   PowerShell launcher.
+  **Save refund review as** defaults to the workstation's current fiscal period
+  in shared Mines OneDrive. For November 2026, the folder is
+  `GRP-Bursar Office - General\Y-Brswork\Refund\RFND\FY27\Daily Pending Refunds\P05 - November 2026`.
+  The app creates missing fiscal subfolders when saving. If `Refund\RFND` is
+  unavailable, sync the shared folder or choose an approved output location.
   Zero or positive full-account balances produce no refund proposal. Cash may
   still cover other terms; proposals use only the net account credit. Applied
   aid reopened by reconstruction or source totals differing from that credit
