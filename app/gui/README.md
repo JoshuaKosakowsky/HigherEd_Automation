@@ -395,9 +395,10 @@ As of 0.30.5, 1621 SIS debits are Loan Disbursements and SIS credits are Loan
 Reversals. Sources containing Journal are Payments; other 1621 sources remain
 unclassified. As of 0.30.8, Adjusted Amount reverses every debit's sign across
 all accounts and sources, including footnoted payments, and preserves credits.
-As of 0.30.22, both views show Foundation AR bookings and receipts separately
-through the report month. Prior-year items remain footnote only. AP due and paid
-and variance remain pending. Comparison balances, notes and sign-off fields are
+As of 0.30.23, both views show Foundation AP and AR due and paid separately
+through the report month. AP uses matched Workday payable journal entries and
+flags incomplete matches for review. Prior-year items remain footnote only.
+Variance remains pending. Comparison balances, notes and sign-off fields are
 blank for review.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for

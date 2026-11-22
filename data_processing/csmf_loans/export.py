@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from decimal import Decimal
 from math import ceil
@@ -27,6 +28,10 @@ PRIOR_YEAR_FOOTNOTES = (
     ("2100", "*", "Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year."),
     ("1382", "**", "Footnote** — Prior fiscal year accounts receivable activity recorded in the current fiscal year."),
 )
+AP_DUE_LABEL = "AP due — 2402"
+AP_PAID_PREFIX = "AP paid — "
+AP_REVIEW_PREFIX = "Review AP — "
+AP_PAID_ACCOUNTS = ("2881", "5909R", "8309R")
 # Keep the reference summary's order without changing the existing loan tabs.
 RECON_LOAN_ORDER = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
 # Reference identifiers remain useful even though Unisa reports are not inputs.
@@ -50,6 +55,67 @@ def _foundation_receivable_transfers(project_rows: list[Activity]) -> set[int]:
         and sum(row.adjusted_amount for row in entries) == 0
         for row in entries if row.account == "2881"
     }
+
+
+def _foundation_payable_labels(project_rows: list[Activity]) -> dict[int, str]:
+    """Classify the due and paid sides of a loan's Workday payable journal."""
+    journals = defaultdict(list)
+    labels = {}
+    for row in project_rows:
+        due = (row.account, row.direction) == ("2402", "Credit")
+        paid = row.account in AP_PAID_ACCOUNTS and row.direction == "Debit"
+        if row.source.casefold() != "manual journal eib" or not (due or paid):
+            continue
+        # Line Memo is free text. The numeric project and journal establish
+        # identity; month wording and the spelling of the loan name can vary.
+        words = set(re.findall(r"[a-z0-9]+", row.description.casefold()))
+        payable_memo = "csmf" in words and bool(words & {"pay", "payable", "paid", "payment"})
+        if payable_memo and row.journal:
+            journals[(row.day, row.journal.casefold())].append(row)
+        elif (due or payable_memo) and row.amount:
+            labels[row.source_row] = AP_REVIEW_PREFIX + row.account
+
+    for entries in journals.values():
+        balanced = (any(row.account == "2402" and row.amount for row in entries)
+                    and sum(row.adjusted_amount for row in entries) == 0)
+        for row in entries:
+            if not balanced:
+                labels[row.source_row] = AP_REVIEW_PREFIX + row.account
+            elif row.account == "2402":
+                labels[row.source_row] = AP_DUE_LABEL
+            else:
+                labels[row.source_row] = AP_PAID_PREFIX + row.account
+    return labels
+
+
+def _foundation_payable_formulas(
+    loan_sheet: str, totals: dict[str, int], detail_rows: dict[str, tuple[int, int]], *, monthly: bool,
+) -> tuple[str, str]:
+    end = totals["loan"] - 1
+    amounts = f"{loan_sheet}!H10:H{end}"
+    labels = f"{loan_sheet}!A10:A{end}"
+    cutoff = f',{loan_sheet}!C10:C{end},"<"&EDATE($D$3,1)' if monthly else ""
+
+    def sum_labeled(label: str) -> str:
+        return f'SUMIFS({amounts},{labels},"{label}"{cutoff})'
+
+    # The signed interest subtotal already includes its transfer debit. The
+    # principal transfer is in 2881, so subtract it from collections separately.
+    due = [sum_labeled(AP_DUE_LABEL), sum_labeled(AP_PAID_PREFIX + "2881")]
+    for section in ("payment", "5909R"):
+        first, last = detail_rows[section]
+        if not monthly:
+            due.append(f"{loan_sheet}!H{totals[section]}")
+        elif first <= last:
+            due.append(f'SUMIF({loan_sheet}!C{first}:C{last},"<"&EDATE($D$3,1),'
+                       f'{loan_sheet}!H{first}:H{last})')
+    paid = ",".join(sum_labeled(AP_PAID_PREFIX + account) for account in AP_PAID_ACCOUNTS)
+    review = "+".join(f'COUNTIFS({labels},"{AP_REVIEW_PREFIX}{account}"{cutoff})'
+                      for account in ("2402", *AP_PAID_ACCOUNTS))
+    return (
+        f'=IF({review}>0,"Review",ROUND(SUM({",".join(due)}),2))',
+        f'=IF({review}>0,"Review",ROUND(SUM({paid}),2))',
+    )
 
 
 def _current_recon_sheet(
@@ -81,7 +147,7 @@ def _current_recon_sheet(
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
         "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only."
                 if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month."),
-        "A17": "AR balance = due plus paid through the report month. Prior-year items are footnoted. AP and variance are pending.",
+        "A17": "AP and AR balances are due plus paid through the report month. Review flagged AP journal lines. Prior-year activity is footnoted.",
         "A29": ("Blank beginning balances remain unknown; GL is the cumulative Loan Total through this month. Shaded blanks are review inputs."
                 if monthly else "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs."),
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
@@ -127,9 +193,9 @@ def _current_recon_sheet(
         # All three columns already carry the confirmed Adjusted Amount signs.
         sheet.cell(row, 8, f"=SUM(E{row}:G{row})")
         sheet.cell(row, 12, f"=SUM(J{row}:K{row})")
-        # A posted 2402 transfer alone cannot establish what's still owed.
-        sheet.cell(row, 14, "Pending")
-        sheet.cell(row, 15, "Pending")
+        due, paid = _foundation_payable_formulas(loan_sheet, totals, detail_rows[project], monthly=monthly)
+        sheet.cell(row, 14, due)
+        sheet.cell(row, 15, paid)
         first_ar, last_ar = detail_rows[project]["1382"]
         for column, direction in ((16, "Debit"), (17, "Credit")):
             if last_ar < first_ar:
@@ -155,7 +221,9 @@ def _current_recon_sheet(
         sheet.cell(14, column, f"=SUM({letter}7:{letter}13)")
     # A partial opening-balance sum must not masquerade as a complete control.
     sheet["D14"] = '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")'
-    sheet["N14"] = sheet["O14"] = "Pending"
+    for column in ("N", "O"):
+        cells = f"{column}7:{column}13"
+        sheet[f"{column}14"] = f'=IF(COUNT({cells})=ROWS({cells}),SUM({cells}),"Review")'
     sheet["E27"] = "=SUM(E20:E26)"
     for row in range(32, 36):
         sheet.merge_cells(f"A{row}:B{row}")
@@ -292,6 +360,7 @@ def build_workbook(
         project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_activity]
         footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_activity]
         receivable_transfers = _foundation_receivable_transfers(project_rows)
+        payable_labels = _foundation_payable_labels(project_rows)
         sections = dict(SECTIONS)
         if any(row.section == "other" for row in project_rows):
             sections["other"] = "Other ledger activity — review"
@@ -303,6 +372,7 @@ def build_workbook(
                 if cancellation:
                     cancellation.check()
                 label = "AR reclass — 2881" if row.source_row in receivable_transfers else row.label
+                label = payable_labels.get(row.source_row, label)
                 _append(sheet, [label, row.journal, row.day, row.source, row.description,
                                 row.amount, row.direction, row.adjusted_amount])
             last = sheet.max_row

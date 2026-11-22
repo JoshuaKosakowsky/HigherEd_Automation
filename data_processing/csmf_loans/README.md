@@ -180,8 +180,8 @@ In 0.30.16, the owner requested separate FY and monthly views. **Current FY Reco
 preserves the previous summary's **all uploaded FY activity** calculations.
 **Current Month Recon** shows activity for the latest included Accounting Date
 month, with a beginning balance rolled forward using earlier uploaded 1621
-activity. As of 0.30.22, both views show separate Foundation AR bookings and
-receipts. AP, variance, and an independent GL tie-out remain deferred.
+activity. As of 0.30.23, both views show Foundation AP and AR due and paid.
+Variance and an independent GL tie-out remain deferred.
 
 The summary retains the reference's title, Loan Information, Interest and Fees,
 AP/AR columns, Pending Items and Reconciliation Dates blocks. Its loan order is
@@ -210,7 +210,8 @@ The existing **Current FY Recon** mappings are:
 | Interest | Interest on loans Total (5909R) from that loan's own tab |
 | Late Charges | Late fees on loans Total (8309R) from that loan's own tab |
 | Total Interest and Fees | Sum of those two amounts; no separate interest/fee worksheets |
-| AP / Total Due to Foundation (N) and Total Paid to Foundation (O) | Pending until AP postings can be tied to settlements |
+| AP / Total Due to Foundation (N) | Matched 2402 credits plus untransferred principal payments and interest |
+| AP / Total Paid to Foundation (O) | Matched 2881, 5909R and 8309R debits, negative for normal payments |
 | AR / Total Due From Foundation (P) | Regular 1382 debits, positive for a normal booking |
 | AR / Total Paid From Foundation (Q) | Regular 1382 credits, negative for a normal receipt |
 | Pending Items: Unisa Ending Balance | Blank editable input; no calculation or Unisa report import |
@@ -321,7 +322,7 @@ uses December history, February includes leap day where applicable, and June
 retains P12. Gaps in uploaded history are not filled or assumed to be complete;
 the FY view continues to list the periods actually supplied.
 
-#### Foundation activity (0.30.22)
+#### Foundation activity
 
 **Total Due From Foundation (P)** shows amounts booked as 1382 debits.
 **Total Paid From Foundation (Q)** shows 1382 credits, including CashNet
@@ -338,9 +339,32 @@ Accounting Date are labeled **AR reclass — 2881**. Their 2881 subtotal stays
 intact. Only the 1382 side contributes to the AR summary. The SIS disbursements
 remain in Loan Activity and the eventual 1382 cash receipt is shown in Q.
 
-**Total Due to Foundation (N)** and **Total Paid to Foundation (O)** display
-Pending, including row 14. The uploaded 2402 transfers and subsequent
-collections do not establish the remaining payable without a settlement match.
+In 0.30.23 the owner confirmed that a **2402 credit** in a Foundation payable
+journal is due to the Foundation. Its **2881 principal**, **5909R interest**,
+and **8309R late-fee** debits are paid to the Foundation. To identify the
+journal, match the configured project, Accounting Date, Journal Number, and
+`Manual Journal EIB` Source. The eligible lines' **Line Memos** must contain
+the word `CSMF` and one of `Pay`, `Payable`, `Paid`, or `Payment` regardless
+of case. The loan name spelling, punctuation and month range can vary. The
+2402 credit and its matched debits must balance. Flag unmatched candidates
+with **Review AP** on the loan tab and show **Review** for that loan in N/O
+and for the corresponding overall totals. The loan detail labels identify
+matched entries as **AP due** or **AP paid** and retain their account codes.
+
+**Total Due to Foundation (N)** adds the matched 2402 credits and the
+untransferred principal and interest. Signed Payment and Interest activity
+includes the interest transfer debit; the matched 2881 debit also reduces
+untransferred principal. **Total Paid to Foundation (O)** sums the matched
+2881, 5909R and 8309R debits. Late fees enter N through the posted 2402 credit
+and enter O through the matching debit. Add N and O to read the remaining
+payable. Both columns carry forward within the selected FY through the report
+month and update from Adjusted Amount. Prior-year items remain footnote only.
+
+Synthetic AP example: principal 300 and interest 30 are transferred with an
+additional late fee of 5. A matching 2402 credit of 335 and debits of 300,
+30 and 5 put 335 in N and -335 in O. Later collections and interest totaling
+55 bring N to 390, O stays -335, and the open balance is 55. A CashNet receipt
+whose memo also mentions CSMF and payment still belongs only in AR.
 
 Synthetic acceptance: two SIS disbursements totaling 100 leave P and Q at
 zero until a 100 debit is booked to 1382. The matching 2881 credit is labeled
@@ -481,8 +505,8 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
 ## Deferred work and verification
 
 Additional 1621 classifications (including any Adjustment category), AP
-clearing after a 2402 booking, variance, further Adjusted Amount rules,
-2100/2402 net-zero checks and JE preparation remain deferred.
+activity outside the confirmed payable journal pattern, variance, further
+Adjusted Amount rules, and JE preparation remain deferred.
 Section subtotals sum the editable Adjusted Amount cells; they are not completed
 reconciled balances.
 

@@ -495,7 +495,7 @@ class CsmfTests(unittest.TestCase):
         self.assertEqual([cell.value for cell in source["D"]][1:], [row[2] for row in rows])
         self.assertEqual(sum("excluded from activity totals" in str(cell.value) for cell in source["J"]), 4)
         self.assertEqual(book["Parsons - 694511"].max_column, 8)
-        self.assertEqual(book["Current FY Recon"]["N7"].value, "Pending")
+        self.assertIn('"AP due — 2402"', book["Current FY Recon"]["N7"].value)
 
     def test_prior_year_ar_uses_inclusive_opening_july_cutoff_for_every_source(self):
         for year in (2027, 2028):
@@ -654,7 +654,8 @@ class CsmfTests(unittest.TestCase):
         self.write_journal(rows)
         original = self.journal.read_bytes()
         result = self.run_workflow()
-        self.assertIn("AP and variance remain pending", result.message)
+        self.assertIn("AP and AR show due and paid", result.message)
+        self.assertIn("Variance remains pending", result.message)
         self.assertIn("Current FY Recon summarizes all uploaded FY activity", result.message)
         self.assertIn("Current Month Recon shows the latest uploaded month", result.message)
         self.assertEqual(self.journal.read_bytes(), original)
@@ -739,7 +740,7 @@ class CsmfTests(unittest.TestCase):
                                  f'=SUMIFS(\'{loan.title}\'!H{first}:H{last},'
                                  f'{dates},">="&$D$3,{dates},"<"&EDATE($D$3,1))')
             # Both views share the same layout, adjusted signs and cumulative GL.
-            for column in (1, 2, 3, 8, 12, 14, 15):
+            for column in (1, 2, 3, 8, 12):
                 self.assertEqual(monthly.cell(row, column).value, summary.cell(row, column).value)
             ar_row, = [cell.row for cell in loan["A"] if cell.value == "AR"]
             cutoff = f',\'{loan.title}\'!C{ar_row}:C{ar_row},"<"&EDATE($D$3,1)'
@@ -751,9 +752,52 @@ class CsmfTests(unittest.TestCase):
                 self.assertEqual(monthly.cell(row + 13, column).value, summary.cell(row + 13, column).value)
         self.assertEqual(monthly["D14"].value, summary["D14"].value)
         for sheet in (monthly, summary):
-            self.assertEqual([sheet[cell].value for cell in ("N10", "O10", "N14", "O14")], ["Pending"] * 4)
+            self.assertEqual(sheet["N14"].value, '=IF(COUNT(N7:N13)=ROWS(N7:N13),SUM(N7:N13),"Review")')
+            self.assertEqual(sheet["O14"].value, '=IF(COUNT(O7:O13)=ROWS(O7:O13),SUM(O7:O13),"Review")')
             self.assertEqual(sheet["P14"].value, "=SUM(P7:P13)")
             self.assertEqual(sheet["Q14"].value, "=SUM(Q7:Q13)")
+
+    def test_foundation_ap_matches_memo_qualified_journals_including_late_fees(self):
+        board = "694513"
+        welch = "694514"
+        transfer = {"project": board, "day": "2026-09-08", "journal": "TRANSFER",
+                    "source": "Manual Journal EIB", "memo": "CSM Board CSMF Payable Jul - Aug"}
+        self.write_journal([
+            journal_row(project=board, day="2026-08-31", debit=None, credit=300),
+            journal_row(project=board, day="2026-08-31", account="5909R", debit=None, credit=30),
+            journal_row(account="2402", debit=None, credit=335, **transfer),
+            journal_row(account="2881", debit=300, **(transfer | {"memo": "Board CSMF: Pay (July/August)"})),
+            journal_row(account="5909R", debit=30, **(transfer | {"source": " manual journal EIB "})),
+            journal_row(account="8309R", debit=5, **(transfer | {"memo": "BOARD csmf payment Jul–Aug"})),
+            journal_row(project=board, day="2026-10-31", debit=None, credit=50),
+            journal_row(project=board, day="2026-10-31", account="5909R", debit=None, credit=5),
+            journal_row(account="1382", debit=None, credit=25, **(transfer | {"source": "CashNet"})),
+            journal_row(account="2881", debit=6, **(transfer | {"source": "Manual Journal"})),
+            journal_row(account="2402", debit=None, credit=80, **(transfer | {"project": welch})),
+            journal_row(account="2881", debit=30, **(transfer | {"project": welch, "day": "2026-09-09"})),
+            journal_row(account="2881", debit=50, **(transfer | {"project": welch, "memo": "Other adjustment"})),
+        ])
+        self.run_workflow()
+        book = self.workbook()
+        board_loan = book[f"{LOANS[board]} - {board}"]
+        board_values = {label: amount for label, *_, amount in board_loan.iter_rows(min_row=10, values_only=True)
+                        if label in {"AP due — 2402", "AP paid — 2881", "AP paid — 5909R", "AP paid — 8309R", "AR"}}
+        self.assertEqual(board_values, {"AP due — 2402": 335, "AP paid — 2881": -300,
+                                        "AP paid — 5909R": -30, "AP paid — 8309R": -5, "AR": 25})
+        self.assertEqual(board_loan.max_column, 8)
+        welch_loan = book[f"{LOANS[welch]} - {welch}"]
+        welch_labels = [cell.value for cell in welch_loan["A"]]
+        self.assertIn("Review AP — 2402", welch_labels)
+        self.assertIn("Review AP — 2881", welch_labels)
+        self.assertNotIn("AP paid — 2881", welch_labels)
+        for title in ("Current Month Recon", "Current FY Recon"):
+            summary = book[title]
+            self.assertIn('"AP paid — 8309R"', summary["O9"].value)
+            self.assertIn('"AP paid — 2881"', summary["N9"].value)
+            self.assertIn('"Review AP — 2402"', summary["O10"].value)
+            self.assertIn('"Review AP — 2881"', summary["N10"].value)
+        self.assertIn('"<"&EDATE($D$3,1)', book["Current Month Recon"]["O9"].value)
+        self.assertNotIn("EDATE", book["Current FY Recon"]["O9"].value)
 
     def test_foundation_ar_separates_bookings_reclasses_and_receipts(self):
         welch = "694514"
