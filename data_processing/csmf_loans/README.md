@@ -135,9 +135,10 @@ are **Payment**, **Loan Activity**, **1621 — Unclassified**,
 Accounting Date; sections sort **newest to oldest** by that date. Same-date rows
 retain ascending journal number and original source-row order as tie-breakers.
 2100 and 2402 remain distinguishable in Activity labels. Qualifying prior-year
-2100 payments appear in the footnote block described below. Column N uses 2881
-debits only when they are part of the verified type of 2402 transfer described
-below. Following owner clarification in 0.30.9, ledger **1382** is included
+2100 payments appear in the footnote block described below. A 2881 credit that
+balances a 1382 booking in the same loan's EIB journal is labeled **AR reclass
+— 2881** in its existing section. Following owner clarification in 0.30.9,
+ledger **1382** is included
 as **AR** immediately after Payables (2881), replacing its earlier exclusion.
 Its debit/credit sign rule and newest-first ordering match the other sections.
 The subtotal is labeled **1382 Totals** as of 0.30.10. It sums non-footnoted AR
@@ -179,8 +180,8 @@ In 0.30.16, the owner requested separate FY and monthly views. **Current FY Reco
 preserves the previous summary's **all uploaded FY activity** calculations.
 **Current Month Recon** shows activity for the latest included Accounting Date
 month, with a beginning balance rolled forward using earlier uploaded 1621
-activity. As of 0.30.21, both views show outstanding Foundation AP and AR.
-AP clearing, variance, and an independent GL tie-out remain deferred.
+activity. As of 0.30.22, both views show separate Foundation AR bookings and
+receipts. AP, variance, and an independent GL tie-out remain deferred.
 
 The summary retains the reference's title, Loan Information, Interest and Fees,
 AP/AR columns, Pending Items and Reconciliation Dates blocks. Its loan order is
@@ -209,8 +210,9 @@ The existing **Current FY Recon** mappings are:
 | Interest | Interest on loans Total (5909R) from that loan's own tab |
 | Late Charges | Late fees on loans Total (8309R) from that loan's own tab |
 | Total Interest and Fees | Sum of those two amounts; no separate interest/fee worksheets |
-| AP / Total Due to Foundation (N) | Posted 2402 credits plus untransferred principal payments and interest within the FY |
-| AR / Total Due From Foundation (P) | Debits minus credits on regular 1382 activity within the FY |
+| AP / Total Due to Foundation (N) and Total Paid to Foundation (O) | Pending until AP postings can be tied to settlements |
+| AR / Total Due From Foundation (P) | Regular 1382 debits, positive for a normal booking |
+| AR / Total Paid From Foundation (Q) | Regular 1382 credits, negative for a normal receipt |
 | Pending Items: Unisa Ending Balance | Blank editable input; no calculation or Unisa report import |
 | Pending Items: GL | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
 
@@ -319,43 +321,33 @@ uses December history, February includes leap day where applicable, and June
 retains P12. Gaps in uploaded history are not filled or assumed to be complete;
 the FY view continues to list the periods actually supplied.
 
-#### Foundation balances (0.30.21)
+#### Foundation activity (0.30.22)
 
-The owner confirmed the AP and AR treatment for all loans after reviewing the
-Welch Workday entries with the Bursar. Both tabs show amounts outstanding at
-the report cutoff and sum the individual loan balances in row 14. **Current FY
-Recon** uses all uploaded FY activity. **Current Month Recon** carries earlier
-uploaded FY activity into the month and applies the current month's changes,
-including for a loan with no postings that month. These balances use the
-uploaded data, with no separate opening AP or AR input. Prior-year items
-identified by the footnote rules below stay out of both columns.
+**Total Due From Foundation (P)** shows amounts booked as 1382 debits.
+**Total Paid From Foundation (Q)** shows 1382 credits, including CashNet
+receipts. Add P and Q to read the remaining receivable. Both formulas use the
+existing Debit/Credit and Adjusted Amount columns on the loan tab. The FY view
+uses all uploaded FY activity and the monthly view includes earlier activity
+from the same FY through the displayed month. Row 14 sums each AR column.
+Prior-year items remain footnote only.
 
-- **N, Total Due to Foundation** adds signed 1621 Payment and 5909R Interest
-  activity and posted 2402 credits. A `Manual Journal EIB` 2881 debit reduces
-  untransferred principal when it shares a populated Journal Number, Accounting
-  Date and Project with a `Manual Journal EIB` 2402 credit. Interest transfer
-  debits reduce the signed 5909R amount. This counts a transfer into 2402 once.
-  Source and Journal Number matching trim surrounding spaces and ignore case.
-  8309R stays in the late-fee section. Any amount already included in a posted
-  2402 credit is counted with that credit. 2100 activity and 2402 debits do not
-  reduce N while the AP settlement rule is deferred.
-- **P, Total Due From Foundation** starts when a debit is booked to 1382.
-  Subsequent 1382 credits, including CashNet receipts, reduce it. The SIS
-  disbursement and the balancing 2881 credit are evidence of the transaction
-  and do not add another receivable. The signed total displays a credit excess
-  as a negative amount for review.
+The Welch loan example in the Workday review showed that a 2881 credit can be
+the offset for booking AR on disbursements already made in Banner. On each
+loan tab, 2881 EIB credits that balance 1382 EIB debits in the same journal and
+Accounting Date are labeled **AR reclass — 2881**. Their 2881 subtotal stays
+intact. Only the 1382 side contributes to the AR summary. The SIS disbursements
+remain in Loan Activity and the eventual 1382 cash receipt is shown in Q.
 
-Both formulas use the loan tabs' editable Adjusted Amount cells. The hidden
-**Foundation Recon** column identifies eligible detail rows; subtotals and
-footnotes have no marker and are excluded from N and P.
+**Total Due to Foundation (N)** and **Total Paid to Foundation (O)** display
+Pending, including row 14. The uploaded 2402 transfers and subsequent
+collections do not establish the remaining payable without a settlement match.
 
-Synthetic acceptance: principal 300 and interest 30 are transferred by a
-2881 debit of 300, a 5909R debit of 30 and a 2402 credit of 330. N remains 330
-through the transfer, then rises to 385 when 55 in additional payments and
-interest arrives. It carries at 385 into a later month without AP postings.
-A 100 SIS disbursement leaves P at zero until a 100 debit is booked to 1382.
-1382 CashNet credits of 35 and 65 reduce P to 65 and then zero. A footnoted July
-2100 payment or 1382 receipt does not enter either balance. See the open
+Synthetic acceptance: two SIS disbursements totaling 100 leave P and Q at
+zero until a 100 debit is booked to 1382. The matching 2881 credit is labeled
+AR reclass and excluded from the summary. A CashNet credit of 35 leaves
+P at 100 and puts -35 in Q. After a further receipt of 65, Q is -100 and the
+two columns sum to zero. Opening-July 1382 and 2100 footnotes are excluded.
+See the open
 [source rules #25](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/25)
 and [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/44)
 for the remaining accounting work.

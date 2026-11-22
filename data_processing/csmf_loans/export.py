@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from decimal import Decimal
 from math import ceil
 
@@ -35,21 +36,19 @@ RECON_UNISA_ACCOUNTS = {
 }
 
 
-def _foundation_payable_rows(project_rows: list[Activity]) -> set[int]:
-    # An EIB transfer replaces principal owed from collections with a posted
-    # 2402 payable. A standalone 2881 line cannot establish that transfer.
-    transfer_journals = {
-        (row.day, row.journal.casefold()) for row in project_rows
-        if row.account == "2402" and row.direction == "Credit"
-        and row.journal and row.source.casefold() == "manual journal eib"
-    }
+def _foundation_receivable_transfers(project_rows: list[Activity]) -> set[int]:
+    # The 2881 credit explains how the receivable was booked. Keep its audit
+    # label separate from the 1382 booking and the subsequent cash receipt.
+    journals = defaultdict(list)
+    for row in project_rows:
+        if (row.journal and row.source.casefold() == "manual journal eib"
+                and (row.account, row.direction) in {("1382", "Debit"), ("2881", "Credit")}):
+            journals[(row.day, row.journal.casefold())].append(row)
     return {
-        row.source_row for row in project_rows
-        if row.section in {"payment", "5909R"}
-        or (row.account == "2402" and row.direction == "Credit")
-        or (row.account == "2881" and row.direction == "Debit"
-            and row.source.casefold() == "manual journal eib"
-            and (row.day, row.journal.casefold()) in transfer_journals)
+        row.source_row for entries in journals.values()
+        if any(row.account == "1382" and row.amount for row in entries)
+        and sum(row.adjusted_amount for row in entries) == 0
+        for row in entries if row.account == "2881"
     }
 
 
@@ -71,7 +70,8 @@ def _current_recon_sheet(
     sheet["D3"].number_format = "mmmm yyyy"
     labels = {
         "N4": "AP", "P4": "AR", "A5": "Loan Information", "J5": "Interest and Fees",
-        "N5": "Total Due to\nFoundation", "P5": "Total Due From\nFoundation",
+        "N5": "Total Due to\nFoundation", "O5": "Total Paid to\nFoundation",
+        "P5": "Total Due From\nFoundation", "Q5": "Total Paid From\nFoundation",
         "A6": "Loan", "B6": "Unisa\nAcct", "C6": "Project", "D6": "Beginning\nBalance",
         "E6": "Adjustments/\nReclass", "F6": f"{scope}\nLoan Activity (Net)",
         "G6": f"{scope}\nPayments", "H6": "Net Change\nin Principal",
@@ -81,7 +81,7 @@ def _current_recon_sheet(
         "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
         "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only."
                 if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month."),
-        "A17": "AP and AR carry forward within the FY. Prior-year items are footnoted. AP clearing and variance are pending.",
+        "A17": "AR balance = due plus paid through the report month. Prior-year items are footnoted. AP and variance are pending.",
         "A29": ("Blank beginning balances remain unknown; GL is the cumulative Loan Total through this month. Shaded blanks are review inputs."
                 if monthly else "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs."),
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
@@ -89,9 +89,9 @@ def _current_recon_sheet(
     }
     for cell, label in labels.items():
         sheet[cell] = label
-    for region in ("A1:P1", "A2:G2", "H2:P2", "A3:C3", "A5:H5", "J5:L5", "N5:N6", "P5:P6",
-                   "A14:C14", "A16:P16", "A17:P17", "A18:L18", "G19:L19",
-                   "A27:C27", "A29:P29", "A31:D31"):
+    for region in ("A1:Q1", "A2:G2", "H2:Q2", "A3:C3", "N4:O4", "P4:Q4", "A5:H5",
+                   "J5:L5", "N5:N6", "O5:O6", "P5:P6", "Q5:Q6", "A14:C14",
+                   "A16:Q16", "A17:Q17", "A18:L18", "G19:L19", "A27:C27", "A29:Q29", "A31:D31"):
         sheet.merge_cells(region)
 
     for row, project in enumerate(RECON_LOAN_ORDER, 7):
@@ -127,14 +127,19 @@ def _current_recon_sheet(
         # All three columns already carry the confirmed Adjusted Amount signs.
         sheet.cell(row, 8, f"=SUM(E{row}:G{row})")
         sheet.cell(row, 12, f"=SUM(J{row}:K{row})")
-        # Both views show outstanding amounts. The monthly upper bound includes
-        # earlier FY activity as well as the current period's movements.
-        last_activity = totals["loan"] - 1
-        balances = f"{loan_sheet}!H10:H{last_activity}"
-        categories = f"{loan_sheet}!I10:I{last_activity}"
-        cutoff = f',{loan_sheet}!C10:C{last_activity},"<"&EDATE($D$3,1)' if monthly else ""
-        for column, category, sign in ((14, "AP", ""), (16, "AR", "-")):
-            sheet.cell(row, column, f'=ROUND({sign}SUMIFS({balances},{categories},"{category}"{cutoff}),2)')
+        # A posted 2402 transfer alone cannot establish what's still owed.
+        sheet.cell(row, 14, "Pending")
+        sheet.cell(row, 15, "Pending")
+        first_ar, last_ar = detail_rows[project]["1382"]
+        for column, direction in ((16, "Debit"), (17, "Credit")):
+            if last_ar < first_ar:
+                sheet.cell(row, column, 0)
+                continue
+            amounts = f"{loan_sheet}!H{first_ar}:H{last_ar}"
+            directions = f"{loan_sheet}!G{first_ar}:G{last_ar}"
+            # The monthly view includes both earlier FY bookings and receipts.
+            cutoff = f',{loan_sheet}!C{first_ar}:C{last_ar},"<"&EDATE($D$3,1)' if monthly else ""
+            sheet.cell(row, column, f'=ROUND(-SUMIFS({amounts},{directions},"{direction}"{cutoff}),2)')
         pending = row + 13
         sheet.merge_cells(f"G{pending}:L{pending}")
         sheet.cell(pending, 1, f"=A{row}")
@@ -145,11 +150,12 @@ def _current_recon_sheet(
         sheet.cell(pending, 5, f"={loan_sheet}!H{totals['loan']}")
         sheet.cell(pending, 6, "Pending")
 
-    for column in (5, 6, 7, 8, 10, 11, 12, 14, 16):
+    for column in (5, 6, 7, 8, 10, 11, 12, 16, 17):
         letter = get_column_letter(column)
         sheet.cell(14, column, f"=SUM({letter}7:{letter}13)")
     # A partial opening-balance sum must not masquerade as a complete control.
     sheet["D14"] = '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")'
+    sheet["N14"] = sheet["O14"] = "Pending"
     sheet["E27"] = "=SUM(E20:E26)"
     for row in range(32, 36):
         sheet.merge_cells(f"A{row}:B{row}")
@@ -164,16 +170,16 @@ def _current_recon_sheet(
         sheet.row_dimensions[row[0].row].height = 27
     for column, width in {"A": 17, "B": 9, "C": 13, "D": 18, "E": 18, "F": 18,
                           "G": 18, "H": 18, "I": 3, "J": 18, "K": 18, "L": 18,
-                          "M": 3, "N": 20, "O": 3, "P": 20}.items():
+                          "M": 3, "N": 20, "O": 20, "P": 20, "Q": 20}.items():
         sheet.column_dimensions[column].width = width
-    for first, last, columns in ((7, 14, (4, 5, 6, 7, 8, 10, 11, 12, 14, 16)),
+    for first, last, columns in ((7, 14, (4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17)),
                                  (20, 27, (4, 5, 6))):
         for row in range(first, last + 1):
             for column in columns:
                 sheet.cell(row, column).number_format = CURRENCY_FORMAT
                 sheet.cell(row, column).alignment = Alignment(horizontal="right", vertical="center")
     for region, color in (("A5:H5", "E2EFDA"), ("J5:L5", "DDEBF7"),
-                          ("N5:N14", "D9D9D9"), ("P5:P14", "FCE4D6"),
+                          ("N5:O14", "D9D9D9"), ("P5:Q14", "FCE4D6"),
                           ("A18:L18", "FFF2CC"), ("A31:D31", "FFF2CC")):
         for row in sheet[region]:
             for cell in row:
@@ -183,7 +189,9 @@ def _current_recon_sheet(
             if cell.value is not None:
                 cell.font = Font(name="Aptos", size=12, bold=True)
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    for row_number, columns in ((14, (1, 4, 5, 6, 7, 8, 10, 11, 12, 14, 16)),
+    for column in ("N", "P"):
+        sheet[f"{column}4"].alignment = Alignment(horizontal="center", vertical="center")
+    for row_number, columns in ((14, (1, 4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17)),
                                 (27, (1, 4, 5, 6))):
         for column in columns:
             cell = sheet.cell(row_number, column)
@@ -205,7 +213,7 @@ def _current_recon_sheet(
     sheet.row_dimensions[2].height = max(30, 18 * ceil(len(sheet["H2"].value) / 75))
     sheet.row_dimensions[6].height = 64
     sheet.row_dimensions[19].height = 48
-    sheet.print_area = "A1:P35"
+    sheet.print_area = "A1:Q35"
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.orientation = "landscape"
     sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
@@ -272,8 +280,6 @@ def build_workbook(
         _append(sheet, [f"FY{activity.fiscal_year}", ", ".join(activity.periods), project, loan])
         _append(sheet, [])
         _append(sheet, HEADERS)
-        sheet["I6"] = "Foundation Recon"
-        sheet.column_dimensions["I"].hidden = True
         adjusted_opening = -opening[project] if opening[project] is not None else None
         _append(sheet, ["Beginning Balance of the FY", None, None, "Trial Balance", None,
                         opening[project], "Debit" if opening[project] is not None else None, adjusted_opening])
@@ -285,7 +291,7 @@ def build_workbook(
         detail_rows[project] = {}
         project_rows = [row for row in activity.rows if row.project == project and not row.prior_year_activity]
         footnote_rows = [row for row in activity.rows if row.project == project and row.prior_year_activity]
-        payable_rows = _foundation_payable_rows(project_rows)
+        receivable_transfers = _foundation_receivable_transfers(project_rows)
         sections = dict(SECTIONS)
         if any(row.section == "other" for row in project_rows):
             sections["other"] = "Other ledger activity — review"
@@ -296,12 +302,9 @@ def build_workbook(
                     continue
                 if cancellation:
                     cancellation.check()
-                detail_row = _append(sheet, [row.label, row.journal, row.day, row.source, row.description,
-                                             row.amount, row.direction, row.adjusted_amount])
-                if row.source_row in payable_rows:
-                    sheet.cell(detail_row, 9, "AP")
-                elif row.account == "1382":
-                    sheet.cell(detail_row, 9, "AR")
+                label = "AR reclass — 2881" if row.source_row in receivable_transfers else row.label
+                _append(sheet, [label, row.journal, row.day, row.source, row.description,
+                                row.amount, row.direction, row.adjusted_amount])
             last = sheet.max_row
             detail_rows[project][section] = (first, last)
             total_label = "1382 Totals" if section == "1382" else f"{title} Total"

@@ -118,8 +118,8 @@ As of 0.30.8, every debit has its sign flipped in Adjusted Amount, while credits
 retain their source value. As of 0.30.16, **Current FY Recon** preserves the
 summary of all uploaded FY activity, while **Current Month Recon** shows activity
 for the latest uploaded month. Its beginning balance uses the raw FY opening plus
-1621 debits minus credits dated before that month. As of 0.30.21, both tabs
-show Foundation AP and AR carried forward within the FY. AP clearing and
+1621 debits minus credits dated before that month. As of 0.30.22, both tabs
+show Foundation AR bookings and receipts through the report month. AP and
 variance remain pending. See the
 [CSMF technical guide](data_processing/csmf_loans/README.md).
 
