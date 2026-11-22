@@ -166,7 +166,8 @@ def _current_recon_sheet(
         "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only."
                 if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month."),
         "A17": "Net AP and Net AR add the signed due and paid amounts. Review flagged AP journal lines. Prior-year activity is footnoted.",
-        "A29": "Pending Items compares raw and adjusted 1621 principal through the report month. A missing opening leaves the balance blank.",
+        "A29": ("Pending Items compares raw and adjusted 1621 principal through the report month. "
+                "Missing openings contribute $0.00."),
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
         "A34": "Reviewed By:", "A35": "Reviewed Date:",
     }
@@ -188,7 +189,7 @@ def _current_recon_sheet(
         opening = f"{loan_sheet}!F7"
         last_1621 = totals["1621"] - 1
         beginning = _raw_principal_balance(loan_sheet, last_1621, before="$D$3" if monthly else "")
-        sheet.cell(row, 4, f'=IF({opening}="","",{beginning})')
+        sheet.cell(row, 4, f'=IF({opening}="",0,{beginning})')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):
             if not monthly:
@@ -228,15 +229,13 @@ def _current_recon_sheet(
             _adjusted_through_report_month(loan_sheet, totals[section], detail_rows[project][section], monthly=monthly)
             for section in PRINCIPAL_SECTIONS
         )
-        sheet.cell(pending, 4, f'=IF(COUNT({opening})=0,"",ROUND({expected},2))')
-        sheet.cell(pending, 5, f'=IF(COUNT({adjusted_opening})=0,"",ROUND(-SUM({adjusted_opening},{adjusted_activity}),2))')
-        sheet.cell(pending, 6, f'=IF(COUNT(D{pending}:E{pending})=2,ROUND(D{pending}-E{pending},2),"Pending")')
+        sheet.cell(pending, 4, f'=IF({opening}="",0,ROUND({expected},2))')
+        sheet.cell(pending, 5, f'=IF({adjusted_opening}="",0,ROUND(-SUM({adjusted_opening},{adjusted_activity}),2))')
+        sheet.cell(pending, 6, f'=ROUND(D{pending}-E{pending},2)')
 
-    for column in (5, 6, 7, 8, 10, 11, 12, 17, 18):
+    for column in (4, 5, 6, 7, 8, 10, 11, 12, 17, 18):
         letter = get_column_letter(column)
         sheet.cell(14, column, f"=SUM({letter}7:{letter}13)")
-    # A partial opening-balance sum must not masquerade as a complete control.
-    sheet["D14"] = '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")'
     for column in ("N", "O"):
         cells = f"{column}7:{column}13"
         sheet[f"{column}14"] = f'=IF(COUNT({cells})=ROWS({cells}),SUM({cells}),"Review")'
@@ -244,10 +243,9 @@ def _current_recon_sheet(
         ap = f"N{row}:O{row}"
         sheet[f"P{row}"] = f'=IF(COUNT({ap})=2,ROUND(SUM({ap}),2),"Review")'
         sheet[f"S{row}"] = f"=ROUND(SUM(Q{row}:R{row}),2)"
-    for column in ("D", "E"):
-        cells = f"{column}20:{column}26"
-        sheet[f"{column}27"] = f'=IF(COUNT({cells})=ROWS({cells}),ROUND(SUM({cells}),2),"Pending")'
-    sheet["F27"] = '=IF(COUNT(D27:E27)=2,ROUND(D27-E27,2),"Pending")'
+    sheet["D27"] = "=SUM(D20:D26)"
+    sheet["E27"] = "=SUM(E20:E26)"
+    sheet["F27"] = "=ROUND(D27-E27,2)"
     for row in range(32, 36):
         sheet.merge_cells(f"A{row}:B{row}")
         sheet.merge_cells(f"C{row}:D{row}")

@@ -688,26 +688,25 @@ class CsmfTests(unittest.TestCase):
                 raw_balance = (f'{opening}+SUMIFS(\'{loan.title}\'!F10:F{last_1621},\'{loan.title}\'!G10:G{last_1621},"Debit")'
                                f'-SUMIFS(\'{loan.title}\'!F10:F{last_1621},\'{loan.title}\'!G10:G{last_1621},"Credit")')
                 self.assertEqual(summary.cell(row, 4).value,
-                                 f'=IF({opening}="","",{raw_balance})')
+                                 f'=IF({opening}="",0,{raw_balance})')
                 self.assertEqual(summary.cell(row, 8).value, f"=SUM(E{row}:G{row})")
                 self.assertEqual(summary.cell(row, 12).value, f"=SUM(J{row}:K{row})")
                 pending = row + 13
-                self.assertEqual(summary[f"D{pending}"].value, f'=IF(COUNT({opening})=0,"",ROUND({raw_balance},2))')
+                self.assertEqual(summary[f"D{pending}"].value, f'=IF({opening}="",0,ROUND({raw_balance},2))')
                 adjusted_opening = f"'{loan.title}'!H7"
                 principal_totals = ",".join(f"'{loan.title}'!{total_cells[label]}" for label in (
                     "Payment Total", "Loan Activity Total", "1621 — Unclassified Total",
                 ))
                 self.assertEqual(summary[f"E{pending}"].value,
-                                 f'=IF(COUNT({adjusted_opening})=0,"",ROUND(-SUM({adjusted_opening},{principal_totals}),2))')
+                                 f'=IF({adjusted_opening}="",0,ROUND(-SUM({adjusted_opening},{principal_totals}),2))')
                 ar_row, = [cell.row for cell in loan["A"] if cell.value == "AR"]
                 for column, direction in ((17, "Debit"), (18, "Credit")):
                     self.assertEqual(summary.cell(row, column).value,
                                      f'=ROUND(-SUMIFS(\'{loan.title}\'!H{ar_row}:H{ar_row},'
                                      f'\'{loan.title}\'!G{ar_row}:G{ar_row},"{direction}"),2)')
-                self.assertEqual(summary[f"F{pending}"].value,
-                                 f'=IF(COUNT(D{pending}:E{pending})=2,ROUND(D{pending}-E{pending},2),"Pending")')
+                self.assertEqual(summary[f"F{pending}"].value, f'=ROUND(D{pending}-E{pending},2)')
                 self.assertIsNone(summary.cell(pending, 7).value)
-        self.assertEqual(summary["D14"].value, '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")')
+        self.assertEqual(summary["D14"].value, '=SUM(D7:D13)')
         self.assertEqual(summary["F23"].number_format, '$#,##0.00;[Red]($#,##0.00);$0.00')
         self.assertEqual([summary[cell].value for cell in ("C32", "C33", "C34", "C35")], [None] * 4)
         self.assertEqual(summary["C33"].number_format, "mm/dd/yyyy")
@@ -735,7 +734,7 @@ class CsmfTests(unittest.TestCase):
             dates = f"{loan_ref}!C10:C{last_1621}"
             before = f',{dates},"<"&$D$3'
             self.assertEqual(monthly.cell(row, 4).value,
-                             f'=IF(\'{loan.title}\'!F7="","",\'{loan.title}\'!F7'
+                             f'=IF(\'{loan.title}\'!F7="",0,\'{loan.title}\'!F7'
                              f'+SUMIFS(\'{loan.title}\'!F10:F{last_1621},\'{loan.title}\'!G10:G{last_1621},"Debit"{before})'
                              f'-SUMIFS(\'{loan.title}\'!F10:F{last_1621},\'{loan.title}\'!G10:G{last_1621},"Credit"{before}))')
             adjusted_principal = {}
@@ -757,13 +756,13 @@ class CsmfTests(unittest.TestCase):
             directions = f"{loan_ref}!G10:G{last_1621}"
             cutoff = f',{loan_ref}!C10:C{last_1621},"<"&EDATE($D$3,1)'
             self.assertEqual(monthly[f"D{pending}"].value,
-                             f'=IF(COUNT({opening})=0,"",ROUND({opening}'
+                             f'=IF({opening}="",0,ROUND({opening}'
                              f'+SUMIFS({amounts},{directions},"Debit"{cutoff})'
                              f'-SUMIFS({amounts},{directions},"Credit"{cutoff}),2))')
             adjusted_opening = f"'{loan.title}'!H7"
             principal_terms = ",".join(adjusted_principal[column] for column in (7, 6, 5))
             self.assertEqual(monthly[f"E{pending}"].value,
-                             f'=IF(COUNT({adjusted_opening})=0,"",ROUND(-SUM({adjusted_opening},{principal_terms}),2))')
+                             f'=IF({adjusted_opening}="",0,ROUND(-SUM({adjusted_opening},{principal_terms}),2))')
             # Both views share the same layout and adjusted signs.
             for column in (1, 2, 3, 8, 12):
                 self.assertEqual(monthly.cell(row, column).value, summary.cell(row, column).value)
@@ -785,10 +784,9 @@ class CsmfTests(unittest.TestCase):
             self.assertEqual(sheet["O14"].value, '=IF(COUNT(O7:O13)=ROWS(O7:O13),SUM(O7:O13),"Review")')
             self.assertEqual(sheet["Q14"].value, "=SUM(Q7:Q13)")
             self.assertEqual(sheet["R14"].value, "=SUM(R7:R13)")
-            for column in ("D", "E"):
-                cells = f"{column}20:{column}26"
-                self.assertEqual(sheet[f"{column}27"].value, f'=IF(COUNT({cells})=ROWS({cells}),ROUND(SUM({cells}),2),"Pending")')
-            self.assertEqual(sheet["F27"].value, '=IF(COUNT(D27:E27)=2,ROUND(D27-E27,2),"Pending")')
+            self.assertEqual([cell.value for cell in sheet["D27:F27"][0]], [
+                "=SUM(D20:D26)", "=SUM(E20:E26)", "=ROUND(D27-E27,2)",
+            ])
             for row in range(7, 15):
                 self.assertEqual(sheet[f"P{row}"].value, f'=IF(COUNT(N{row}:O{row})=2,ROUND(SUM(N{row}:O{row}),2),"Review")')
                 self.assertEqual(sheet[f"S{row}"].value, f"=ROUND(SUM(Q{row}:R{row}),2)")
@@ -978,7 +976,7 @@ class CsmfTests(unittest.TestCase):
             loan = book[f"{LOANS[project]} - {project}"]
             self.assertEqual(loan["A23"].value, "1621 — Unclassified Total")
             self.assertEqual(summary.cell(row, 4).value,
-                             f'=IF(\'{loan.title}\'!F7="","",\'{loan.title}\'!F7'
+                             f'=IF(\'{loan.title}\'!F7="",0,\'{loan.title}\'!F7'
                              f'+SUMIFS(\'{loan.title}\'!F10:F22,\'{loan.title}\'!G10:G22,"Debit")'
                              f'-SUMIFS(\'{loan.title}\'!F10:F22,\'{loan.title}\'!G10:G22,"Credit"))')
             self.assertEqual(loan["F7"].value, 1000 + list(LOANS).index(project))
@@ -1014,20 +1012,20 @@ class CsmfTests(unittest.TestCase):
             loan = book[f"{LOANS[project]} - {project}"]
             self.assertEqual(loan["H7"].value, 0 if project == "694511" else None)
             self.assertEqual(summary.cell(row, 4).value,
-                             f'=IF(\'{loan.title}\'!F7="","",\'{loan.title}\'!F7'
+                             f'=IF(\'{loan.title}\'!F7="",0,\'{loan.title}\'!F7'
                              f'+SUMIFS(\'{loan.title}\'!F10:F13,\'{loan.title}\'!G10:G13,"Debit")'
                              f'-SUMIFS(\'{loan.title}\'!F10:F13,\'{loan.title}\'!G10:G13,"Credit"))')
             for column in (5, 6, 7, 10, 11):
                 formula = summary.cell(row, column).value
                 target = formula.rsplit("!", 1)[1]
                 self.assertEqual(loan[target].value, 0)
-        self.assertIn("A missing opening leaves the balance blank", summary["A29"].value)
+        self.assertIn("Missing openings contribute $0.00", summary["A29"].value)
         monthly = book["Current Month Recon"]
         self.assertEqual(monthly["H2"].value, "Included period: P01")
-        self.assertEqual(monthly["D14"].value, '=IF(COUNT(D7:D13)=7,SUM(D7:D13),"Pending")')
+        self.assertEqual(monthly["D14"].value, '=SUM(D7:D13)')
         for row in range(7, 14):
             self.assertTrue(monthly.cell(row, 4).value.startswith('=IF('))
-            self.assertIn('!F7="","",', monthly.cell(row, 4).value)
+            self.assertIn('!F7="",0,', monthly.cell(row, 4).value)
             self.assertEqual([monthly.cell(row, col).value for col in (5, 6, 7, 10, 11)], [0] * 5)
 
     def test_current_fy_recon_uses_selected_fy_and_all_twelve_periods(self):
@@ -1066,7 +1064,7 @@ class CsmfTests(unittest.TestCase):
                     self.assertEqual(sheet["F7"].value, amount)
                     last_1621 = 14 if project == "694511" else 13
                     self.assertEqual(summary.cell(summary_rows[project], 4).value,
-                                     f'=IF(\'{sheet.title}\'!F7="","",\'{sheet.title}\'!F7'
+                                     f'=IF(\'{sheet.title}\'!F7="",0,\'{sheet.title}\'!F7'
                                      f'+SUMIFS(\'{sheet.title}\'!F10:F{last_1621},\'{sheet.title}\'!G10:G{last_1621},"Debit")'
                                      f'-SUMIFS(\'{sheet.title}\'!F10:F{last_1621},\'{sheet.title}\'!G10:G{last_1621},"Credit"))')
                     self.assertEqual(sheet["G7"].value, "Debit" if amount is not None else None)

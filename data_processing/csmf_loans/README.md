@@ -242,7 +242,7 @@ are outside that range. The limits follow each loan's actual section sizes.
 
 The raw source values retain their signs, including negative credits/debits.
 This is not an absolute-value conversion and does not use manually edited
-Adjusted Amount values. A missing FY opening keeps D blank; a supplied zero
+Adjusted Amount values. A missing FY opening makes D zero. A supplied zero
 allows the activity calculation. Adjustments/Reclass links the existing
 unclassified 1621 section and Net Change in Principal sums E:G.
 
@@ -256,9 +256,8 @@ lists the selected FY and exactly the uploaded periods, including gaps. It does
 not assert complete FY coverage.
 
 Review notes and completion/review fields are blank editable cells. The
-aggregate beginning balance is Pending if any loan's opening balance is
-missing. The Loan Total includes available activity for that loan. A supplied
-zero FY opening counts as known and allows the 1621 activity calculation.
+aggregate beginning balance sums D7:D13. The Loan Total includes available
+activity for that loan.
 
 Synthetic acceptance examples:
 
@@ -273,10 +272,8 @@ Synthetic acceptance examples:
   credit 11 and Other debit 4 gives an all-account Loan Total of -1,016.
   Prior-year 2100/1382 footnotes do not enter that total. Both Pending Items
   principal balances are 1,038 with zero variance.
-- A blank Bruce FY opening keeps D blank; a supplied zero FY opening permits
-  the debits-minus-credits calculation. The aggregate D14 stays Pending until
-  all seven FY openings are supplied; existing loan activity totals remain
-  available.
+- A blank Bruce FY opening contributes zero to D14. With a supplied zero FY
+  opening and 20 in applicable 1621 debits, Bruce contributes 20.
 - With raw opening zero, 1621 credit 25 and debit 100, D is 75. A negative
   credit of -4 adds 4 and a negative debit of -5 subtracts 5. Other-account
   entries can determine the displayed report month but do not enter D.
@@ -294,7 +291,7 @@ Monthly **Beginning Balance = raw FY opening + earlier 1621 debits - earlier
 the displayed month. The same raw Amount/Debit-Credit columns and all three
 1621 sections feed this formula. Current-month transactions are excluded from
 the opening. July therefore starts from the raw FY opening. Missing FY openings
-remain blank, and zero openings still allow a rollforward.
+contribute zero to the summary, and supplied zero openings allow a rollforward.
 
 Adjustments/Reclass, Loan Activity, Payments, Interest and Late Charges sum
 Adjusted Amount only for dates on/after the month's first day and before the
@@ -328,9 +325,10 @@ of their combined balance to display the receivable in the same direction as
 D. Interest, fees, AP/AR and other ledger activity remain on the existing loan
 tabs and are outside this comparison.
 
-**F, Variance** is D minus E. A missing opening leaves the affected principal
-balance blank and the variance Pending. The corresponding row 27 total stays
-Pending until all seven loans have that balance. Explicit zeros count as known.
+**F, Variance** is D minus E, rounded to cents. As of 0.30.26 a missing opening
+contributes zero in the corresponding principal column. A supplied zero
+opening still includes the loan's activity. Row 27 sums D and E separately
+and calculates variance as the difference between those totals.
 This compares raw and adjusted amounts from the same Workday data. It checks
 internal workbook consistency, with no independent Unisa or GL balance import.
 

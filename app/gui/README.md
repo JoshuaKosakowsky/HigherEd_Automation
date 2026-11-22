@@ -400,8 +400,10 @@ As of 0.30.23, both views show Foundation AP and AR due and paid separately
 through the report month. AP uses matched Workday payable journal entries and
 flags incomplete matches for review. Prior-year items remain footnote only.
 As of 0.30.25, Pending Items compares raw and adjusted 1621 ending principal
-and calculates variance. Missing FY openings leave variance pending. Notes
-and sign-off fields are blank for review.
+and calculates variance. As of 0.30.26, a missing FY opening contributes zero
+to the summary beginning and ending principal amounts. Total variance is
+total expected principal minus total GL principal.
+Notes and sign-off fields are blank for review.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for
 source mappings, persistence, limitations and acceptance examples.
