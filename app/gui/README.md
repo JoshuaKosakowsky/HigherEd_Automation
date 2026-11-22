@@ -443,9 +443,11 @@ Document Difference is Banner minus Workday. Period Totals compares Banner again
 Workday (SIS plus Other) and keeps a blank **Notes** column for staff comments.
 See the [1305 technical guide](../../data_processing/graduate_contract_recon/README.md)
 for mappings, exceptions and synthetic acceptance examples.
-Workday always requires an uploaded export.
-the optional **Grad Contract Worktag** upload reads Find Journal Lines to add a
-cleaned Worktags tab and separate **Project**, **Grant**, and **Operating Account**
+Select or drop one or more original exports into **Workday 1305 export**.
+If you select several, use nonoverlapping report date ranges. The app combines
+them by Accounting Date and records each row's export and worksheet on Workday Data.
+The optional **Grad Contract Worktag** input accepts one or more Find Journal Lines
+exports to add a cleaned Worktags tab and separate **Project**, **Grant**, and **Operating Account**
 columns on CWID Recon. Each type keeps all distinct numbers per CWID, including
 leading zeros; missing types stay blank. Names and unrelated export columns are discarded.
 Inclusive dates and detail codes appear only for **Run SQL from PROD Insights**.

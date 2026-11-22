@@ -30,7 +30,7 @@ PERIOD_HEADERS = ["Fiscal Year", "Period", "Quarter", "Workday SIS Debit", "Bann
 @dataclass(frozen=True)
 class Reconciliation:
     parameters: BannerActivityParameters
-    sources: tuple[SourceData, SourceData]
+    sources: tuple[SourceData, ...]
     documents: list[list[object]]
     students: list[list[object]]
     combined: list[list[object]]
@@ -65,9 +65,17 @@ def total(rows: list[Transaction], side: str) -> Decimal:
 
 
 def reconcile(
-    workday: SourceData, banner: SourceData, parameters: BannerActivityParameters,
+    workday: SourceData | tuple[SourceData, ...], banner: SourceData, parameters: BannerActivityParameters,
 ) -> Reconciliation:
-    wd, wd_issues = prepare_source(workday, parameters)
+    workday_sources = (workday,) if isinstance(workday, SourceData) else workday
+    wd, wd_issues = [], []
+    identities: set[tuple[str, str]] = set()
+    for source in workday_sources:
+        transactions, source_issues = prepare_source(source, parameters, identities=identities)
+        wd.extend(transactions)
+        wd_issues.extend(source_issues)
+    if len(workday_sources) > 1:
+        wd.sort(key=lambda row: row.day)
     bn, bn_issues = prepare_source(banner, parameters)
     issues = wd_issues + bn_issues
     # Invalid selected rows can otherwise leave a partial group that happens to
@@ -200,7 +208,7 @@ def reconcile(
         ["Selected detail codes", ", ".join(parameters.detail_codes)],
         ["Ledger account", "1305 Graduate Contract Receivable"],
         ["Calendar", "July–June; July P01; fiscal quarters; no adjusting period inferred"],
-        ["Workday source", workday.label], ["Banner source", banner.label],
+        ["Workday source", "\n".join(source.label for source in workday_sources)], ["Banner source", banner.label],
         ["Workday selected rows", len(wd)], ["Banner selected rows", len(bn)],
         ["Workday selected date span", f"{min(row.day for row in wd)} to {max(row.day for row in wd)}" if wd else "No selected rows"],
         ["Banner selected date span", f"{min(row.day for row in bn)} to {max(row.day for row in bn)}" if bn else "No selected rows"],
@@ -223,4 +231,4 @@ def reconcile(
         ["Review notes", "New workbook each run; prior reviewer notes are not automatically carried forward."],
         ["Refresh", "Calculated snapshot: rerun the automation after changing inputs, dates or codes. Editing source tabs does not recalculate the outputs."],
     ]
-    return Reconciliation(parameters, (workday, banner), documents, students, combined, periods, verification, issues)
+    return Reconciliation(parameters, (*workday_sources, banner), documents, students, combined, periods, verification, issues)

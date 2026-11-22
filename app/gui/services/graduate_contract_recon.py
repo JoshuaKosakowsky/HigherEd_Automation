@@ -3,20 +3,46 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zipfile import BadZipFile
+
+from openpyxl.utils.exceptions import InvalidFileException
 
 from app.gui import APP_VERSION
 from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.graduate_contract_recon.export import export_reconciliation, validate_output
 from data_processing.graduate_contract_recon.reconciliation import reconcile
-from data_processing.graduate_contract_recon.sources import banner_from_frame, read_source, uploaded_scope
+from data_processing.graduate_contract_recon.sources import SourceData, banner_from_frame, read_source, uploaded_scope
 from data_processing.graduate_contract_recon.worktags import prepare_worktags
-from shared.cancellation import WorkflowCancelled
+from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.insights.banner_activity import BannerActivityParameters, extract_banner_activity
 from shared.insights.config import load_department_profiles
 from shared.insights.query_catalog import get_query
 from shared.insights.session_auth import build_authenticated_client
 from shared.mines_paths import get_shared_gui_access_path
+
+
+def _upload_paths(selection: str | Path | tuple[Path, ...] | list[Path] | None) -> tuple[Path, ...]:
+    if isinstance(selection, (str, Path)):
+        selection = (selection,) if selection else ()
+    paths = tuple(Path(path) for path in selection or ())
+    if len({path.resolve() for path in paths}) != len(paths):
+        raise ValueError("The upload list contains a duplicate file path.")
+    return paths
+
+
+def _read_uploads(
+    paths: tuple[Path, ...], source: str, cancellation: CancellationToken | None,
+) -> tuple[SourceData, ...]:
+    uploads = []
+    for path in paths:
+        if cancellation:
+            cancellation.check()
+        try:
+            uploads.append(read_source(path, source))
+        except (ValueError, OSError, BadZipFile, InvalidFileException) as error:
+            raise ValueError(f"Could not read {source} export {path.name}: {error}") from error
+    return tuple(uploads)
 
 
 def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
@@ -27,11 +53,14 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
         context.parameters.get("start_date"), context.parameters.get("end_date"),
         context.parameters.get("detail_codes"),
     ) if source == "sql" else None
-    workday_path = Path(context.parameters["workday_file"])
+    workday_paths = _upload_paths(context.parameters.get("workday_file"))
+    if not workday_paths:
+        raise ValueError("Upload at least one Workday 1305 export.")
+    worktag_paths = _upload_paths(context.parameters.get("worktag_file"))
     output = Path(context.parameters["output_file"])
     banner_path = Path(context.parameters["banner_file"]) if source == "manual" else None
-    worktag_path = Path(context.parameters["worktag_file"]) if context.parameters.get("worktag_file") else None
-    validate_output(output, tuple(path for path in (workday_path, banner_path, worktag_path) if path))
+    inputs = workday_paths + worktag_paths
+    validate_output(output, inputs + ((banner_path,) if banner_path else ()))
     if context.cancellation:
         context.cancellation.check()
     if source == "sql":
@@ -42,12 +71,14 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
             raise ValueError("1305 Banner SQL extraction requires PROD Insights.")
     elif context.mode is not None:
         raise ValueError("File upload reconciliation does not use TEST or PROD.")
-    context.progress.report("Reading Workday source export")
-    workday = read_source(workday_path, "Workday")
+    context.progress.report("Reading Workday 1305 exports")
+    workday = _read_uploads(workday_paths, "Workday", context.cancellation)
     worktags = None
-    if worktag_path:
-        context.progress.report("Reading Grad Contract Worktag export")
-        worktags = prepare_worktags(read_source(worktag_path, "Worktags"))
+    if worktag_paths:
+        context.progress.report("Reading Grad Contract Worktag exports")
+        worktags = prepare_worktags(*_read_uploads(worktag_paths, "Worktags", context.cancellation))
+    if context.cancellation:
+        context.cancellation.check()
     if source == "manual":
         context.progress.report("Reading Banner Insights download")
         banner = read_source(banner_path, "Banner")

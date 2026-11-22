@@ -99,8 +99,9 @@ appear inside the app without task completion tracking. See the
 [Bursar Office Calendar instructions](app/gui/operations_calendar.md).
 
 **1305 Graduate Contract Recon** is available to the **Grad Contract Sponsor**
-view through uploaded Workday and Banner Insights exports. Administrators can
-also extract Banner activity directly from PROD Insights. The workflow produces
+view through uploaded Workday and Banner Insights exports. Both Workday inputs
+accept multiple exports, so separate years can be uploaded together.
+Administrators can also extract Banner activity directly from PROD Insights. The workflow produces
 document/CWID reconciliation, period totals, verification and exception tabs,
 plus a combined view that replaces matched SIS summaries with Banner detail.
 Detail codes are entered explicitly with no defaults. See the

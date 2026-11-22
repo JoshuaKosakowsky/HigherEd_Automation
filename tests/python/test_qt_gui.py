@@ -293,6 +293,19 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(page.inputs["workday_file"].parentWidget().objectName(), "workdayInputs")
         self.assertEqual(page.inputs["banner_file"].parentWidget().objectName(), "bannerInputs")
         self.assertTrue(page.production_warning.isHidden())
+        banner = self.root / "banner.csv"
+        banner.touch()
+        page.inputs["banner_file"].setText(str(banner))
+        with self.assertRaisesRegex(ValueError, "Workday 1305 export is required"):
+            page._parse_parameters()
+        for key in ("workday_file", "worktag_file"):
+            paths = tuple(self.root / f"{key}_{year}.csv" for year in (2025, 2026))
+            for path in paths:
+                path.touch()
+            with patch("app.gui.services.drag_drop.QFileDialog.getOpenFileNames",
+                       return_value=([str(path) for path in paths], "")):
+                page.inputs[key]._browse()
+            self.assertEqual(page._parse_parameters()[key], paths)
 
     def test_admin_1305_offers_upload_and_prod_without_optional_banner_file(self):
         window = self.open_app()
@@ -311,12 +324,12 @@ class QtGuiTests(unittest.TestCase):
         self.assertFalse(page.inputs["worktag_file"].isHidden())
         self.assertFalse(page.production_warning.isHidden())
         wd = self.root / "synthetic_wd.xlsx"; wd.touch()
-        page.inputs["workday_file"].editor.setText(str(wd))
+        page.inputs["workday_file"].setText(str(wd))
         self.assertEqual(page._parse_parameters()["detail_codes"], "TPDT, TPLE, Z0LE")
-        self.assertIsNone(page._parse_parameters()["worktag_file"])
+        self.assertEqual(page._parse_parameters()["worktag_file"], ())
         tags = self.root / "synthetic_tags.xlsx"; tags.touch()
-        page.inputs["worktag_file"].editor.setText(str(tags))
-        self.assertEqual(page._parse_parameters()["worktag_file"], tags)
+        page.inputs["worktag_file"].setText(str(tags))
+        self.assertEqual(page._parse_parameters()["worktag_file"], (tags,))
         page.inputs["detail_codes"].setText("TPDT")
         values = page._parse_parameters()
         self.assertEqual(values["detail_codes"], "TPDT")

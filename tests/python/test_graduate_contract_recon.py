@@ -594,10 +594,14 @@ class GraduateContractReconTests(unittest.TestCase):
         self.assertEqual(result.periods[1][-1], "No supplied activity")
 
     def test_duplicate_workday_identity_blocks_substitution_but_retains_rows(self):
-        result = self.build([wd_row(30, line="TEST-LINE"), wd_row(30, line="TEST-LINE")], [bn_row()])
-        self.assertEqual(result.documents[0][12], "Source review required")
-        self.assertEqual(len(result.sources[0].rows), 2)
-        self.assertEqual(len(result.combined), 3)
+        row = wd_row(30, line="TEST-LINE")
+        for uploads in (workday([row, row]), (workday([row]), workday([row]))):
+            with self.subTest(multiple=isinstance(uploads, tuple)):
+                banner = banner_from_frame(pd.DataFrame([bn_row()], columns=BN_HEADERS))
+                result = reconcile(uploads, banner, self.params)
+                self.assertEqual(result.documents[0][12], "Source review required")
+                self.assertEqual(sum(len(source.rows) for source in result.sources[:-1]), 2)
+                self.assertEqual(len(result.combined), 3)
 
     def test_fiscal_calendar_and_money_validation(self):
         self.assertEqual(fiscal_scope(date(2026, 6, 30)), (2026, "P12", "Q4"))

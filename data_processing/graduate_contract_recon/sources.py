@@ -108,11 +108,21 @@ class Issue:
     issue: str
 
 
-def uploaded_scope(workday: SourceData, banner: SourceData) -> BannerActivityParameters:
+def accounting_date(source: SourceData, values: list[object]) -> date | None:
+    try:
+        return parse_date(source.value(values, "date"))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def uploaded_scope(
+    workday: SourceData | tuple[SourceData, ...], banner: SourceData,
+) -> BannerActivityParameters:
     """Use the files' dates and codes instead of hidden extraction defaults."""
     dates = []
     codes = set()
-    for source in (workday, banner):
+    workday_sources = (workday,) if isinstance(workday, SourceData) else workday
+    for source in (*workday_sources, banner):
         for _, values in source.rows:
             if source.source == "Workday":
                 if not re.match(r"^1305(?:\s|:|$)", text(source.value(values, "ledger"))):
@@ -138,9 +148,11 @@ def uploaded_scope(workday: SourceData, banner: SourceData) -> BannerActivityPar
 
 def prepare_source(
     source: SourceData, parameters: BannerActivityParameters,
+    *, identities: set[tuple[str, str]] | None = None,
 ) -> tuple[list[Transaction], list[Issue]]:
     transactions, issues = [], []
-    identities = set()
+    if identities is None:
+        identities = set()
     for number, values in source.rows:
         get = lambda name: source.value(values, name)
         if not any(text(value) for value in values):

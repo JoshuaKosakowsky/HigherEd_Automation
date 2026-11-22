@@ -1,7 +1,7 @@
 # 1305 Graduate Contract Receivable reconciliation
 
-The **1305 Graduate Contract Recon** workflow reads an original Workday export
-and a complete **Banner Activity by Date & Detail Code** Insights download.
+The **1305 Graduate Contract Recon** workflow reads one or more original Workday
+exports and a complete **Banner Activity by Date & Detail Code** Insights download.
 Workday is always uploaded manually. Staff can only upload Banner data;
 administrators can upload it or extract it from **PROD Insights**, using the
 existing JWT/SSO session and completeness-checked Banner activity extractor.
@@ -33,6 +33,13 @@ selection rules and public source-module imports remain unchanged.
 - Workday uploads (1305 export and optional Grad Contract Worktag) are grouped
   together in a pale-blue section, followed by the Banner source section.
   The form is titled **Inputs**; the save location has its own **Outputs** section.
+- Use **Browse…** or drag and drop to select multiple files for either Workday
+  input. Each file must have the headers for its report. Choose 1305 exports
+  with nonoverlapping coverage to avoid double-counting activity. The workflow
+  checks repeated journal/line IDs across files when the export supplies them.
+  Multi-file runs process Workday activity in Accounting Date order and align
+  required fields across supported header aliases on Workday Data. For a single
+  export, Workday rows keep their original order.
 - **Run SQL from PROD Insights** shows inclusive start/end dates and detail codes.
   The 1305 workflow prepopulates **TPDT, TPLE, Z0LE**. Reviewers can add, change
   or remove codes for the reconciliation; at least one code is required.
@@ -50,15 +57,16 @@ selection rules and public source-module imports remain unchanged.
   periods, quarters, years, or multiple years. The fiscal calendar follows
   `shared/fiscal_period.ps1`: July P01, June P12, fiscal year named for its ending
   year, and three periods per fiscal quarter. Adjusting periods are not inferred.
-- **Grad Contract Worktag** optionally accepts the Workday **Find Journal Lines**
-  export. Only Line Memo and Worktags are used (M and O in the supplied layout;
+- **Grad Contract Worktag** optionally accepts one or more Workday **Find Journal Lines**
+  exports. Line Memo and Worktags supply the assignments (M and O in the supplied layout;
   mapping uses headers). Student CWIDs are eight digits beginning with `10`.
   SU/FA/SP/WI plus two-digit year are separated into term code and description
   (for example SU26 → Summer 2026). Names and unrelated source fields are omitted.
   Only Grant, Project and Operating Account with six-digit numbers are kept;
-  leading zeros remain intact.
+  leading zeros remain intact. With multiple uploads, Worktags are ordered by
+  Accounting Date when supplied, with academic term as the fallback.
 - **Project**, **Grant**, and **Operating Account** on CWID Recon match by CWID
-  across the supplied worktag export. Each field lists every distinct six-digit
+  across the supplied worktag exports. Each field lists every distinct six-digit
   number for that type, separated by semicolons; leading zeros remain intact.
   The Worktags tab preserves the term for each assignment. These are student
   metadata, not allocation of amounts; fiscal periods are not assumed to match
@@ -90,8 +98,8 @@ Excel Tables. All financial results are calculated by Python as a snapshot;
 editing a source tab does not recalculate them. Rerun with changed input files.
 Combined begins with CWID, Term, Recon Period and Journal Number, following the
 employee's Journal Lines Data layout. Feed blocks follow the first Workday
-source occurrence within each fiscal period; all Workday rows in the block come
-before its Banner rows. Banner rows without a Workday feed match follow last.
+occurrence in the processed rows. All Workday rows in a block come before its
+Banner rows. Banner rows without a Workday feed match follow last.
 Workday selection statuses retain review warnings; the
 workbook does not include separate Verification or Exceptions tabs.
 Combined includes a row only when its normalized Memo / Feed Document is exactly
@@ -124,7 +132,7 @@ The periods are not collapsed or netted across rows.
 | 1305 CWID Recon | Signed Banner Total Amt and Workday Total Amt (non-SIS only) by student/fiscal period. Net Period Activity is Banner plus Workday; opposite signed amounts wash to zero. This is activity, not an ending balance. Sponsor descriptions may supply the CWID; no SIS student allocation is invented. Notes / Explanation remains; Project, Grant, Operating Account, Ledger Acct and Spend Cat provide student coding. |
 | CWID Rolling Total | One row per CWID in 1305 CWID Recon. Total Amt sums signed Net Period Activity. Nonzero totals list contributing fiscal year/period pairs. Notes starts blank. |
 | 1305 Period Totals | Fiscal Year, Period, Quarter, Workday SIS Amt, Workday Other Amt, Banner Amt, Difference, Notes. Difference is Banner minus (Workday SIS + Workday Other). Includes empty periods in the selected range; Notes starts blank. |
-| Workday Data | Original selected worksheet contents with source row numbers and selection dispositions. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
+| Workday Data | Original source values, worksheet row numbers and selection dispositions. Multi-file runs add Source Export with the filename and worksheet and order dated rows by Accounting Date, followed by rows without a valid date. Excluded rows are preserved. Source text is stored literally, including values beginning with `=`. |
 | Banner Data | Source rows, including excluded rows, with Source Row, Aid Year and Selection Status omitted. Valid Feed Date values are real Excel dates displayed as yyyy-mm-dd, without time or time-zone conversion. Blank/invalid dates remain as supplied. Other source values remain literal, including text beginning with `=`. Original input files and internal selection controls are unchanged. |
 | Worktags (when uploaded) | Cleaned CWID, term code/description, worktag type and six-digit number. Only the requested metadata is retained. |
 

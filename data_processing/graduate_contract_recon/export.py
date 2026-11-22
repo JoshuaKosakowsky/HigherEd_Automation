@@ -16,7 +16,7 @@ from data_processing.shared.xlsx_output_format import apply_default_font, format
 from shared.cancellation import CancellationToken
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
 from .reconciliation import COMBINED_HEADERS, Reconciliation
-from .sources import STUDENT_PATTERN, ZERO, header_key, parse_date, student_id, text
+from .sources import REQUIRED, STUDENT_PATTERN, ZERO, SourceData, accounting_date, header_key, parse_date, student_id, text
 from .worktags import StudentWorktags, WORKTAG_HEADERS
 
 
@@ -73,6 +73,39 @@ def _rolling_total_rows(students: list[list[object]]) -> list[list[object]]:
     return rows
 
 
+def _workday_data(sources: tuple[SourceData, ...]) -> tuple[list[str], list[list[object]]]:
+    if len(sources) == 1:
+        source = sources[0]
+        return ["Source Row", *source.headers, "Selection Status"], [
+            [number, *values, *([None] * (len(source.headers) - len(values))),
+             source.dispositions.get(number, "")] for number, values in source.rows
+        ]
+
+    # Align required fields across known aliases and keep the extra report columns.
+    headers = {}
+    source_columns = []
+    for source in sources:
+        required_fields = {source.columns[field]: (field,) for field in REQUIRED["Workday"]}
+        keys = [required_fields.get(index, header_key(header) or (header, index))
+                for index, header in enumerate(source.headers)]
+        source_columns.append(keys)
+        for key, header in zip(keys, source.headers):
+            headers.setdefault(key, header)
+
+    dated_rows = []
+    for source, keys in zip(sources, source_columns):
+        for number, values in source.rows:
+            values_by_header = dict(zip(keys, values))
+            row = [number, source.label, *(values_by_header.get(key) for key in headers),
+                   source.dispositions.get(number, "")]
+            day = accounting_date(source, values)
+            dated_rows.append(((day is None, day), row))
+    dated_rows.sort(key=lambda item: item[0])
+    return ["Source Row", "Source Export", *headers.values(), "Selection Status"], [
+        row for _, row in dated_rows
+    ]
+
+
 def export_reconciliation(
     review: Reconciliation, output: Path, *, app_version: str,
     banner_source: str, cancellation: CancellationToken | None = None,
@@ -127,7 +160,7 @@ def export_reconciliation(
             # Manual activity retains its individual source-row grouping.
             reference = combined.cell(number, 4).value or row[3]
             if str(row[18]).startswith("Other Workday activity"):
-                reference = (row[4], row[5])
+                reference = (row[4], number)
             group = (row[0], row[1], reference)
             if group != previous_group:
                 shaded = not shaded
@@ -185,32 +218,29 @@ def export_reconciliation(
         for source in review.sources:
             if any(len(values) > len(source.headers) for _, values in source.rows):
                 raise ValueError(f"{source.source} has source rows wider than the headers.")
-            if source.source == "Banner":
-                columns = [index for index, header in enumerate(source.headers)
-                           if index != source.columns["id"]
-                           and header_key(header) not in {"sourcerow", "aidyear", "selectionstatus"}]
-                headers = [source.headers[source.columns["id"]], "CWID"]
-                headers.extend("Source CWID" if header_key(source.headers[index]) == "cwid"
-                               else source.headers[index] for index in columns)
-                rows = []
-                for _, values in source.rows:
-                    account = source.value(values, "id")
-                    row = [account, _banner_display_cwid(account, source.value(values, "description"))]
-                    for index in columns:
-                        value = values[index] if index < len(values) else None
-                        if index == source.columns["feed_date"]:
-                            try:
-                                value = parse_date(value)
-                            except (ValueError, TypeError, OverflowError):
-                                # Keep blank/invalid source values visible for review.
-                                pass
-                        row.append(value)
-                    rows.append(row)
-                sheet("Banner Data", headers, rows)
-                continue
-            sheet(f"{source.source} Data", ["Source Row", *source.headers, "Selection Status"],
-                [[number, *values, *([None] * (len(source.headers) - len(values))),
-                  source.dispositions.get(number, "")] for number, values in source.rows])
+        banner = review.sources[-1]
+        sheet("Workday Data", *_workday_data(review.sources[:-1]))
+        columns = [index for index, header in enumerate(banner.headers)
+                   if index != banner.columns["id"]
+                   and header_key(header) not in {"sourcerow", "aidyear", "selectionstatus"}]
+        headers = [banner.headers[banner.columns["id"]], "CWID"]
+        headers.extend("Source CWID" if header_key(banner.headers[index]) == "cwid"
+                       else banner.headers[index] for index in columns)
+        rows = []
+        for _, values in banner.rows:
+            account = banner.value(values, "id")
+            row = [account, _banner_display_cwid(account, banner.value(values, "description"))]
+            for index in columns:
+                value = values[index] if index < len(values) else None
+                if index == banner.columns["feed_date"]:
+                    try:
+                        value = parse_date(value)
+                    except (ValueError, TypeError, OverflowError):
+                        # Keep blank/invalid source values visible for review.
+                        pass
+                row.append(value)
+            rows.append(row)
+        sheet("Banner Data", headers, rows)
         wrap_headers = {"Notes", "Notes / Explanation", "Description / Original Memo",
                         "Status", "Memo / Feed Document", "Issue", "Project", "Grant",
                         "Operating Account", "Ledger Acct", "Spend Cat"}
