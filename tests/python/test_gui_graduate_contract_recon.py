@@ -1,6 +1,7 @@
 """1305 GUI service authorization, native extraction and manual-path contracts."""
 
 import csv
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ import pandas as pd
 from app.gui.models import WorkflowContext, WorkflowMode
 from app.gui.services.graduate_contract_recon import run_graduate_contract_recon
 from shared.cancellation import CancellationToken, WorkflowCancelled
+from shared.mines_paths import get_graduate_contract_recon_directory, get_shared_reconciliations_directory
 from test_graduate_contract_recon import BN_HEADERS, WD_HEADERS, banner_from_frame, bn_row, workday, wd_row
 from test_graduate_contract_worktags import worktag_source
 from openpyxl import Workbook, load_workbook
@@ -43,6 +45,50 @@ class GraduateContractServiceTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertTrue(self.output.is_file())
         auth.assert_not_called()
+
+    def test_default_output_directory_uses_mines_fiscal_period_for_run_date(self):
+        environment = {"OneDriveCommercial": self.temp.name}
+        base = (Path(self.temp.name) / "GRP-Bursar Office - General"
+                / "Y-Brswork" / "Reconciliations")
+        for run_day, year, period in (
+            (date(2026, 6, 30), "FY26", "P12 - June 2026"),
+            (date(2026, 7, 1), "FY27", "P01 - July 2026"),
+            (date(2026, 11, 22), "FY27", "P05 - November 2026"),
+            (date(2027, 1, 1), "FY27", "P07 - January 2027"),
+        ):
+            with self.subTest(run_day=run_day):
+                self.assertEqual(get_graduate_contract_recon_directory(run_day, environment),
+                                 base / year / "1305 - Grad Contract (1323)" / period)
+        self.assertFalse(base.exists())
+
+    def test_shared_output_creates_missing_fiscal_folders_and_keeps_existing_file(self):
+        with patch.dict("os.environ", {"OneDriveCommercial": self.temp.name}):
+            base = get_shared_reconciliations_directory()
+            base.mkdir(parents=True)
+            self.output = get_graduate_contract_recon_directory(date(2026, 11, 22)) / "review.xlsx"
+            self.inputs["output_file"] = self.output
+            self.assertFalse((base / "FY27").exists())
+            with patch("app.gui.services.graduate_contract_recon.read_source", side_effect=self.sources):
+                self.assertTrue(run_graduate_contract_recon(self.context()).success)
+            with self.assertRaisesRegex(ValueError, "Output already exists"):
+                run_graduate_contract_recon(self.context())
+        self.assertTrue(self.output.is_file())
+        book = load_workbook(self.output)
+        try:
+            self.assertIn("1305 Period Totals", book.sheetnames)
+        finally:
+            book.close()
+
+    def test_missing_shared_root_or_custom_folder_is_not_created(self):
+        with patch.dict("os.environ", {"OneDriveCommercial": self.temp.name}):
+            shared = get_graduate_contract_recon_directory(date(2026, 11, 22))
+            for folder, error in ((shared, "shared OneDrive Reconciliations folder is unavailable"),
+                                  (Path(self.temp.name) / "custom", "output folder does not exist")):
+                with self.subTest(folder=folder):
+                    self.inputs["output_file"] = folder / "review.xlsx"
+                    with self.assertRaisesRegex(ValueError, error):
+                        run_graduate_contract_recon(self.context())
+                    self.assertFalse(folder.exists())
 
     def test_upload_scope_uses_file_dates_and_all_codes_not_hidden_inputs(self):
         self.inputs.update(start_date="invalid", end_date="invalid", detail_codes="")
@@ -210,11 +256,15 @@ class GraduateContractServiceTests(unittest.TestCase):
 
     def test_cancelled_request_cannot_publish(self):
         token = CancellationToken(); token.request()
-        with patch("app.gui.services.graduate_contract_recon.build_authenticated_client") as auth:
+        with patch.dict("os.environ", {"OneDriveCommercial": self.temp.name}), patch(
+            "app.gui.services.graduate_contract_recon.build_authenticated_client") as auth:
+            get_shared_reconciliations_directory().mkdir(parents=True)
+            self.output = get_graduate_contract_recon_directory(date(2026, 11, 22)) / "review.xlsx"
+            self.inputs["output_file"] = self.output
             with self.assertRaises(WorkflowCancelled):
                 run_graduate_contract_recon(self.context(cancellation=token))
         auth.assert_not_called()
-        self.assertFalse(self.output.exists())
+        self.assertFalse(self.output.parent.exists())
 
     def test_auth_errors_are_sanitized_before_general_logger(self):
         self.inputs["banner_source"] = "sql"

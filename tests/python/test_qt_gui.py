@@ -55,6 +55,7 @@ class QtGuiTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        self.enterContext(patch.dict(os.environ, {"OneDriveCommercial": str(self.root / "OneDrive")}))
         self.policy = self.root / "policy.json"
         self.payload = {
             "schemaVersion": 3,
@@ -197,6 +198,35 @@ class QtGuiTests(unittest.TestCase):
         self.assertEqual(confirmation.call_args.args[0].parameters["output_file"], output)
         self.assertEqual(page.inputs["output_file"].text(), str(output))
         page.close()
+
+    def test_1305_default_output_follows_fiscal_rollover_without_creating_folders_on_review(self):
+        window = self.open_app()
+        with patch("app.gui.workflow_registry.datetime") as clock:
+            clock.now.return_value = datetime(2026, 6, 30, 23, 59)
+            window.show_workflow(get_workflow("graduate_contract_recon"))
+            page = window.current_page
+            control = page.inputs["output_file"]
+            self.assertEqual(Path(control.text()).parent.parts[-3:],
+                             ("FY26", "1305 - Grad Contract (1323)", "P12 - June 2026"))
+            for key in ("workday_file", "banner_file"):
+                source = self.root / f"{key}.xlsx"
+                source.touch()
+                page.inputs[key].setText(str(source))
+            clock.now.return_value = datetime(2026, 7, 1, 0, 1)
+            with patch.object(page, "_confirm", return_value=False) as confirmation:
+                page._run()
+            output = confirmation.call_args.args[0].parameters["output_file"]
+            self.assertEqual(output.parent.parts[-3:],
+                             ("FY27", "1305 - Grad Contract (1323)", "P01 - July 2026"))
+            self.assertEqual(output.name, "1305_recon_20260701_000100.xlsx")
+            self.assertFalse(output.parent.exists())
+
+    def test_1305_form_opens_with_empty_output_when_onedrive_is_unconfigured(self):
+        window = self.open_app()
+        with patch.dict(os.environ, {"OneDriveCommercial": "", "USERPROFILE": ""}):
+            window.show_workflow(get_workflow("graduate_contract_recon"))
+            control = window.current_page.inputs["output_file"]
+            self.assertEqual(control.text(), "")
 
     def test_recon_has_one_card_and_admin_can_choose_sql(self):
         window = self.open_app()

@@ -78,6 +78,20 @@ selection rules and public source-module imports remain unchanged.
   Repeated identical CWID/term/tag assignments are collapsed. Ambiguous/missing
   CWIDs are not assigned; malformed rows contribute to the worktag warning count.
 
+## Workbook location
+
+The app fills **Save reconciliation as** from the workstation's current date
+when the form opens and refreshes the default at **Review & run**. For a run
+in November 2026, the folder under the Mines OneDrive root is
+`GRP-Bursar Office - General\Y-Brswork\Reconciliations\FY27\1305 - Grad Contract (1323)\P05 - November 2026`.
+The filing period follows the July–June fiscal calendar. The dates covered by
+the source files or SQL selection can differ from the filing period.
+
+An authorized run creates missing fiscal-year, account and period folders
+under the existing shared `Reconciliations` folder. A manually chosen destination
+can use any existing approved folder. The filename remains
+`1305_recon_YYYYMMDD_HHMMSS.xlsx`, and publication uses exclusive creation.
+
 ## Matching and output
 
 Workday **SIS** External Reference is matched to Banner **Feed Document**, falling

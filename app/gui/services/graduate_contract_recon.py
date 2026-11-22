@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from zipfile import BadZipFile
 
@@ -19,7 +20,10 @@ from shared.insights.banner_activity import BannerActivityParameters, extract_ba
 from shared.insights.config import load_department_profiles
 from shared.insights.query_catalog import get_query
 from shared.insights.session_auth import build_authenticated_client
-from shared.mines_paths import get_shared_gui_access_path
+from shared.mines_paths import (
+    GRADUATE_CONTRACT_RECON_FOLDER, MinesPathError, get_shared_gui_access_path,
+    get_shared_reconciliations_directory,
+)
 
 
 def _upload_paths(selection: str | Path | tuple[Path, ...] | list[Path] | None) -> tuple[Path, ...]:
@@ -45,6 +49,34 @@ def _read_uploads(
     return tuple(uploads)
 
 
+def _ensure_shared_output_folder(output: Path) -> None:
+    if not output.is_absolute() or output.suffix.lower() != ".xlsx" or output.parent.is_dir():
+        return
+    try:
+        base = get_shared_reconciliations_directory().resolve()
+        fiscal_year, account, period = output.parent.resolve().relative_to(base).parts
+    except (MinesPathError, ValueError):
+        return
+
+    # Automatic creation applies only to the shared 1305 fiscal folder tree.
+    if (account != GRADUATE_CONTRACT_RECON_FOLDER
+            or re.fullmatch(r"FY[0-9]{2}", fiscal_year) is None
+            or re.fullmatch(r"P(?:0[1-9]|1[0-2]) - [A-Z][a-z]+ [0-9]{4}", period) is None):
+        return
+    if not base.is_dir():
+        raise ValueError(
+            "The shared OneDrive Reconciliations folder is unavailable. "
+            "Check that the Bursar library is synced or choose an existing approved output folder."
+        )
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ValueError(
+            f"Could not create the 1305 output folder: {output.parent}. "
+            "Check OneDrive sync and folder permissions."
+        ) from error
+
+
 def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     source = context.parameters.get("banner_source")
     if source not in {"manual", "sql"}:
@@ -60,7 +92,6 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
     output = Path(context.parameters["output_file"])
     banner_path = Path(context.parameters["banner_file"]) if source == "manual" else None
     inputs = workday_paths + worktag_paths
-    validate_output(output, inputs + ((banner_path,) if banner_path else ()))
     if context.cancellation:
         context.cancellation.check()
     if source == "sql":
@@ -71,6 +102,8 @@ def run_graduate_contract_recon(context: WorkflowContext) -> WorkflowResult:
             raise ValueError("1305 Banner SQL extraction requires PROD Insights.")
     elif context.mode is not None:
         raise ValueError("File upload reconciliation does not use TEST or PROD.")
+    _ensure_shared_output_folder(output)
+    validate_output(output, inputs + ((banner_path,) if banner_path else ()))
     context.progress.report("Reading Trial Balance (1305) exports")
     workday = _read_uploads(workday_paths, "Workday", context.cancellation)
     worktags = None

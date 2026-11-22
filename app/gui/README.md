@@ -458,6 +458,12 @@ SQL detail codes default to **TPDT, TPLE, Z0LE** and remain editable; at least o
 code is required. File upload mode uses all valid Banner codes and the dates
 contained in the supplied exports; hidden SQL settings do not filter uploads.
 Upload both financial exports for the same intended scope.
+The default **Save reconciliation as** location uses the workstation's run date
+and the shared Mines OneDrive library. For a November 2026 run, it is under
+`GRP-Bursar Office - General\Y-Brswork\Reconciliations\FY27\1305 - Grad Contract (1323)\P05 - November 2026`.
+The app creates missing fiscal-year, account and period folders when the run
+starts. The shared `Reconciliations` folder must be synced. Staff can still
+select a different existing approved folder.
 The combined tab shows Workday rows above matching Banner
 detail. Period Totals counts matched activity once; Combined displays both
 sources' amounts for review. Worksheets

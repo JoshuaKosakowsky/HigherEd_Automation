@@ -6,18 +6,23 @@ import ctypes
 import os
 import sys
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 
 
 ONEDRIVE_ENVIRONMENT_VARIABLE = "OneDriveCommercial"
 ONEDRIVE_FALLBACK_DIRECTORY = "OneDrive - Colorado School of Mines"
-GUI_ACCESS_RELATIVE_DIRECTORY = Path(
+BURSAR_RELATIVE_DIRECTORY = Path(
     "GRP-Bursar Office - General",
     "Y-Brswork",
-    "Staff Folders",
-    ".highered_automation",
 )
+GUI_ACCESS_RELATIVE_DIRECTORY = BURSAR_RELATIVE_DIRECTORY / "Staff Folders" / ".highered_automation"
 GUI_ACCESS_FILENAME = "gui_access.json"
+GRADUATE_CONTRACT_RECON_FOLDER = "1305 - Grad Contract (1323)"
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
 WINDOWS_HIDDEN_ATTRIBUTE = 0x2
 INVALID_WINDOWS_ATTRIBUTES = 0xFFFFFFFF
 
@@ -68,6 +73,25 @@ def get_shared_csmf_balances_directory(
 ) -> Path:
     """Return the shared, fiscal-year-specific CSMF opening-balance location."""
     return get_shared_gui_access_path(environment).parent / "csmf_opening_balances"
+
+
+def get_shared_reconciliations_directory(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    return get_mines_onedrive_root(environment) / BURSAR_RELATIVE_DIRECTORY / "Reconciliations"
+
+
+def get_graduate_contract_recon_directory(
+    day: date, environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Build the shared 1305 filing directory for the workstation's run date."""
+    # Keep workbook imports out of the app's startup path.
+    from data_processing.shared.source_exports import fiscal_scope
+
+    fiscal_year, period, _ = fiscal_scope(day)
+    month = _MONTH_NAMES[day.month - 1]
+    return (get_shared_reconciliations_directory(environment) / f"FY{fiscal_year % 100:02d}"
+            / GRADUATE_CONTRACT_RECON_FOLDER / f"{period} - {month} {day.year}")
 
 
 def ensure_hidden_directory(

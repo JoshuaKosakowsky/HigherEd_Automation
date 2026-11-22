@@ -18,6 +18,7 @@ from app.gui.models import (
     WorkflowMode, WorkflowResult, WorkflowRunner,
 )
 from shared.banner.term import get_banner_term
+from shared.mines_paths import MinesPathError, get_graduate_contract_recon_directory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +35,15 @@ def _previous_month_end() -> date:
 def _last_completed_fiscal_year() -> str:
     today = date.today()
     return str(today.year - (today.month < 7))
+
+
+def _graduate_contract_output() -> Path | str:
+    now = datetime.now()
+    try:
+        directory = get_graduate_contract_recon_directory(now.date())
+    except MinesPathError:
+        return ""
+    return directory / f"1305_recon_{now:%Y%m%d_%H%M%S}.xlsx"
 
 
 def _defer_runner(service: str, function: str) -> WorkflowRunner:
@@ -387,9 +397,9 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 default="TPDT, TPLE, Z0LE",
                 help_text="Defaults to TPDT, TPLE and Z0LE for this reconciliation. Add, change or remove codes as needed; at least one code is required."),
             ParameterDefinition(key="output_file", label="Save reconciliation as", kind=ParameterKind.OUTPUT_FILE,
-                default_factory=lambda: PROJECT_ROOT / "data" / f"1305_recon_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                default_factory=_graduate_contract_output,
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
-                help_text="Choose an existing approved output folder and a new filename. Source files and existing results are never overwritten."),
+                help_text="Defaults to the current fiscal period in shared OneDrive. If the path is blank, connect to Mines OneDrive or choose an existing approved folder."),
         ),
     ),
 )
