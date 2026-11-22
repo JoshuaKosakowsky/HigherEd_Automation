@@ -18,11 +18,23 @@ and [output #44](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/
 - Upload **Trial Balance** on first use of that FY or when updating any opening
   balances. A file may contain just one project. Otherwise leave this input
   empty to reuse the shared saved balances.
-- Choose an existing approved output folder and a new `.xlsx` filename.
+- **Save CSMF workbook as** defaults to the workstation's current fiscal
+  period in shared Mines OneDrive. You can choose an existing approved
+  folder and a new `.xlsx` filename.
 - **Review & run** displays the selected FY, all seven balances (including
   blanks), each project's actual upload date, and which values come from the
   new upload or saved data. It also shows the latest upload's filename/date.
   Cancelling review makes no storage changes.
+
+As of 0.30.36, a run in November 2026 files the workbook here:
+
+```text
+%OneDriveCommercial%\GRP-Bursar Office - General\Y-Brswork\External Partners\CSM Foundation\FY27\P05 - November 2026
+```
+
+Filing uses the workstation date, with July as P01 and the fiscal year
+named for its ending year. Sync the shared CSM Foundation folder first.
+The workflow creates missing fiscal year and period folders when running.
 
 No Banner/Insights login or TEST/PROD choice is needed. Existing Access Management
 controls apply: administrators can see the workflow; grant `csmf_loans` to an

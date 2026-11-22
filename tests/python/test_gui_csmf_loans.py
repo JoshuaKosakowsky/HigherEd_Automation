@@ -4,7 +4,7 @@ import logging
 import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -160,6 +160,38 @@ class CsmfGuiTests(unittest.TestCase):
             self.assertEqual(factory(), 2027)
             clock.today.return_value = date(2027, 8, 10)
             self.assertEqual(factory(), 2028)
+
+    def test_output_default_refreshes_for_current_fiscal_period_without_creating_folders(self):
+        onedrive = self.root / "OneDrive"
+        foundation = (onedrive / "GRP-Bursar Office - General" / "Y-Brswork"
+                      / "External Partners" / "CSM Foundation")
+        foundation.mkdir(parents=True)
+        with (
+            patch.dict(os.environ, {"OneDriveCommercial": str(onedrive)}),
+            patch("app.gui.workflow_registry.datetime") as clock,
+        ):
+            clock.now.return_value = datetime(2026, 6, 30, 23, 59)
+            page = WorkflowDetailPage(None, get_workflow("csmf_loans"), self.executor, lambda: None)
+            self.addCleanup(page.deleteLater)
+            self.assertEqual(Path(page.inputs["output_file"].text()),
+                             foundation / "FY26" / "P12 - June 2026" / "CSMF_R1_20260630_235900.xlsx")
+            page.inputs["journal_file"].setText(str(self.journal))
+            page.inputs["trial_balance_file"].setText(str(self.trial))
+            for now, period in ((datetime(2026, 7, 1), "P01 - July 2026"),
+                                (datetime(2026, 11, 22), "P05 - November 2026")):
+                with self.subTest(now=now):
+                    clock.now.return_value = now
+                    with patch.object(page, "_confirm", return_value=False) as confirm:
+                        page._run()
+                    self.assertTrue(confirm.called, page.error.text())
+                    output = confirm.call_args.args[0].parameters["output_file"]
+                    self.assertEqual(output, foundation / "FY27" / period / f"CSMF_R1_{now:%Y%m%d_%H%M%S}.xlsx")
+        self.assertEqual(list(foundation.iterdir()), [])
+
+    def test_output_default_is_blank_without_the_synced_foundation_folder(self):
+        output = next(p for p in get_workflow("csmf_loans").parameters if p.key == "output_file")
+        with patch.dict(os.environ, {"OneDriveCommercial": str(self.root / "not-synced")}):
+            self.assertEqual(output.default_factory(), "")
 
 
 if __name__ == "__main__":

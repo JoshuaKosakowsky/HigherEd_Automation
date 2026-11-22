@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from app.gui import APP_VERSION
@@ -12,6 +13,32 @@ from data_processing.csmf_loans.balances import (
 from data_processing.csmf_loans.export import build_workbook
 from data_processing.csmf_loans.sources import prepare_activity, read_journal, validate_fiscal_year
 from data_processing.shared.workbook_output import save_new_workbook, validate_output
+from shared.mines_paths import MinesPathError, get_shared_csmf_foundation_directory
+
+
+def _ensure_shared_output_folder(output: Path) -> None:
+    if not output.is_absolute() or output.suffix.lower() != ".xlsx" or output.parent.is_dir():
+        return
+    try:
+        base = get_shared_csmf_foundation_directory().resolve()
+        fiscal_year, period = output.parent.resolve().relative_to(base).parts
+    except (MinesPathError, ValueError):
+        return
+    if (re.fullmatch(r"FY[0-9]{2}", fiscal_year) is None
+            or re.fullmatch(r"P(?:0[1-9]|1[0-2]) - [A-Z][a-z]+ [0-9]{4}", period) is None):
+        return
+    if not base.is_dir():
+        raise ValueError(
+            "The shared OneDrive CSM Foundation folder is unavailable. "
+            "Check that the Bursar library is synced or choose an existing approved output folder."
+        )
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ValueError(
+            f"Could not create the CSMF output folder: {output.parent}. "
+            "Check OneDrive sync and folder permissions."
+        ) from error
 
 
 def run_csmf_loans(context: WorkflowContext) -> WorkflowResult:
@@ -21,9 +48,10 @@ def run_csmf_loans(context: WorkflowContext) -> WorkflowResult:
     journal_path = Path(context.parameters["journal_file"])
     trial_path = Path(context.parameters["trial_balance_file"]) if context.parameters.get("trial_balance_file") else None
     output = Path(context.parameters["output_file"])
-    validate_output(output, (journal_path, *((trial_path,) if trial_path else ())))
     if context.cancellation:
         context.cancellation.check()
+    _ensure_shared_output_folder(output)
+    validate_output(output, (journal_path, *((trial_path,) if trial_path else ())))
     selection = context.parameters.get("_opening_balances")
     if selection is None:
         selection = prepare_opening_balances(year, trial_path)

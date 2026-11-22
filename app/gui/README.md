@@ -56,7 +56,7 @@ These display changes do not modify shared calendar data or workflow rules.
 - `services/parameters.py` preserves input parsing independently of the toolkit.
 - Each run has a review dialog. TEST is preferred where modes exist; production
   displays the workflow warning and requires an explicit Run in production action.
-- Refund Review, 1305 Graduate Contract Recon and Historical Trends generate their default output
+- CSMF Loans, Refund Review, 1305 Graduate Contract Recon and Historical Trends generate their default output
   timestamps when the form opens and refresh them before each **Review & run**,
   including reruns on the same form. Manually entered or browsed output paths
   are preserved. Filenames keep second precision and existing overwrite protections.
@@ -390,6 +390,10 @@ update only included projects after a successful run; omitted projects retain
 their saved values/dates. An included blank/null amount clears that project's
 balance. Cached runs do not refresh timestamps. No prior output workbook or
 TEST/PROD selection is used.
+As of 0.30.36, **Save CSMF workbook as** defaults to the current fiscal period
+in shared OneDrive under `GRP-Bursar Office - General\Y-Brswork\External Partners\CSM Foundation`.
+A November 2026 run uses `FY27\P05 - November 2026`. A confirmed run creates
+missing fiscal folders under the synced CSM Foundation folder.
 As of 0.30.31, the workbook opens on **CSMF Payable**, followed by
 **CSMF Receivable**, **Current FY Recon**, and the seven loan tabs. **Journal
 Lines** shows the GA columns and import status with text wrapping turned off.

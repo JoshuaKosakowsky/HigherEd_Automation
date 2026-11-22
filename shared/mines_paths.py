@@ -113,6 +113,27 @@ def get_refund_review_directory(
     return base / fiscal_year / "Daily Pending Refunds" / period
 
 
+def get_shared_csmf_foundation_directory(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    return (get_mines_onedrive_root(environment) / BURSAR_RELATIVE_DIRECTORY
+            / "External Partners" / "CSM Foundation")
+
+
+def get_csmf_foundation_filing_directory(
+    day: date, environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Build the fiscal filing path beneath the synced CSM Foundation folder."""
+    base = get_shared_csmf_foundation_directory(environment)
+    if not base.is_dir():
+        raise MinesPathError(
+            f"The shared OneDrive CSM Foundation folder is unavailable: {base}. "
+            "Check that the Bursar library is synced."
+        )
+    fiscal_year, period = _fiscal_folder_names(day)
+    return base / fiscal_year / period
+
+
 def ensure_hidden_directory(
     directory: Path,
     *,

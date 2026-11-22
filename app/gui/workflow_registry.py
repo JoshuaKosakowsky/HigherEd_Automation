@@ -19,7 +19,8 @@ from app.gui.models import (
 )
 from shared.banner.term import get_banner_term
 from shared.mines_paths import (
-    MinesPathError, get_graduate_contract_recon_directory, get_refund_review_directory,
+    MinesPathError, get_csmf_foundation_filing_directory, get_graduate_contract_recon_directory,
+    get_refund_review_directory,
 )
 
 
@@ -37,6 +38,15 @@ def _previous_month_end() -> date:
 def _last_completed_fiscal_year() -> str:
     today = date.today()
     return str(today.year - (today.month < 7))
+
+
+def _csmf_output() -> Path | str:
+    now = datetime.now()
+    try:
+        directory = get_csmf_foundation_filing_directory(now.date())
+    except MinesPathError:
+        return ""
+    return directory / f"CSMF_R1_{now:%Y%m%d_%H%M%S}.xlsx"
 
 
 def _graduate_contract_output() -> Path | str:
@@ -86,9 +96,9 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
                 file_types=(("Workday exports", "*.xlsx *.xlsm *.csv"),),
                 help_text="Required on first use of an FY. You may upload just the projects to update; omitted projects keep their saved balances and dates. A blank/null amount clears that project's balance. Review & run shows the values before saving."),
             ParameterDefinition(key="output_file", label="Save CSMF workbook as", kind=ParameterKind.OUTPUT_FILE,
-                default_factory=lambda: PROJECT_ROOT / "data" / f"CSMF_R1_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+                default_factory=_csmf_output,
                 file_types=(("Excel workbook", "*.xlsx"),), default_extension=".xlsx",
-                help_text="Choose an existing output folder and a new filename. Sources and existing output are never overwritten."),
+                help_text="Defaults to the current fiscal period in shared OneDrive. If blank, sync the CSM Foundation folder or choose an existing approved output folder."),
         ),
     ),
     WorkflowDefinition(

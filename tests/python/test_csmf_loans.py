@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 import tempfile
 import unittest
 from datetime import date, datetime, timezone
@@ -18,6 +19,7 @@ from data_processing.csmf_loans.sources import (
     LOANS, opening_values, prepare_activity, project_number, read_journal, read_trial_balance,
 )
 from shared.cancellation import CancellationToken, WorkflowCancelled
+from shared.mines_paths import get_csmf_foundation_filing_directory
 
 
 JOURNAL_HEADERS = ["Project", "Ledger Account", "Journal Number", "Accounting Date", "Source",
@@ -1245,6 +1247,31 @@ class CsmfTests(unittest.TestCase):
         self.assertFalse((self.root / "failed.xlsx").exists())
         self.assertFalse(BalanceStore(2027).path.exists())
         self.assertEqual(originals, (self.journal.read_bytes(), self.trial.read_bytes()))
+
+    def test_shared_output_creates_only_missing_fiscal_folders_on_run(self):
+        onedrive = self.root / "OneDrive"
+        foundation = (onedrive / "GRP-Bursar Office - General" / "Y-Brswork"
+                      / "External Partners" / "CSM Foundation")
+        with patch.dict(os.environ, {"OneDriveCommercial": str(onedrive)}):
+            output = foundation / "FY27" / "P05 - November 2026" / "review.xlsx"
+            with self.assertRaisesRegex(ValueError, "CSM Foundation folder is unavailable"):
+                self.run_workflow(output=output)
+            self.assertFalse(foundation.exists())
+            foundation.mkdir(parents=True)
+            self.assertEqual(get_csmf_foundation_filing_directory(date(2026, 11, 22)), output.parent)
+            token = CancellationToken()
+            token.request()
+            with self.assertRaises(WorkflowCancelled):
+                self.run_workflow(cancellation=token, output=output)
+            self.assertFalse(output.parent.exists())
+            self.assertTrue(self.run_workflow(output=output).success)
+            self.assertIn("Current FY Recon", self.workbook(output).sheetnames)
+            with self.assertRaisesRegex(ValueError, "Output already exists"):
+                self.run_workflow(output=output)
+            arbitrary = foundation / "other" / "review.xlsx"
+            with self.assertRaisesRegex(ValueError, "output folder does not exist"):
+                self.run_workflow(output=arbitrary)
+            self.assertFalse(arbitrary.parent.exists())
 
     def test_cache_atomic_failure_keeps_previous_file(self):
         self.run_workflow(self.selection()); store = BalanceStore(2027); old = store.path.read_bytes()
