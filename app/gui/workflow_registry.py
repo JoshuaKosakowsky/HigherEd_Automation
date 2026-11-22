@@ -48,7 +48,7 @@ def _defer_runner(service: str, function: str) -> WorkflowRunner:
 WORKFLOWS: tuple[WorkflowDefinition, ...] = (
     WorkflowDefinition(
         workflow_id="csmf_loans", name="CSMF Loans — R1",
-        description="Build loan activity worksheets, Current FY Recon for all uploaded FY activity, and Current Month Recon for the latest uploaded month. Both show Foundation AP and AR due and paid through the report month. Variance remains pending.",
+        description="Build loan activity worksheets, Current FY Recon for all uploaded FY activity, and Current Month Recon for the latest uploaded month. Both show Foundation AP and AR and compare raw and adjusted 1621 principal through the report month.",
         category="Accounts Receivable", cancellable=True,
         runner=_defer_runner("csmf_loans", "run_csmf_loans"),
         parameters=(

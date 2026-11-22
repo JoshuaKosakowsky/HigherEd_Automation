@@ -24,6 +24,7 @@ from .sources import LOANS, SECTIONS, Activity, LoanActivity
 HEADERS = ["Activity", "Journal Number", "Accounting Date", "Source", "Description",
            "Amount", "Debit/Credit", "Adjusted Amount"]
 SUBTOTAL_FILL = PatternFill("solid", fgColor="CFDCE9")
+VARIANCE_FORMAT = '$#,##0.00;[Red]($#,##0.00);$0.00'
 PRIOR_YEAR_FOOTNOTES = (
     ("2100", "*", "Footnote* — Payment of a prior fiscal year obligation recorded in the current fiscal year."),
     ("1382", "**", "Footnote** — Prior fiscal year accounts receivable activity recorded in the current fiscal year."),
@@ -32,6 +33,7 @@ AP_DUE_LABEL = "AP due — 2402"
 AP_PAID_PREFIX = "AP paid — "
 AP_REVIEW_PREFIX = "Review AP — "
 AP_PAID_ACCOUNTS = ("2881", "5909R", "8309R")
+PRINCIPAL_SECTIONS = ("payment", "loan_activity", "1621")
 # Keep the reference summary's order without changing the existing loan tabs.
 RECON_LOAN_ORDER = ("694511", "694512", "694513", "694514", "694518", "694521", "694516")
 # Reference identifiers remain useful even though Unisa reports are not inputs.
@@ -88,6 +90,17 @@ def _foundation_payable_labels(project_rows: list[Activity]) -> dict[int, str]:
     return labels
 
 
+def _adjusted_through_report_month(
+    loan_sheet: str, subtotal: int, bounds: tuple[int, int], *, monthly: bool,
+) -> str:
+    if not monthly:
+        return f"{loan_sheet}!H{subtotal}"
+    first, last = bounds
+    if last < first:
+        return "0"
+    return f'SUMIF({loan_sheet}!C{first}:C{last},"<"&EDATE($D$3,1),{loan_sheet}!H{first}:H{last})'
+
+
 def _foundation_payable_formulas(
     loan_sheet: str, totals: dict[str, int], detail_rows: dict[str, tuple[int, int]], *, monthly: bool,
 ) -> tuple[str, str]:
@@ -102,13 +115,8 @@ def _foundation_payable_formulas(
     # The signed interest subtotal already includes its transfer debit. The
     # principal transfer is in 2881, so subtract it from collections separately.
     due = [sum_labeled(AP_DUE_LABEL), sum_labeled(AP_PAID_PREFIX + "2881")]
-    for section in ("payment", "5909R"):
-        first, last = detail_rows[section]
-        if not monthly:
-            due.append(f"{loan_sheet}!H{totals[section]}")
-        elif first <= last:
-            due.append(f'SUMIF({loan_sheet}!C{first}:C{last},"<"&EDATE($D$3,1),'
-                       f'{loan_sheet}!H{first}:H{last})')
+    due.extend(_adjusted_through_report_month(loan_sheet, totals[section], detail_rows[section], monthly=monthly)
+               for section in ("payment", "5909R"))
     paid = ",".join(sum_labeled(AP_PAID_PREFIX + account) for account in AP_PAID_ACCOUNTS)
     review = "+".join(f'COUNTIFS({labels},"{AP_REVIEW_PREFIX}{account}"{cutoff})'
                       for account in ("2402", *AP_PAID_ACCOUNTS))
@@ -116,6 +124,16 @@ def _foundation_payable_formulas(
         f'=IF({review}>0,"Review",ROUND(SUM({",".join(due)}),2))',
         f'=IF({review}>0,"Review",ROUND(SUM({paid}),2))',
     )
+
+
+def _raw_principal_balance(loan_sheet: str, last_1621: int, *, before: str = "") -> str:
+    # Only the three 1621 sections are in range. Their subtotal rows have no
+    # Debit/Credit marker, so the raw rollforward counts detail only.
+    amounts = f"{loan_sheet}!F10:F{last_1621}"
+    directions = f"{loan_sheet}!G10:G{last_1621}"
+    cutoff = f',{loan_sheet}!C10:C{last_1621},"<"&{before}' if before else ""
+    return (f'{loan_sheet}!F7+SUMIFS({amounts},{directions},"Debit"{cutoff})'
+            f'-SUMIFS({amounts},{directions},"Credit"{cutoff})')
 
 
 def _current_recon_sheet(
@@ -143,13 +161,12 @@ def _current_recon_sheet(
         "G6": f"{scope}\nPayments", "H6": "Net Change\nin Principal",
         "J6": "Interest", "K6": "Late Charges", "L6": "Total\nInterest and Fees",
         "A14": "Totals", "A18": "Pending Items", "A19": "Loan", "B19": "Unisa\nAcct", "C19": "Project",
-        "D19": "Unisa Ending\nBalance", "E19": "GL", "F19": "Variance",
-        "G19": "Notes / Outstanding Items", "A27": "Totals", "D27": "Pending", "F27": "Pending",
+        "D19": "Expected Ending\nPrincipal", "E19": "GL Principal\n(1621)", "F19": "Variance",
+        "G19": "Notes / Outstanding Items", "A27": "Totals",
         "A16": ("Beginning Balance = FY opening + 1621 debits - credits dated before this month. Activity covers this month only."
                 if monthly else "Beginning Balance = FY opening + all uploaded 1621 debits - credits, including the reconciliation month."),
         "A17": "Net AP and Net AR add the signed due and paid amounts. Review flagged AP journal lines. Prior-year activity is footnoted.",
-        "A29": ("Blank beginning balances remain unknown; GL is the cumulative Loan Total through this month. Shaded blanks are review inputs."
-                if monthly else "Blank beginning balances remain unknown; GL includes the available activity. Shaded blanks are review inputs."),
+        "A29": "Pending Items compares raw and adjusted 1621 principal through the report month. A missing opening leaves the balance blank.",
         "A31": "Reconciliation Dates", "A32": "Completed By:", "A33": "Completed Date:",
         "A34": "Reviewed By:", "A35": "Reviewed Date:",
     }
@@ -166,18 +183,12 @@ def _current_recon_sheet(
         sheet.cell(row, 1, LOANS[project].upper())
         sheet.cell(row, 2, RECON_UNISA_ACCOUNTS[project])
         sheet.cell(row, 3, project)
-        # Payment, Loan Activity and Unclassified are the first three sections
-        # and contain only 1621. Subtotal rows have no Debit/Credit marker.
         # Monthly openings stop before the report month; FY openings retain
         # every uploaded period. Both use raw amounts, independent of edits to H.
         opening = f"{loan_sheet}!F7"
         last_1621 = totals["1621"] - 1
-        amounts = f"{loan_sheet}!F10:F{last_1621}"
-        directions = f"{loan_sheet}!G10:G{last_1621}"
-        before_month = f',{loan_sheet}!C10:C{last_1621},"<"&$D$3' if monthly else ""
-        sheet.cell(row, 4, f'=IF({opening}="","",{opening}'
-                          f'+SUMIFS({amounts},{directions},"Debit"{before_month})'
-                          f'-SUMIFS({amounts},{directions},"Credit"{before_month}))')
+        beginning = _raw_principal_balance(loan_sheet, last_1621, before="$D$3" if monthly else "")
+        sheet.cell(row, 4, f'=IF({opening}="","",{beginning})')
         for column, section in ((5, "1621"), (6, "loan_activity"), (7, "payment"),
                                 (10, "5909R"), (11, "8309R")):
             if not monthly:
@@ -211,10 +222,15 @@ def _current_recon_sheet(
         sheet.cell(pending, 1, f"=A{row}")
         sheet.cell(pending, 2, f'=IF(B{row}="","",B{row})')
         sheet.cell(pending, 3, f"=C{row}")
-        # GL is cumulative in both views, not just the month's activity. This
-        # is the existing Loan Total, not an independent GL balance.
-        sheet.cell(pending, 5, f"={loan_sheet}!H{totals['loan']}")
-        sheet.cell(pending, 6, "Pending")
+        expected = _raw_principal_balance(loan_sheet, last_1621, before="EDATE($D$3,1)") if monthly else beginning
+        adjusted_opening = f"{loan_sheet}!H7"
+        adjusted_activity = ",".join(
+            _adjusted_through_report_month(loan_sheet, totals[section], detail_rows[project][section], monthly=monthly)
+            for section in PRINCIPAL_SECTIONS
+        )
+        sheet.cell(pending, 4, f'=IF(COUNT({opening})=0,"",ROUND({expected},2))')
+        sheet.cell(pending, 5, f'=IF(COUNT({adjusted_opening})=0,"",ROUND(-SUM({adjusted_opening},{adjusted_activity}),2))')
+        sheet.cell(pending, 6, f'=IF(COUNT(D{pending}:E{pending})=2,ROUND(D{pending}-E{pending},2),"Pending")')
 
     for column in (5, 6, 7, 8, 10, 11, 12, 17, 18):
         letter = get_column_letter(column)
@@ -228,7 +244,10 @@ def _current_recon_sheet(
         ap = f"N{row}:O{row}"
         sheet[f"P{row}"] = f'=IF(COUNT({ap})=2,ROUND(SUM({ap}),2),"Review")'
         sheet[f"S{row}"] = f"=ROUND(SUM(Q{row}:R{row}),2)"
-    sheet["E27"] = "=SUM(E20:E26)"
+    for column in ("D", "E"):
+        cells = f"{column}20:{column}26"
+        sheet[f"{column}27"] = f'=IF(COUNT({cells})=ROWS({cells}),ROUND(SUM({cells}),2),"Pending")'
+    sheet["F27"] = '=IF(COUNT(D27:E27)=2,ROUND(D27-E27,2),"Pending")'
     for row in range(32, 36):
         sheet.merge_cells(f"A{row}:B{row}")
         sheet.merge_cells(f"C{row}:D{row}")
@@ -251,6 +270,8 @@ def _current_recon_sheet(
             for column in columns:
                 sheet.cell(row, column).number_format = CURRENCY_FORMAT
                 sheet.cell(row, column).alignment = Alignment(horizontal="right", vertical="center")
+    for row in range(20, 28):
+        sheet.cell(row, 6).number_format = VARIANCE_FORMAT
     for region, color in (("A5:H5", "E2EFDA"), ("J5:L5", "DDEBF7"),
                           ("N5:P14", "D9D9D9"), ("Q5:S14", "FCE4D6"),
                           ("A18:L18", "FFF2CC"), ("A31:D31", "FFF2CC")):
@@ -270,7 +291,7 @@ def _current_recon_sheet(
             cell = sheet.cell(row_number, column)
             cell.font = Font(name="Aptos", size=12, bold=True)
             cell.border = Border(bottom=Side(style="double", color="595959"))
-    for region in ("D20:D26", "G20:L26", "C32:D35"):
+    for region in ("G20:L26", "C32:D35"):
         for row in sheet[region]:
             for cell in row:
                 cell.fill = PatternFill("solid", fgColor="FFF2CC")

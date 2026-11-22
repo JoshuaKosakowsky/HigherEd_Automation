@@ -390,7 +390,8 @@ Output includes seven loan tabs, source evidence, **Current Month Recon** and
 for the latest included Accounting Date month; its beginning balance is the raw FY
 opening plus 1621 debits minus credits dated before that month. The FY view
 retains all uploaded activity and its existing calculations. Both share the
-supplied reconciliation layout and cumulative Loan Totals from the loan tabs.
+supplied reconciliation layout. The loan tabs show the cumulative all-account
+Loan Totals.
 As of 0.30.5, 1621 SIS debits are Loan Disbursements and SIS credits are Loan
 Reversals. Sources containing Journal are Payments; other 1621 sources remain
 unclassified. As of 0.30.8, Adjusted Amount reverses every debit's sign across
@@ -398,8 +399,9 @@ all accounts and sources, including footnoted payments, and preserves credits.
 As of 0.30.23, both views show Foundation AP and AR due and paid separately
 through the report month. AP uses matched Workday payable journal entries and
 flags incomplete matches for review. Prior-year items remain footnote only.
-Variance remains pending. Comparison balances, notes and sign-off fields are
-blank for review.
+As of 0.30.25, Pending Items compares raw and adjusted 1621 ending principal
+and calculates variance. Missing FY openings leave variance pending. Notes
+and sign-off fields are blank for review.
 Existing staff views need the `csmf_loans` grant through Access Management.
 See the [CSMF technical guide](../../data_processing/csmf_loans/README.md) for
 source mappings, persistence, limitations and acceptance examples.

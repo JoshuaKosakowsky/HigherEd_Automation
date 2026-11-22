@@ -181,7 +181,8 @@ preserves the previous summary's **all uploaded FY activity** calculations.
 **Current Month Recon** shows activity for the latest included Accounting Date
 month, with a beginning balance rolled forward using earlier uploaded 1621
 activity. As of 0.30.23, both views show Foundation AP and AR due and paid.
-Variance and an independent GL tie-out remain deferred.
+As of 0.30.25, Pending Items compares two GA-derived 1621 principal balances.
+An independent GL tie-out remains deferred.
 
 The summary retains the reference's title, Loan Information, Interest and Fees,
 AP/AR columns, Pending Items and Reconciliation Dates blocks. Its loan order is
@@ -216,8 +217,9 @@ The existing **Current FY Recon** mappings are:
 | AR / Total Due From Foundation (Q) | Regular 1382 debits, positive for a normal booking |
 | AR / Total Paid From Foundation (R) | Regular 1382 credits, negative for a normal receipt |
 | Net AR (S) | Signed sum of Q and R |
-| Pending Items: Unisa Ending Balance | Blank editable input; no calculation or Unisa report import |
-| Pending Items: GL | Existing complete Loan Total, including all regular sections and excluding prior-year footnotes |
+| Pending Items: Expected Ending Principal | Raw FY opening plus raw 1621 debits minus raw 1621 credits through the report month |
+| Pending Items: GL Principal (1621) | Sign-corrected adjusted FY opening and adjusted 1621 detail through the same month |
+| Pending Items: Variance | Expected Ending Principal minus GL Principal, rounded to cents |
 
 In 0.30.13, the owner requested the original headings shown above and raw
 beginning balances in the upper table. In 0.30.15, the owner corrected the
@@ -241,29 +243,22 @@ are outside that range. The limits follow each loan's actual section sizes.
 The raw source values retain their signs, including negative credits/debits.
 This is not an absolute-value conversion and does not use manually edited
 Adjusted Amount values. A missing FY opening keeps D blank; a supplied zero
-allows the activity calculation. The adjusted opening on the loan tab and its
-contribution to GL are unchanged. Adjustments/Reclass still links the existing
-unclassified 1621 section, Net Change in Principal still sums E:G, and GL still
-links Loan Total. No new adjustment classification or independent GL source is
-introduced.
+allows the activity calculation. Adjustments/Reclass links the existing
+unclassified 1621 section and Net Change in Principal sums E:G.
 
 Links use the subtotal rows actually generated for each loan, so different
 transaction counts and optional Other activity cannot shift them onto the wrong
-cells. Activity and GL update with Excel edits to Adjusted Amount and retain
-those signs; the summary does not flip them again or reuse the old principal
+cells. The activity columns update with Excel edits to Adjusted Amount and retain
+those signs. The summary does not flip them again or reuse the old principal
 subtraction formulas. Summary beginning balances instead update from edits to
 the raw FY opening, raw 1621 Amounts and their Debit/Credit labels. The header
 lists the selected FY and exactly the uploaded periods, including gaps. It does
 not assert complete FY coverage.
 
-The Unisa Ending Balance total and variances display **Pending**.
-Unisa ending balances, review notes and
-completion/review fields are blank editable cells. Entering a Unisa ending
-balance does not activate a variance formula in this iteration. The aggregate
-beginning balance is also Pending if any loan's opening balance is missing;
-each missing opening remains blank while its Loan Total includes available
-activity, as before. A supplied zero FY opening counts as known and allows the
-1621 activity calculation.
+Review notes and completion/review fields are blank editable cells. The
+aggregate beginning balance is Pending if any loan's opening balance is
+missing. The Loan Total includes available activity for that loan. A supplied
+zero FY opening counts as known and allows the 1621 activity calculation.
 
 Synthetic acceptance examples:
 
@@ -275,8 +270,9 @@ Synthetic acceptance examples:
   Interest credit 10 and fee debit 2 give Total Interest and Fees 8, without
   changing the 1621 beginning-balance calculation.
 - Adding offsetting 2100/2402 amounts (-5 and 5), 2881 credit 7, regular 1382
-  credit 11 and Other debit 4 gives Loan Total (summary GL) -1,016. Prior-year
-  2100/1382 footnotes do not enter this total. Variance remains Pending.
+  credit 11 and Other debit 4 gives an all-account Loan Total of -1,016.
+  Prior-year 2100/1382 footnotes do not enter that total. Both Pending Items
+  principal balances are 1,038 with zero variance.
 - A blank Bruce FY opening keeps D blank; a supplied zero FY opening permits
   the debits-minus-credits calculation. The aggregate D14 stays Pending until
   all seven FY openings are supplied; existing loan activity totals remain
@@ -309,10 +305,7 @@ so subtotal rows and prior-year footnotes cannot be counted again. Edits to
 Adjusted Amount affect the corresponding month and FY summaries; edits to raw
 1621 Amount affect the appropriate beginning-balance formulas.
 
-**GL remains the cumulative Loan Total through the latest uploaded month in
-both views**, with the existing adjusted opening and footnote exclusions. It
-is a balance, not a current-month activity subtotal. Unisa ending balances,
-notes and sign-off inputs are independent between the two summaries.
+Notes and sign-off inputs are independent between the two summaries.
 
 Synthetic acceptance: raw FY opening 1,000, July SIS debit 100 and July Journal
 credit 40 give September Beginning Balance **1,060**. September SIS credit 25
@@ -323,6 +316,29 @@ included in September activity; August 31 enters the opening only. January
 uses December history, February includes leap day where applicable, and June
 retains P12. Gaps in uploaded history are not filled or assumed to be complete;
 the FY view continues to list the periods actually supplied.
+
+#### Pending Items principal comparison (0.30.25)
+
+Both recon tabs compare ending principal at the same cutoff. **D, Expected
+Ending Principal** uses the raw FY opening plus 1621 debits minus credits.
+The monthly view includes earlier FY periods and the displayed month. **E, GL
+Principal (1621)** uses the adjusted FY opening and only the Payment, Loan
+Activity and 1621 — Unclassified sections. The calculation reverses the sign
+of their combined balance to display the receivable in the same direction as
+D. Interest, fees, AP/AR and other ledger activity remain on the existing loan
+tabs and are outside this comparison.
+
+**F, Variance** is D minus E. A missing opening leaves the affected principal
+balance blank and the variance Pending. The corresponding row 27 total stays
+Pending until all seven loans have that balance. Explicit zeros count as known.
+This compares raw and adjusted amounts from the same Workday data. It checks
+internal workbook consistency, with no independent Unisa or GL balance import.
+
+Synthetic example: a 1,000 FY opening, a July 1621 credit of 40 and an August
+1621 debit of 100 give both August ending principal balances of 1,060 and a
+$0.00 variance. Interest and fees leave those figures unchanged. Increasing
+the August disbursement's Adjusted Amount from -100 to -95 changes GL Principal
+to 1,055 and variance to 5, while Expected Ending Principal stays 1,060.
 
 #### Foundation activity
 
@@ -509,8 +525,8 @@ JSON stops the run; restore its `.backup.json` or have the owner repair the cach
 ## Deferred work and verification
 
 Additional 1621 classifications (including any Adjustment category), AP
-activity outside the confirmed payable journal pattern, variance, further
-Adjusted Amount rules, and JE preparation remain deferred.
+activity outside the confirmed payable journal pattern, independent balance
+tie-outs, further Adjusted Amount rules, and JE preparation remain deferred.
 Section subtotals sum the editable Adjusted Amount cells; they are not completed
 reconciled balances.
 
