@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 import requests
-from requests.exceptions import JSONDecodeError, RequestException, Timeout
+from requests.exceptions import RequestException, Timeout
+
+from shared.insights.diagnostics import log_request_failure
+
+
+_Result = TypeVar("_Result")
 
 
 class InsightsAPIError(RuntimeError):
@@ -130,17 +136,20 @@ class InsightsClient:
                 allow_redirects=False,
             )
         except Timeout as error:
+            log_request_failure(method, path, "timeout", response=error.response,
+                                request=error.request, timeout=self.timeout)
             raise InsightsAPIError(
                 f"The Insights request timed out: {method} {path}", code="timeout",
             ) from None
         except RequestException as error:
+            log_request_failure(method, path, "connection", response=error.response,
+                                request=error.request, timeout=self.timeout)
             raise InsightsAPIError(
                 f"Could not connect to the Insights API: {method} {path}", code="connection",
             ) from None
 
         if not 200 <= response.status_code < 300:
-            # Do not include the response body: Metabase errors can echo native
-            # SQL or database details.
+            log_request_failure(method, path, "http", response=response)
             raise InsightsAPIError(
                 f"Insights rejected {method} {path} "
                 f"(HTTP {response.status_code}).",
@@ -151,20 +160,24 @@ class InsightsClient:
         return response
 
     def _request_json(
-        self,
-        method: str,
-        path: str,
-        *,
+        self, method: str, path: str, parse: Callable[[Any], _Result], *,
         payload: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> _Result:
         response = self._request(method, path, payload=payload)
-
         try:
-            return response.json()
-        except JSONDecodeError as error:
+            result = response.json()
+        except (ValueError, RecursionError):
+            log_request_failure(method, path, "invalid_json", response=response)
             raise InsightsAPIError(
                 f"Insights returned non-JSON data for {method} {path}.", code="invalid_response",
             ) from None
+
+        try:
+            return parse(result)
+        except InsightsAPIError as error:
+            log_request_failure(method, path, error.code or "invalid_response",
+                                response=response, result=result)
+            raise
 
     def logout(self) -> None:
         """Revoke the current Metabase session token."""
@@ -201,12 +214,12 @@ class InsightsClient:
     def run_sql(self, sql: str) -> pd.DataFrame:
         """Execute SQL and return the results as a pandas DataFrame."""
 
-        result = self._request_json(
-            "POST",
-            "/api/dataset",
-            payload=self._build_payload(sql),
+        return self._request_json(
+            "POST", "/api/dataset", self._query_frame, payload=self._build_payload(sql),
         )
 
+    @staticmethod
+    def _query_frame(result: Any) -> pd.DataFrame:
         if not isinstance(result, dict):
             raise InsightsAPIError(
                 "Insights returned an unexpected query response."
@@ -250,13 +263,20 @@ class InsightsClient:
                 "Insights returned rows without column metadata."
             )
 
-        return pd.DataFrame(rows, columns=columns)
+        try:
+            return pd.DataFrame(rows, columns=columns)
+        except (ValueError, TypeError):
+            raise InsightsAPIError(
+                "Insights returned rows incompatible with its column metadata.", code="invalid_response",
+            ) from None
 
     def get_current_user(self) -> InsightsUser:
         """Return allow-listed fields for the authenticated principal."""
 
-        result = self._request_json("GET", "/api/user/current")
+        return self._request_json("GET", "/api/user/current", self._current_user)
 
+    @staticmethod
+    def _current_user(result: Any) -> InsightsUser:
         if not isinstance(result, dict):
             raise InsightsAPIError(
                 "Insights returned unexpected current-user metadata."
@@ -273,8 +293,10 @@ class InsightsClient:
     def list_databases(self) -> list[InsightsDatabase]:
         """List non-secret metadata for databases visible to this principal."""
 
-        result = self._request_json("GET", "/api/database")
+        return self._request_json("GET", "/api/database", self._databases)
 
+    @staticmethod
+    def _databases(result: Any) -> list[InsightsDatabase]:
         if isinstance(result, dict):
             databases = result.get("data")
         else:
@@ -318,8 +340,10 @@ class InsightsClient:
     def get_server_info(self) -> InsightsServerInfo:
         """Return only version fields from the public server properties."""
 
-        result = self._request_json("GET", "/api/session/properties")
+        return self._request_json("GET", "/api/session/properties", self._server_info)
 
+    @staticmethod
+    def _server_info(result: Any) -> InsightsServerInfo:
         if not isinstance(result, dict):
             raise InsightsAPIError(
                 "Insights returned unexpected server metadata."

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import requests
-from requests.exceptions import JSONDecodeError, RequestException
+from requests.exceptions import RequestException, Timeout
+
+from shared.insights.diagnostics import log_request_failure
+
+
+_SESSION_PATH = "/auth/sso/to_session"
 
 
 class InsightsAuthenticationError(RuntimeError):
@@ -24,7 +29,7 @@ def exchange_sso_jwt(
 
     try:
         response = requests.post(
-            f"{base_url.rstrip('/')}/auth/sso/to_session",
+            f"{base_url.rstrip('/')}{_SESSION_PATH}",
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
@@ -34,11 +39,15 @@ def exchange_sso_jwt(
             allow_redirects=False,
         )
     except RequestException as error:
+        failure = "timeout" if isinstance(error, Timeout) else "connection"
+        log_request_failure("POST", _SESSION_PATH, failure, response=error.response,
+                            request=error.request, timeout=timeout)
         raise InsightsAuthenticationError(
             "Could not connect to the Insights authentication endpoint."
         ) from None
 
     if not 200 <= response.status_code < 300:
+        log_request_failure("POST", _SESSION_PATH, "http", response=response)
         raise InsightsAuthenticationError(
             "Insights rejected the temporary SSO authentication "
             f"(HTTP {response.status_code})."
@@ -46,12 +55,14 @@ def exchange_sso_jwt(
 
     try:
         result = response.json()
-    except JSONDecodeError as error:
+    except (ValueError, RecursionError):
+        log_request_failure("POST", _SESSION_PATH, "invalid_json", response=response)
         raise InsightsAuthenticationError(
             "Insights returned a non-JSON authentication response."
         ) from None
 
     if not isinstance(result, dict):
+        log_request_failure("POST", _SESSION_PATH, "invalid_response", response=response)
         raise InsightsAuthenticationError(
             "Insights returned an unexpected authentication response."
         )
@@ -59,6 +70,7 @@ def exchange_sso_jwt(
     session_token = result.get("session_token")
 
     if not isinstance(session_token, str) or not session_token.strip():
+        log_request_failure("POST", _SESSION_PATH, "missing_session_token", response=response)
         raise InsightsAuthenticationError(
             "Insights responded successfully but did not return "
             "a session_token."

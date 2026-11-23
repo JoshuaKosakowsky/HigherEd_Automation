@@ -19,7 +19,8 @@ def configure_gui_logging(project_root: Path) -> GuiLogging:
     log_directory.mkdir(parents=True, exist_ok=True)
     log_path = log_directory / f"gui_{date.today():%Y%m%d}.log"
 
-    logger = logging.getLogger("highered_automation.gui")
+    # GUI workflow messages and safe Insights diagnostics share the run log.
+    logger = logging.getLogger("highered_automation")
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
@@ -46,4 +47,4 @@ def configure_gui_logging(project_root: Path) -> GuiLogging:
         )
         logger.addHandler(handler)
 
-    return GuiLogging(logger=logger, path=log_path)
+    return GuiLogging(logger=logger.getChild("gui"), path=log_path)

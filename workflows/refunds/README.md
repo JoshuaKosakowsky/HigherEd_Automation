@@ -721,6 +721,15 @@ Cancellation interrupts the wait; authentication/permission errors, invalid
 SQL (including HTTP 400), and invalid results are not retried. Completeness
 checks still apply to every successful response.
 
+Choose **Open logs** and search the latest GUI log for `Insights request failed`.
+Each failed attempt records the operation and failure category, including attempts
+that later succeed on retry. If a response arrived, the entry includes its HTTP
+status, format and size, plus the query status, recognized reason, request size
+or request ID when available. An accepted request can still have a failed query.
+Timeouts and connection failures record whether a response was available.
+Session-exchange bodies and unrecognized server text stay out of the log because
+they can contain credentials, SQL or account identifiers.
+
 In the GUI, failed or cancelled SQL runs retain complete batches in the operating
 system's local user cache under `HigherEdAutomation/refunds`. Rerun the same term
 on the same day to resume automatically after reconnecting. Reuse requires the

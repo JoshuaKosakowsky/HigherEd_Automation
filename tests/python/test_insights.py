@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -301,11 +302,17 @@ class InsightsAuthenticationTests(unittest.TestCase):
             {"error": "secret JWT or SSO URL should not be repeated"},
         )
 
-        with patch("shared.insights.auth.requests.post", return_value=response):
-            with self.assertRaises(InsightsAuthenticationError) as context:
-                exchange_sso_jwt("https://test.example.edu", "secret-jwt")
+        with (
+            patch("shared.insights.auth.requests.post", return_value=response),
+            self.assertLogs("highered_automation.insights", "WARNING") as log,
+            self.assertRaises(InsightsAuthenticationError) as context,
+        ):
+            exchange_sso_jwt("https://test.example.edu", "secret-jwt")
 
-        message = str(context.exception)
+        diagnostic, = log.output
+        self.assertIn("POST /auth/sso/to_session, failure=http, http=401", diagnostic)
+        self.assertNotIn("reason=", diagnostic)
+        message = str(context.exception) + diagnostic
         self.assertIn("HTTP 401", message)
         self.assertNotIn("secret JWT", message)
         self.assertNotIn("secret-jwt", message)
@@ -792,7 +799,8 @@ class InsightsClientTests(unittest.TestCase):
             http_session=session,  # type: ignore[arg-type]
         )
 
-        result = client.run_sql("SELECT spriden_id FROM spriden LIMIT 1")
+        with self.assertNoLogs("highered_automation.insights", "WARNING"):
+            result = client.run_sql("SELECT spriden_id FROM spriden LIMIT 1")
 
         expected = pd.DataFrame(
             [["A001", "Ada"]],
@@ -825,13 +833,194 @@ class InsightsClientTests(unittest.TestCase):
             http_session=session,  # type: ignore[arg-type]
         )
 
-        with self.assertRaises(InsightsAPIError) as context:
+        with (
+            self.assertLogs("highered_automation.insights", "WARNING") as log,
+            self.assertRaises(InsightsAPIError) as context,
+        ):
             client.run_sql("SELECT secret_column FROM sensitive_table")
 
-        message = str(context.exception)
+        diagnostic, = log.output
+        self.assertIn("failure=http, http=500", diagnostic)
+        message = str(context.exception) + diagnostic
         self.assertIn("HTTP 500", message)
         self.assertNotIn("secret_column", message)
         self.assertNotIn("session-token", message)
+
+    def test_dataset_403_logs_the_gateway_reply_and_actual_request_size(self) -> None:
+        request_id = "00000000-0000-4000-8000-000000000123"
+        response = requests.Response()
+        response.status_code = 403
+        response.headers.update({
+            "Content-Type": "text/html; charset=utf-8", "Server": "awselb/2.0",
+            "X-Amzn-RequestId": request_id, "Set-Cookie": "private-cookie",
+        })
+        response._content = (
+            b"<html><head><title>403 Forbidden</title></head><body>"
+            b"<center><h1>403 Forbidden</h1></center><!-- private-page-detail --></body></html>"
+        )
+
+        def deny(request, **kwargs):
+            response.request = request
+            return response
+
+        with requests.Session() as transport, patch.object(transport, "send", side_effect=deny) as send:
+            client = InsightsClient("https://test.example.edu", 2, session_token="private-token",
+                                    http_session=transport)
+            with (
+                self.assertLogs("highered_automation.insights", "WARNING") as log,
+                self.assertRaises(InsightsAPIError) as caught,
+            ):
+                client.run_sql("SELECT 'synthetic-account'")
+
+        send.assert_called_once()
+        error = caught.exception
+        self.assertEqual((error.status_code, error.code), (403, "http"))
+        self.assertEqual(str(error), "Insights rejected POST /api/dataset (HTTP 403).")
+        diagnostic, = log.output
+        self.assertIn("Insights request failed: POST /api/dataset, failure=http, http=403, format=text/html", diagnostic)
+        self.assertIn("reason=403 Forbidden", diagnostic)
+        self.assertIn(f"request_bytes={len(response.request.body)}", diagnostic)
+        self.assertIn(f"response_bytes={len(response.content)}", diagnostic)
+        self.assertIn(f"server=awselb/2.0, request_id={request_id}", diagnostic)
+        for private_value in ("private-token", "synthetic-account", "private-cookie", "private-page-detail"):
+            self.assertNotIn(private_value, diagnostic)
+
+    def test_dataset_403_records_only_recognized_body_reasons(self) -> None:
+        for media_type, body, expected in (
+            ("application/problem+json", b'{"title":"Forbidden","detail":"You do not have permissions to run this query.","sql":"private"}',
+             "You do not have permissions to run this query"),
+            ("text/html", b"<title>403 Forbidden</title><p>Request blocked.</p>", "Request blocked"),
+            ("text/plain", b" Access Denied.\nAccount: private.", "Access denied"),
+            ("application/json", b'{"error":"private","error_type":"missing-required-permissions"}',
+             "missing-required-permissions"),
+            ("application/json", b'{"error":"SELECT private","sql":"Access denied"}',
+             "unrecognized response text withheld"),
+            ("application/json", b'{"message":', "unreadable JSON"),
+            ("text/plain", b"", "empty body"),
+            ("text/plain", b"private" * 3000, "body exceeds diagnostic limit"),
+            ("private/type", b"private", "unsupported response format"),
+        ):
+            with self.subTest(media_type=media_type, expected=expected):
+                response = requests.Response()
+                response.status_code = 403
+                response._content = body
+                response.headers.update({
+                    "Content-Type": media_type, "Server": "private", "X-Request-Id": "private",
+                })
+                client = InsightsClient("https://test.example.edu", 2, api_key="private",
+                                        http_session=StubSession(response))
+                with (
+                    self.assertLogs("highered_automation.insights", "WARNING") as log,
+                    self.assertRaises(InsightsAPIError),
+                ):
+                    client.run_sql("SELECT 1")
+                diagnostic, = log.output
+                self.assertIn(f"reason={expected}", diagnostic)
+                self.assertNotIn("private", diagnostic)
+
+    def test_non_success_http_statuses_log_the_actual_status_for_metadata(self) -> None:
+        for status in (302, 400, 401, 403, 404, 413, 429, 500, 502, 503, 504, 599):
+            with self.subTest(status=status):
+                client = InsightsClient("https://test.example.edu", api_key="synthetic",
+                                        http_session=StubSession(make_response(status, {"message": "private"})))
+                with (
+                    self.assertLogs("highered_automation.insights", "WARNING") as log,
+                    self.assertRaises(InsightsAPIError) as caught,
+                ):
+                    client.get_current_user()
+                diagnostic, = log.output
+                self.assertEqual(caught.exception.status_code, status)
+                self.assertIn(f"GET /api/user/current, failure=http, http={status}", diagnostic)
+                self.assertNotIn("private", diagnostic)
+
+    def test_accepted_query_failures_and_malformed_results_log_their_stage(self) -> None:
+        for body, failure, expected in (
+            ({"status": "failed", "error_type": "invalid-query", "error": "SELECT private"},
+             "query_failed", "reason=invalid-query"),
+            ({"status": "canceled", "error": "private"}, "query_failed", "query_status=canceled"),
+            ({"status": "completed", "data": {"rows": "private", "cols": []}},
+             "invalid_response", "query_status=completed"),
+            ({"status": "completed", "data": {"rows": [["private", "value"]], "cols": [{"name": "a"}]}},
+             "invalid_response", "query_status=completed"),
+            (b"{private", "invalid_json", "reason=unreadable JSON"),
+        ):
+            with self.subTest(failure=failure, expected=expected):
+                response = make_response(202, None)
+                response._content = body if isinstance(body, bytes) else json.dumps(body).encode()
+                client = InsightsClient("https://test.example.edu", 2, api_key="private",
+                                        http_session=StubSession(response))
+                with (
+                    self.assertLogs("highered_automation.insights", "WARNING") as log,
+                    self.assertRaises(InsightsAPIError),
+                ):
+                    client.run_sql("SELECT 'private'")
+                diagnostic, = log.output
+                self.assertIn(f"POST /api/dataset, failure={failure}, http=202", diagnostic)
+                self.assertIn(expected, diagnostic)
+                self.assertNotIn("private", diagnostic)
+
+    def test_transport_errors_log_the_configured_timeout_without_connection_details(self) -> None:
+        for error, expected in ((requests.Timeout("private"), "timeout"),
+                                (requests.ConnectionError("private"), "connection")):
+            with self.subTest(failure=expected), requests.Session() as transport:
+                client = InsightsClient("https://test.example.edu", 2, api_key="private",
+                                        timeout=37, http_session=transport)
+                with (
+                    patch.object(transport, "request", side_effect=error),
+                    self.assertLogs("highered_automation.insights", "WARNING") as log,
+                    self.assertRaises(InsightsAPIError) as caught,
+                ):
+                    client.run_sql("SELECT 1")
+                diagnostic, = log.output
+                self.assertEqual(caught.exception.code, expected)
+                self.assertIn(f"failure={expected}, http=no response", diagnostic)
+                self.assertIn("timeout_seconds=37", diagnostic)
+                self.assertNotIn("private", diagnostic)
+
+    def test_interrupted_response_logs_available_headers_without_reading_the_stream_again(self) -> None:
+        partial = requests.Response()
+        partial.status_code = 200
+        partial.raw = MagicMock()
+        partial.raw.stream.side_effect = AssertionError("The response stream was read again")
+        error = requests.ConnectionError("private host", response=partial)
+        with requests.Session() as transport:
+            client = InsightsClient("https://test.example.edu", 2, api_key="private", http_session=transport)
+            with (
+                patch.object(transport, "request", side_effect=error),
+                self.assertLogs("highered_automation.insights", "WARNING") as log,
+                self.assertRaises(InsightsAPIError),
+            ):
+                client.run_sql("SELECT 1")
+        diagnostic, = log.output
+        self.assertIn("failure=connection, http=200", diagnostic)
+        self.assertNotIn("response_bytes=", diagnostic)
+        self.assertNotIn("private", diagnostic)
+
+    def test_recovered_refund_attempt_appears_once_in_the_gui_log(self) -> None:
+        from app.gui.services.logging_service import configure_gui_logging
+        from data_processing.refunds.extract import _run_partition_query
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        app_logger = logging.getLogger("highered_automation")
+        self.enterContext(patch.object(app_logger, "handlers", []))
+        self.addCleanup(app_logger.setLevel, app_logger.level)
+        self.addCleanup(setattr, app_logger, "propagate", app_logger.propagate)
+        gui = configure_gui_logging(root)
+        for handler in app_logger.handlers:
+            self.addCleanup(handler.close)
+
+        session = StubSession(make_response(503, {"error": "private"}),
+                              make_response(202, {"status": "completed", "data": {"rows": [], "cols": []}}))
+        client = InsightsClient("https://test.example.edu", 2, api_key="private", http_session=session)
+        with patch("data_processing.refunds.extract._wait_for_query_retry"):
+            _run_partition_query(client, "SELECT 'private'", "transactions", "1",
+                                 progress=gui.logger.info, cancellation=None)
+        self.assertEqual(len(session.requests), 2)
+        log = gui.path.read_text(encoding="utf-8")
+        self.assertEqual(log.count("Insights request failed:"), 1)
+        self.assertIn("POST /api/dataset, failure=http, http=503", log)
+        self.assertIn("retrying the same query", log)
+        self.assertNotIn("private", log)
 
     def test_logout_revokes_session_without_expecting_json(self) -> None:
         session = StubSession(make_response(204, {}))
