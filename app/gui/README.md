@@ -104,7 +104,7 @@ The integrated workflows are:
   creates balanced TEST/PROD assignments inside the result workbook.
 - **Refund Review** is administrator-only. Choose **Drop, browse, or enter
   source file paths** for matching transaction and account-context XLSX/CSV
-  exports, or **Run SQL from PROD Insights** to extract both inputs directly
+  exports, or **Run batched extracts from PROD Insights** to extract both inputs directly
   using the configured PROD connection and existing 20-batch refund pipeline.
   Oversized results automatically subdivide by account and, for a single
   account's transaction history, by transaction number. Each part and the
@@ -118,8 +118,8 @@ The integrated workflows are:
   timeout); cancellation does not terminate a query already running on the
   server. Cancelled runs publish no workbook. Output is staged and moved into
   place only after completion.
-  SQL mode requires no input files and shows a production warning in the review
-  dialog. From **0.28.2**, transient connection/time-out failures and HTTP
+  Both SQL options require no input files and show a production warning in the
+  review dialog. For batched extracts, transient connection/time-out failures and HTTP
   429/502/503/504 responses retry the same read-only query up to twice, after
   2 and 5 seconds. Completed batches survive failure or cancellation in the
   operating system's local user cache under `HigherEdAutomation/refunds`, outside
@@ -129,11 +129,14 @@ The integrated workflows are:
   remove their extracts; the next run for that user/database removes earlier
   dated caches. The log identifies the cache directory, which can be deleted
   while no refund run is active to force a fresh extraction. A second app
-  instance cannot use the same active cache. Both options calculate
-  and format the review in Python; neither approves or issues refunds, and
-  existing output workbooks are never overwritten. Explicit resume/offline
+  instance cannot use the same active cache. Manual files and batched extracts
+  both calculate and format the review in Python. Explicit resume/offline
   options and single-account API validation remain available through the
   PowerShell launcher.
+  **Run standalone Refund Review SQL from PROD Insights (backup)** executes
+  the Connections report **Refund review SQL (large)** once. Python formats
+  its calculated amounts into the usual review tabs. **Run Details** identifies
+  the source and the sponsor and term details to verify for third-party reviews.
   **Save refund review as** defaults to the workstation's current fiscal period
   in shared Mines OneDrive. For November 2026, the folder is
   `GRP-Bursar Office - General\Y-Brswork\Refund\RFND\FY27\Daily Pending Refunds\P05 - November 2026`.

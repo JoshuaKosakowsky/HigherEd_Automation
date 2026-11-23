@@ -14,10 +14,14 @@ import shutil
 from PySide6.QtCore import QLockFile, QStandardPaths
 
 from app.gui import APP_VERSION
-from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
+from app.gui.models import (
+    MANUAL_SOURCE, SQL_SOURCE, STANDALONE_REFUND_SOURCE, WorkflowContext, WorkflowMode, WorkflowResult,
+)
 from app.gui.services.access import get_current_login, load_access_configuration
 from data_processing.refunds.extract import ExtractSettings, QUERY_DIRECTORY
-from data_processing.refunds.pipeline import run_refund_download_pipeline, run_refund_pipeline
+from data_processing.refunds.pipeline import (
+    run_refund_download_pipeline, run_refund_pipeline, run_standalone_refund_pipeline,
+)
 from data_processing.refunds.terms import RefundParameters, validate_term
 from shared.insights.config import InsightsSettings, load_department_profiles
 from shared.insights.session_auth import build_authenticated_client
@@ -81,13 +85,13 @@ def _refund_extract_cache(
 
 
 def run_refund_review(context: WorkflowContext) -> WorkflowResult:
-    """Create a review using the existing download or batched SQL pipeline."""
+    """Create a review from downloads, batched extracts or the standalone SQL report."""
     if context.cancellation:
         context.cancellation.check()
     context.progress.report("Validating Refund Review inputs")
-    source = context.parameters.get("refund_source", "manual")
-    if source not in ("manual", "sql"):
-        raise ValueError("Choose manual files or Insights SQL for Refund Review.")
+    source = context.parameters.get("refund_source", MANUAL_SOURCE)
+    if source not in (MANUAL_SOURCE, SQL_SOURCE, STANDALONE_REFUND_SOURCE):
+        raise ValueError("Choose a Refund Review data source.")
     target_term = validate_term(str(context.parameters["target_term"]))
     output_file = Path(context.parameters["output_file"])
 
@@ -98,7 +102,8 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
         )
 
     parameters = RefundParameters(target_term=target_term, run_date=date.today())
-    if source == "sql":
+    log_progress = logging.getLogger("highered_automation.gui").info
+    if source != MANUAL_SOURCE:
         policy = load_access_configuration(get_shared_gui_access_path())
         if not policy.is_administrator(get_current_login()):
             raise ValueError("Only an administrator can run the Insights refund queries.")
@@ -109,26 +114,26 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
             raise ValueError("Insights PROD is not configured.")
         context.progress.report("Connecting to PROD Insights — complete browser sign-in if prompted")
         client, _ = build_authenticated_client(profile.settings, browser="chrome")
-        with client, _refund_extract_cache(
-            profile.settings, client.get_current_user().id, parameters,
-        ) as directory:
-            created_file, report = run_refund_pipeline(
-                parameters=parameters,
-                extract_settings=ExtractSettings(
-                    target_term=target_term,
-                    batch_count=20,
-                    extract_directory=directory,
-                    resume=(directory / "extract_manifest.json").exists(),
-                    run_date=parameters.run_date,
-                ),
-                transaction_template_path=QUERY_DIRECTORY / "refund_transactions_extract.sql",
-                context_template_path=QUERY_DIRECTORY / "refund_context_extract.sql",
-                output_file=output_file,
-                client=client,
-                progress=logging.getLogger("highered_automation.gui").info,
-                cancellation=context.cancellation,
-                progress_reporter=context.progress,
-            )
+        with client:
+            if source == STANDALONE_REFUND_SOURCE:
+                created_file, report = run_standalone_refund_pipeline(
+                    client=client, target_term=target_term, run_date=parameters.run_date,
+                    output_file=output_file, progress=log_progress,
+                    cancellation=context.cancellation, progress_reporter=context.progress,
+                )
+            else:
+                with _refund_extract_cache(profile.settings, client.get_current_user().id, parameters) as directory:
+                    created_file, report = run_refund_pipeline(
+                        parameters=parameters,
+                        extract_settings=ExtractSettings(
+                            target_term=target_term, batch_count=20, extract_directory=directory,
+                            resume=(directory / "extract_manifest.json").exists(), run_date=parameters.run_date,
+                        ),
+                        transaction_template_path=QUERY_DIRECTORY / "refund_transactions_extract.sql",
+                        context_template_path=QUERY_DIRECTORY / "refund_context_extract.sql",
+                        output_file=output_file, client=client, progress=log_progress,
+                        cancellation=context.cancellation, progress_reporter=context.progress,
+                    )
     else:
         transaction_file = Path(context.parameters["transaction_file"])
         context_file = Path(context.parameters["context_file"])
@@ -140,14 +145,17 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
             context_file=context_file,
             output_file=output_file,
             cancellation=context.cancellation,
-            progress=logging.getLogger("highered_automation.gui").info,
+            progress=log_progress,
             progress_reporter=context.progress,
         )
 
+    source_note = ("Used standalone Refunds.sql. See Run Details for third-party information to verify. "
+                   if source == STANDALONE_REFUND_SOURCE else "")
     return WorkflowResult(
         success=True,
         message=(
             f"Created a refund review workbook for {len(report):,} account(s). "
+            f"{source_note}"
             "This workflow does not approve or issue refunds."
         ),
         output_path=created_file,

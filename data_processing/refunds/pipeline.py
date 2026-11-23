@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
@@ -14,6 +16,7 @@ from .allocation import allocate_refunds
 from .export import export_refund_report
 from .extract import ExtractSettings, SQLClient, extract_refund_data, read_refund_extracts
 from .ingest import read_refund_download
+from .standalone import read_standalone_refund_report
 from .terms import RefundParameters
 
 
@@ -36,6 +39,14 @@ def _create_review(
                               progress_reporter=progress_reporter)
     if progress:
         progress(f"Refund calculation completed in {perf_counter() - started:.1f}s.")
+    return _publish_review(report, output_file, progress, cancellation, progress_reporter)
+
+
+def _publish_review(
+    report: pd.DataFrame, output_file: Path, progress: Callable[[str], None] | None,
+    cancellation: CancellationToken | None, progress_reporter: ProgressReporter | None,
+    *, standalone_term: str | None = None,
+) -> tuple[Path, pd.DataFrame]:
     if cancellation:
         cancellation.check()
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -44,12 +55,19 @@ def _create_review(
     # partial workbook under the staff-selected output filename.
     with TemporaryDirectory(prefix=".refund-review-", dir=output_file.parent) as directory:
         staged = export_refund_report(report, Path(directory) / output_file.name, cancellation=cancellation,
-                                      progress_reporter=progress_reporter)
+                                      progress_reporter=progress_reporter, standalone_term=standalone_term)
 
         def publish() -> None:
-            if cancellation and output_file.exists():
-                raise ValueError("The output workbook already exists. Choose a new filename.")
-            staged.replace(output_file)
+            if cancellation is None and standalone_term is None:
+                staged.replace(output_file)  # Preserve the existing command-line overwrite behavior.
+                return
+            try:
+                if os.name == "nt":
+                    staged.rename(output_file)  # Windows rename fails if the destination exists.
+                else:
+                    os.link(staged, output_file)
+            except FileExistsError:
+                raise ValueError("The output workbook already exists. Choose a new filename.") from None
 
         if progress_reporter:
             progress_reporter.report("Publishing completed refund workbook")
@@ -60,6 +78,23 @@ def _create_review(
     if progress:
         progress(f"Refund workbook created in {perf_counter() - started:.1f}s.")
     return output_file, report
+
+
+def run_standalone_refund_pipeline(
+    *, client: SQLClient, target_term: str, run_date: date, output_file: Path,
+    progress: Callable[[str], None] | None = None, cancellation: CancellationToken | None = None,
+    progress_reporter: ProgressReporter | None = None,
+) -> tuple[Path, pd.DataFrame]:
+    stage = "Running standalone Refund Review SQL in PROD Insights"
+    if progress_reporter:
+        progress_reporter.report(stage)
+    if progress:
+        progress(stage)
+    report = read_standalone_refund_report(client, target_term, run_date, cancellation)
+    if progress:
+        progress(f"Formatting {len(report):,} account(s) from Refunds.sql.")
+    return _publish_review(report, output_file, progress, cancellation, progress_reporter,
+                           standalone_term=target_term)
 
 
 def run_refund_pipeline(

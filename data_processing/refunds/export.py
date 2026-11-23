@@ -13,6 +13,7 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 
 from data_processing.shared.xlsx_output_format import (
+    CURRENCY_FORMAT,
     apply_default_font,
     format_table_columns,
     style_header_row,
@@ -302,7 +303,7 @@ COUNT_COLUMNS = {
 
 def export_refund_report(
     report: pd.DataFrame, output_file: Path, *, cancellation: CancellationToken | None = None,
-    progress_reporter: ProgressReporter | None = None,
+    progress_reporter: ProgressReporter | None = None, standalone_term: str | None = None,
 ) -> Path:
     """Write plain worksheets by refund method, keeping account totals as context."""
     if cancellation:
@@ -319,7 +320,14 @@ def export_refund_report(
     for completed, row in enumerate(report[REPORT_COLUMNS].to_dict("records"), 1):
         if cancellation:
             cancellation.check()
-        for sheet, tab_row in _tab_rows(row):
+        portions = _tab_rows(row)
+        if standalone_term is not None:
+            routed = sum(part["tab_refund_amount"] for _, part in portions)
+            if routed != row["total_refund_amount"]:
+                raise ValueError("Workbook portions do not reconcile to the standalone account refund total.")
+        for sheet, tab_row in portions:
+            if standalone_term is not None and sheet == "Third Party Reviews":
+                tab_row["tab_review_note"] += " Refunds.sql omits sponsor, contract and term activity details."
             grouped[sheet].append(tab_row)
         if progress_reporter and (completed % 100 == 0 or completed == len(report)):
             progress_reporter.report("Grouping refund delivery and review tabs", completed=completed, total=len(report))
@@ -391,6 +399,27 @@ def export_refund_report(
                         "mm/dd/yyyy" if header in {"deceased_date", "clearing_next_eligible_date", "clearing_final_eligible_date"}
                         else "mm/dd/yyyy h:mm AM/PM"
                     )
+
+    if standalone_term is not None:
+        notes = workbook.create_sheet("Run Details")
+        notes.append(["Report source", "Standalone Refund Review SQL (PROD)"])
+        notes.append(["Banner target term", standalone_term])
+        notes.append(["Accounts returned by Insights", len(report)])
+        notes.append(["Total refund under review", sum(report["total_refund_amount"], Decimal(0))])
+        notes["B4"].number_format = CURRENCY_FORMAT
+        notes.append(["Third Party Reviews", "Verify sponsor names and IDs, contract numbers, sponsor term, "
+                      "TPPY and Z0LE term totals, and recent Z0LE activity separately. "
+                      "Refunds.sql does not supply these fields."])
+        notes.append(["Population check", "The account count covers the rows returned by Insights. "
+                      "Refunds.sql supplies no independent count of qualifying accounts."])
+        notes.column_dimensions["A"].width = 29
+        notes.column_dimensions["B"].width = 76
+        notes["B5"].alignment = Alignment(wrap_text=True, vertical="center")
+        notes.row_dimensions[5].height = 65
+        notes["B6"].alignment = Alignment(wrap_text=True, vertical="center")
+        notes.row_dimensions[6].height = 45
+        apply_default_font(notes)
+        style_header_row(notes)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     if cancellation:

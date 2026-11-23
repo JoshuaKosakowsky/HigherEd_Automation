@@ -13,8 +13,10 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
 from data_processing.refunds.export import (
@@ -23,7 +25,7 @@ from data_processing.refunds.export import (
 from data_processing.refunds.extract import (
     ExtractSettings, render_extract_sql, render_non_allowable_policy_sql, render_student_address_sql,
 )
-from data_processing.refunds.pipeline import run_refund_download_pipeline
+from data_processing.refunds.pipeline import run_refund_download_pipeline, run_standalone_refund_pipeline
 from tests.python import test_refunds_workflow as python_cases
 
 
@@ -827,6 +829,31 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                 a = pd.Timestamp(a) if a else None
                 e = pd.Timestamp(e) if e else None
             self.assertEqual(a, e, f"{label}: {column}")
+
+    def test_standalone_workflow_routes_the_real_report_to_a_workbook(self) -> None:
+        transactions = [
+            RefundTransaction("CASH", "P", "000", "19.83", balance="-19.83"),
+            RefundTransaction("FDPL", "P", "800", "50.36", balance="-50.36", category="FA", title_iv="Y"),
+            RefundTransaction("TPPY", "P", "000", 25, balance=-25, pidm=2),
+        ]
+        client = Mock()
+        client.run_sql.side_effect = lambda sql: pd.DataFrame(self.run_report(transactions, query=sql))
+        with TemporaryDirectory() as directory:
+            output, report = run_standalone_refund_pipeline(
+                client=client, target_term="209980", run_date=date(2099, 8, 31),
+                output_file=Path(directory) / "review.xlsx",
+            )
+            client.run_sql.assert_called_once_with(self.query)
+            self.assertEqual(len(report), 2)
+            book = load_workbook(output)
+            try:
+                for sheet, amount in (("Direct Deposit", 19.83), ("Refund to Parent", 50.36),
+                                      ("Third Party Reviews", 25)):
+                    headers, values = book[sheet].values
+                    self.assertEqual(dict(zip(headers, values))["Detail_Code_Refund_Amt"], amount)
+                self.assertEqual(book["Run Details"]["B4"].value, 95.19)
+            finally:
+                book.close()
 
     def test_worked_example_uses_priority_allocation(self) -> None:
         row = self.one(self.worked_example())

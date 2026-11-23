@@ -479,6 +479,33 @@ class RefundReviewAdapterTests(unittest.TestCase):
         client.__exit__.assert_called_once()
         self.assertTrue(result.success)
 
+    def test_standalone_backup_bypasses_extracts_and_their_cache(self):
+        output = self.cache_root / "standalone.xlsx"
+        context = WorkflowContext("refund_review", {
+            "refund_source": "standalone_sql", "target_term": "209980", "output_file": output,
+        }, WorkflowMode.PRODUCTION)
+        client = MagicMock()
+        with (
+            patch("app.gui.services.refunds.load_access_configuration") as policy,
+            patch("app.gui.services.refunds.get_shared_gui_access_path"),
+            patch("app.gui.services.refunds.get_current_login", return_value="ADMIN"),
+            patch("app.gui.services.refunds.load_department_profiles", return_value={"PROD": MagicMock()}),
+            patch("app.gui.services.refunds.build_authenticated_client", return_value=(client, "cached")),
+            patch("app.gui.services.refunds._refund_extract_cache") as cache,
+            patch("app.gui.services.refunds.run_refund_pipeline") as batched,
+            patch("app.gui.services.refunds.run_standalone_refund_pipeline", return_value=(output, [object()])) as backup,
+        ):
+            policy.return_value.is_administrator.return_value = True
+            result = run_refund_review(context)
+        self.assertTrue(result.success)
+        self.assertEqual(result.output_path, output)
+        self.assertIn("standalone Refunds.sql", result.message)
+        self.assertEqual(backup.call_args.kwargs["target_term"], "209980")
+        self.assertIs(backup.call_args.kwargs["client"], client)
+        batched.assert_not_called()
+        cache.assert_not_called()
+        client.__exit__.assert_called_once()
+
     def test_failed_sql_run_resumes_saved_batches_and_success_starts_next_run_fresh(self):
         context = WorkflowContext("refund_review", {
             "refund_source": "sql", "target_term": "202680",
@@ -622,14 +649,17 @@ class RefundReviewAdapterTests(unittest.TestCase):
             patch("app.gui.services.refunds.load_department_profiles", return_value={"PROD": None}),
             patch("app.gui.services.refunds.build_authenticated_client") as authenticate,
         ):
-            policy.return_value.is_administrator.return_value = False
-            with self.assertRaisesRegex(ValueError, "Only an administrator"):
-                run_refund_review(context)
-            policy.return_value.is_administrator.return_value = True
-            with self.assertRaisesRegex(ValueError, "requires the PROD"):
-                run_refund_review(context)
-            with self.assertRaisesRegex(ValueError, "PROD is not configured"):
-                run_refund_review(replace(context, mode=WorkflowMode.PRODUCTION))
+            for source in ("sql", "standalone_sql"):
+                with self.subTest(source=source):
+                    selected = replace(context, parameters={**context.parameters, "refund_source": source})
+                    policy.return_value.is_administrator.return_value = False
+                    with self.assertRaisesRegex(ValueError, "Only an administrator"):
+                        run_refund_review(selected)
+                    policy.return_value.is_administrator.return_value = True
+                    with self.assertRaisesRegex(ValueError, "requires the PROD"):
+                        run_refund_review(selected)
+                    with self.assertRaisesRegex(ValueError, "PROD is not configured"):
+                        run_refund_review(replace(selected, mode=WorkflowMode.PRODUCTION))
             authenticate.assert_not_called()
 
     def test_adapter_refuses_to_overwrite_an_existing_review(self) -> None:

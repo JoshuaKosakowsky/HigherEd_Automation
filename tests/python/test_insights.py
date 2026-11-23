@@ -940,6 +940,8 @@ class InsightsClientTests(unittest.TestCase):
             ({"status": "canceled", "error": "private"}, "query_failed", "query_status=canceled"),
             ({"status": "completed", "data": {"rows": "private", "cols": []}},
              "invalid_response", "query_status=completed"),
+            ({"status": "completed", "data": {"cols": [{"name": "amount"}]}},
+             "invalid_response", "query_status=completed"),
             ({"status": "completed", "data": {"rows": [["private", "value"]], "cols": [{"name": "a"}]}},
              "invalid_response", "query_status=completed"),
             (b"{private", "invalid_json", "reason=unreadable JSON"),
