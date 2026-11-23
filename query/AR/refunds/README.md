@@ -72,8 +72,8 @@ and attachments in terms with third-party activity. Lists preserve name/ID/contr
 correspondence without multiplying financial rows. See the
 [third-party rules and synthetic cases](../../../workflows/refunds/README.md#third-party-review-details-0270)
 and [owner's requested change](https://github.com/JoshuaKosakowsky/HigherEd_Automation/issues/29#issuecomment-6691269422).
-The standalone `Refunds.sql` shares review routing but keeps its existing output;
-use the Python workflow for these additional workbook columns.
+The standalone `Refunds.sql` also returns this context for accounts flagged for
+third-party review.
 
 Rename the files `refund_transactions.xlsx` and `refund_context.xlsx`, then put
 them in `data\refunds\input`. From the repository root on the work laptop, run:
@@ -176,8 +176,9 @@ the database. It implements the current Python allocation rules in one read-only
 statement, with no database functions, temporary tables, schema changes, or
 Python process. Run settings and optional validation filters remain near the top.
 
-The result has one row per account with the allocator's existing column order,
-source breakdown, recipient amounts, delivery methods, and review flags. SQL
+The result has one row per account with the allocator's column order, source
+breakdown, recipient amounts, delivery methods, and review flags. It appends
+sponsor and term activity details after calculating allocations. SQL
 produces one result set; the separate Excel tabs remain a Python workbook-export
 feature. The Refund Review workflow can run this report directly with its
 **standalone SQL backup** data source and write the tabbed workbook. See the

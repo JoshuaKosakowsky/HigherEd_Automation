@@ -73,8 +73,9 @@ Runtime still depends on Insights hardware, indexes, and candidate/history volum
 validate a representative population against the ten-minute server limit.
 
 OUTPUT
-One row per account, same calculation columns as the Python allocator. SQL returns
-a single result set; separate Excel tabs remain a workbook-export feature.
+One row per account, same calculation columns as the Python allocator. Append
+sponsor and term activity details for accounts flagged for third-party review.
+SQL returns one result set. Excel tabs remain a workbook-export feature.
 This report proposes amounts/routes for staff review and does not issue refunds.
 */
 WITH RECURSIVE
@@ -112,32 +113,25 @@ term_context AS (
         CAST(NULL AS varchar(6)) AS previous_term_override
 ),
 
-current_term AS (
+calendar_term AS (
     SELECT
-        CAST(
-            COALESCE(
-                target_term_override,
-                CONCAT(
-                    CAST(EXTRACT(YEAR FROM run_date) AS integer),
-                    CASE
-                        WHEN run_date <= MAKE_DATE(
-                            CAST(EXTRACT(YEAR FROM run_date) AS integer),
-                            5,
-                            15
-                        ) THEN '10'
-                        WHEN run_date <= MAKE_DATE(
-                            CAST(EXTRACT(YEAR FROM run_date) AS integer),
-                            7,
-                            15
-                        ) THEN '55'
-                        ELSE '80'
-                    END
-                )
-            ) AS varchar(6)
-        ) AS target_term,
+        CAST(CONCAT(
+            EXTRACT(YEAR FROM run_date)::integer,
+            CASE
+                WHEN run_date <= MAKE_DATE(EXTRACT(YEAR FROM run_date)::integer, 5, 15) THEN '10'
+                WHEN run_date <= MAKE_DATE(EXTRACT(YEAR FROM run_date)::integer, 7, 15) THEN '55'
+                ELSE '80'
+            END
+        ) AS varchar(6)) AS calendar_term,
+        target_term_override,
         run_date,
         previous_term_override
     FROM term_context
+),
+current_term AS (
+    SELECT COALESCE(target_term_override, calendar_term) AS target_term,
+        calendar_term, run_date, previous_term_override
+    FROM calendar_term
 ),
 
 params AS (
@@ -169,6 +163,7 @@ params AS (
             ELSE CAST(SUBSTRING(c.target_term FROM 1 FOR 4) AS integer) - 1
         END AS current_fiscal_year_start,
         c.run_date,
+        c.calendar_term,
         CAST(200.00 AS numeric) AS title_iv_cross_fy_cap,
         /* Set only for a fast one-account validation run. */
         CAST(NULL AS varchar(30)) AS cwid_filter,
@@ -317,7 +312,11 @@ screening_transactions AS MATERIALIZED (
         END AS accounting_amount,
         t.tbraccd_balance AS raw_transaction_balance,
         CAST(t.tbraccd_effective_date AS date) AS effective_date,
-        t.tbraccd_activity_date AS activity_date
+        t.tbraccd_activity_date AS activity_date,
+        CAST(t.tbraccd_feed_date AS date) AS feed_date,
+        -- The attachment lookup uses Banner's exact stored term and detail codes.
+        CASE WHEN t.tbraccd_detail_code IN ('TPPY', 'Z0LE', 'C529')
+            THEN t.tbraccd_term_code END AS sponsor_activity_term
     FROM report_scope_pidms v
     JOIN taismgr.tbraccd t ON t.tbraccd_pidm = v.pidm
     LEFT JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
@@ -1936,6 +1935,78 @@ final_review AS (
             ) END
         ), '') AS review_reasons
     FROM delivery d
+),
+review_accounts AS MATERIALIZED (
+    SELECT f.*
+    FROM final_review f
+    CROSS JOIN params p
+    WHERE (p.cwid_filter IS NULL OR f.cwid = TRIM(p.cwid_filter))
+      AND (p.last_name_filter IS NULL OR UPPER(f.last_name) LIKE UPPER(p.last_name_filter))
+      AND f.total_refund_amount > 0
+),
+third_party_accounts AS (
+    SELECT pidm FROM review_accounts WHERE third_party_review_required_ind = 'Y'
+),
+sponsor_transactions AS MATERIALIZED (
+    SELECT t.pidm, t.term_code, t.detail_code, t.raw_amount, t.amount_missing_ind,
+        t.feed_date, t.sponsor_activity_term
+    FROM screening_transactions t
+    INNER JOIN third_party_accounts a ON a.pidm = t.pidm
+    WHERE t.detail_code IN ('TPPY', 'Z0LE', 'C529')
+),
+third_party_activity AS (
+    SELECT a.pidm, p.calendar_term AS third_party_current_term,
+        CASE WHEN COUNT(*) FILTER (WHERE t.term_code = p.calendar_term
+                                    AND t.detail_code = 'TPPY' AND t.amount_missing_ind = 1) = 0
+            THEN ROUND(COALESCE(SUM(t.raw_amount) FILTER (
+                WHERE t.term_code = p.calendar_term AND t.detail_code = 'TPPY'
+            ), 0), 2) END AS current_term_tppy_total,
+        CASE WHEN COUNT(*) FILTER (WHERE t.term_code = p.calendar_term
+                                    AND t.detail_code = 'Z0LE' AND t.amount_missing_ind = 1) = 0
+            THEN ROUND(COALESCE(SUM(t.raw_amount) FILTER (
+                WHERE t.term_code = p.calendar_term AND t.detail_code = 'Z0LE'
+            ), 0), 2) END AS current_term_z0le_total,
+        CASE WHEN BOOL_OR(t.detail_code = 'Z0LE'
+                          AND t.feed_date BETWEEN p.run_date - 6 AND p.run_date)
+            THEN 'Y' ELSE 'N' END AS z0le_activity_last_7_days
+    FROM third_party_accounts a
+    CROSS JOIN params p
+    LEFT JOIN sponsor_transactions t ON t.pidm = a.pidm
+    GROUP BY a.pidm, p.calendar_term
+),
+/* Match refund_context_extract.sql attachment scope and keep lists aligned.
+   Aggregate before joining the final account report to preserve refund amounts. */
+sponsor_terms AS (
+    SELECT a.pidm, p.calendar_term AS term_code
+    FROM third_party_accounts a CROSS JOIN params p
+    UNION
+    SELECT pidm, sponsor_activity_term
+    FROM sponsor_transactions
+    WHERE sponsor_activity_term IS NOT NULL
+),
+sponsor_attachments AS (
+    SELECT DISTINCT s.pidm, cs.tbbcstu_contract_pidm AS sponsor_pidm,
+        NULLIF(TRIM(CONCAT_WS(' ', i.spriden_last_name, i.spriden_first_name)), '') AS sponsor_name,
+        NULLIF(TRIM(i.spriden_id), '') AS sponsor_id,
+        NULLIF(TRIM(CAST(cs.tbbcstu_contract_number AS text)), '') AS contract_number
+    FROM sponsor_terms s
+    INNER JOIN taismgr.tbbcstu cs
+        ON cs.tbbcstu_stu_pidm = s.pidm
+       AND cs.tbbcstu_term_code = s.term_code
+    LEFT JOIN saturn.spriden i
+        ON i.spriden_pidm = cs.tbbcstu_contract_pidm
+       AND i.spriden_change_ind IS NULL
+),
+sponsor_context AS (
+    SELECT pidm,
+        STRING_AGG(COALESCE(sponsor_name, '[Name unavailable]'), ' | '
+            ORDER BY sponsor_id NULLS LAST, sponsor_pidm, contract_number NULLS LAST) AS sponsor_names,
+        STRING_AGG(COALESCE(sponsor_id, '[ID unavailable]'), ' | '
+            ORDER BY sponsor_id NULLS LAST, sponsor_pidm, contract_number NULLS LAST) AS sponsor_ids,
+        STRING_AGG(COALESCE(contract_number, '[Number unavailable]'), ' | '
+            ORDER BY sponsor_id NULLS LAST, sponsor_pidm, contract_number NULLS LAST) AS contract_numbers
+    FROM sponsor_attachments
+    GROUP BY pidm
 )
 
 SELECT
@@ -2032,13 +2103,18 @@ SELECT
     f.last_ar_activity_date,
     f.account_control_activity_date,
     f.ed_activity_date,
-    f.plus_auth_activity_date
-FROM final_review f
+    f.plus_auth_activity_date,
+    sc.sponsor_names,
+    sc.sponsor_ids,
+    sc.contract_numbers,
+    a.third_party_current_term,
+    a.current_term_tppy_total,
+    a.current_term_z0le_total,
+    a.z0le_activity_last_7_days
+FROM review_accounts f
 CROSS JOIN params p
-WHERE (p.cwid_filter IS NULL OR f.cwid = TRIM(p.cwid_filter))
-  AND (p.last_name_filter IS NULL
-       OR UPPER(f.last_name) LIKE UPPER(p.last_name_filter))
-  AND f.total_refund_amount > 0
+LEFT JOIN sponsor_context sc ON sc.pidm = f.pidm
+LEFT JOIN third_party_activity a ON a.pidm = f.pidm
 ORDER BY
     f.last_name,
     f.first_name,

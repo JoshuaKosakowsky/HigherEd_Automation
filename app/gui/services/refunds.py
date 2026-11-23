@@ -149,7 +149,7 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
             progress_reporter=context.progress,
         )
 
-    source_note = ("Used standalone Refunds.sql. See Run Details for third-party information to verify. "
+    source_note = ("Used standalone Refunds.sql. See Run Details for the run summary. "
                    if source == STANDALONE_REFUND_SOURCE else "")
     return WorkflowResult(
         success=True,

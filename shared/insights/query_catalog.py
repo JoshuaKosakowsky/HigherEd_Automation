@@ -214,7 +214,8 @@ QUERIES: tuple[InsightsQuery, ...] = (
     InsightsQuery(
         "refund_review", "Refunds", "Refund review SQL (large)",
         "AR/refunds/Refunds.sql",
-        "Full candidate review with allocation calculations. May exceed API timeout; review only, no refunds issued.",
+        "Full candidate review with allocation calculations and sponsor details for third-party reviews. "
+        "May exceed API timeout. Review only, no refunds issued.",
     ),
     InsightsQuery(
         "refund_manual_transactions", "Refunds", "Manual transaction extract (large)",
