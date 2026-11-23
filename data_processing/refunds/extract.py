@@ -95,10 +95,15 @@ def _range_filter(column: str, bounds: tuple[int | None, int | None]) -> str:
     return " AND ".join(parts) or "TRUE"
 
 
+def _without_sql_header(sql: str) -> str:
+    return re.sub(r"\A\s*/\*.*?\*/\s*", "", sql, count=1, flags=re.DOTALL)
+
+
 def _scope_sql(settings: ExtractSettings, pidm_range: tuple[int | None, int | None]) -> str:
     # Settings validate literals before native SQL is sent to Insights.
+    scope = (QUERY_DIRECTORY / "refund_scope.sql").read_text(encoding="utf-8")
     return (
-        (QUERY_DIRECTORY / "refund_scope.sql").read_text(encoding="utf-8")
+        _without_sql_header(scope)
         .replace("__RUN_DATE__", f"DATE '{settings.run_date.isoformat()}'")
         .replace("__TARGET_TERM_OVERRIDE__", f"'{settings.target_term}'")
         .replace("__CWID_FILTER__", f"'{settings.cwid.strip()}'" if settings.cwid else "NULL")
@@ -107,11 +112,16 @@ def _scope_sql(settings: ExtractSettings, pidm_range: tuple[int | None, int | No
     )
 
 
-def render_non_allowable_policy_sql(sql: str) -> str:
+def _policy_sql(filename: str, label: str, annotate: bool) -> str:
+    source = (QUERY_DIRECTORY / filename).read_text(encoding="utf-8").strip()
+    if annotate:
+        return f"/* BEGIN GENERATED {label} */\n{source}\n/* END GENERATED {label} */"
+    return _without_sql_header(source)
+
+
+def render_non_allowable_policy_sql(sql: str, *, annotate: bool = True) -> str:
     """Expand the maintained Banner snapshot in templates or generated SQL."""
-    policy = (QUERY_DIRECTORY / "refund_non_allowable_detail_codes.sql").read_text(
-        encoding="utf-8"
-    ).strip()
+    policy = _policy_sql("refund_non_allowable_detail_codes.sql", "NON-ALLOWABLE CODES", annotate)
     # Mark generated copies so one command can refresh the runnable SQL too.
     pattern = (
         r"(?P<indent>^[ \t]*)(?:__NON_ALLOWABLE_DETAIL_CODES_SQL__|"
@@ -120,9 +130,7 @@ def render_non_allowable_policy_sql(sql: str) -> str:
     )
 
     def replace_policy(match: re.Match[str]) -> str:
-        lines = ["/* BEGIN GENERATED NON-ALLOWABLE CODES */", *policy.splitlines(),
-                 "/* END GENERATED NON-ALLOWABLE CODES */"]
-        return "\n".join(match["indent"] + line for line in lines)
+        return "\n".join(match["indent"] + line for line in policy.splitlines())
 
     return re.sub(pattern, replace_policy, sql, flags=re.MULTILINE | re.DOTALL)
 
@@ -147,21 +155,19 @@ def render_manual_extract_sql(template: str) -> str:
         "Regenerate with: python -m data_processing.refunds.extract */\n"
     )
     # The template's API-only introduction is misleading in a runnable export.
-    body = re.sub(r"\A\s*/\*.*?\*/\s*", "", template, count=1, flags=re.DOTALL)
+    body = _without_sql_header(template)
     return render_student_address_sql(render_non_allowable_policy_sql(
         header + body.replace("__REFUND_SCOPE_SQL__", scope).replace("__TRANSACTION_FILTER__", "TRUE")
     ))
 
 
-def render_student_address_sql(sql: str) -> str:
+def render_student_address_sql(sql: str, *, annotate: bool = True) -> str:
     """Keep the extract and standalone report on the same address-selection rule."""
-    source = (QUERY_DIRECTORY / "refund_student_addresses.sql").read_text(encoding="utf-8").strip()
+    source = _policy_sql("refund_student_addresses.sql", "STUDENT ADDRESSES", annotate)
     return re.sub(
         r"__STUDENT_ADDRESS_SQL__|/\* BEGIN GENERATED STUDENT ADDRESSES \*/.*?"
         r"/\* END GENERATED STUDENT ADDRESSES \*/",
-        lambda _: "/* BEGIN GENERATED STUDENT ADDRESSES */\n" + source
-            + "\n/* END GENERATED STUDENT ADDRESSES */",
-        sql, flags=re.DOTALL,
+        lambda _: source, sql, flags=re.DOTALL,
     )
 
 
@@ -174,14 +180,17 @@ def render_extract_sql(
     if not 0 <= batch_index < settings.batch_count:
         raise ValueError("Batch index is outside the configured batch count.")
     rendered = (
-        template.replace("__REFUND_SCOPE_SQL__", _scope_sql(settings, pidm_range))
+        _without_sql_header(template)
+        .replace("__REFUND_SCOPE_SQL__", _scope_sql(settings, pidm_range))
         .replace("__BATCH_COUNT__", str(settings.batch_count))
         .replace("__BATCH_INDEX__", str(batch_index))
         .replace("__PIDM_FILTER__", _range_filter("t.tbraccd_pidm", pidm_range))
         .replace("__IDENTITY_PIDM_FILTER__", _range_filter("i.spriden_pidm", pidm_range))
         .replace("__TRANSACTION_FILTER__", _range_filter("t.tbraccd_tran_number", transaction_range))
     )
-    rendered = render_student_address_sql(render_non_allowable_policy_sql(rendered))
+    # Source headers document the files. The API only needs their SQL bodies.
+    rendered = render_non_allowable_policy_sql(rendered, annotate=False)
+    rendered = render_student_address_sql(rendered, annotate=False)
     unresolved = sorted(token for token in TEMPLATE_TOKENS if token in rendered)
     if unresolved:
         raise ValueError(f"Unresolved SQL template tokens: {', '.join(unresolved)}")

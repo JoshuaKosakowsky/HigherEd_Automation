@@ -2256,6 +2256,21 @@ class RefundExtractTests(unittest.TestCase):
                 render_manual_extract_sql(template),
             )
 
+    def test_api_queries_omit_documentation_from_templates_and_shared_fragments(self) -> None:
+        from data_processing.refunds.extract import QUERY_DIRECTORY
+
+        settings = ExtractSettings("209980", 20, Path("unused"), run_date=date(2099, 8, 31))
+        for name in ("transactions", "context"):
+            with self.subTest(extract=name):
+                template = (QUERY_DIRECTORY / f"refund_{name}_extract.sql").read_text(encoding="utf-8")
+                sql = render_extract_sql(template, settings, 0)
+                self.assertTrue(sql.startswith("WITH non_allowable_detail_codes"))
+                self.assertNotIn("Shared candidate selection", sql)
+                self.assertNotIn("owner-confirmed TSADETC", sql)
+                self.assertNotIn("Shared CTEs for student check addresses", sql)
+                self.assertNotIn("/* BEGIN GENERATED", sql)
+                self.assertNotIn("/* END GENERATED", sql)
+
     def test_filters_narrow_candidate_queries_and_history_without_changing_balances(self):
         root = Path(__file__).resolve().parents[2] / "query" / "AR" / "refunds"
         sql = render_extract_sql(
