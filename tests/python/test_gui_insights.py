@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import requests
 from openpyxl import load_workbook
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -21,6 +22,7 @@ from PySide6.QtCore import QDate
 from app.gui.models import WorkflowContext, WorkflowMode, WorkflowResult
 from app.gui.pages.connections import ConnectionsPage
 from app.gui.services.insights import run_insights_connection
+from shared.insights.client import InsightsClient
 from shared.insights.config import (
     InsightsConfigurationError, InsightsDepartmentProfile, InsightsSettings,
     load_department_profiles,
@@ -122,6 +124,44 @@ class InsightsConnectionServiceTests(unittest.TestCase):
 
     def run_action(self, action, mode=WorkflowMode.TEST):
         return run_insights_connection(WorkflowContext("insights_connection", {"action": action}, mode))
+
+    def test_export_logs_catalog_title_and_prepared_body_size_for_both_outcomes(self):
+        query = get_query("last_month_activity")
+        prepared_sizes = []
+
+        def respond(request, **kwargs):
+            prepared_sizes.append(len(request.body))
+            response = requests.Response()
+            response.request = request
+            if len(prepared_sizes) == 1:
+                response.status_code = 200
+                response._content = b'{"status":"completed","data":{"rows":[["private-row"]],"cols":[{"name":"value"}]}}'
+            else:
+                response.status_code = 403
+                response.headers["Content-Type"] = "text/plain"
+                response._content = b"Forbidden"
+            return response
+
+        with tempfile.TemporaryDirectory() as directory, requests.Session() as transport:
+            client = InsightsClient("https://test.example.edu", 2, api_key="private-key", http_session=transport)
+            with (
+                patch.object(transport, "send", side_effect=respond),
+                patch("app.gui.services.insights.build_authenticated_client", return_value=(client, "cached")),
+                self.assertLogs("highered_automation.insights", "INFO") as log,
+            ):
+                for expected, filename in ((True, "first.xlsx"), (False, "second.xlsx")):
+                    context = WorkflowContext("insights_query_export", {
+                        "action": "query_export", "query_id": query.query_id,
+                        "output_path": str(Path(directory) / filename),
+                    }, WorkflowMode.TEST)
+                    self.assertEqual(run_insights_connection(context).success, expected)
+
+        succeeded, failed = log.output
+        self.assertIn("Insights query succeeded", succeeded)
+        self.assertIn("Insights request failed", failed)
+        for line, size in zip(log.output, prepared_sizes, strict=True):
+            self.assertIn(f"report={query.title!r}, request_bytes={size}", line)
+            self.assertNotIn("private-", line)
 
     def test_wf_all_date_export_uses_defaults_or_replacement_codes_and_removes_count(self):
         for codes, expected in ((None, "IN ('WOFF', 'BDRC')"), (' hlth, HLTH ', "IN ('HLTH')")):

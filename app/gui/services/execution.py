@@ -12,6 +12,7 @@ from app.gui.models import WorkflowContext, WorkflowDefinition, WorkflowResult
 from shared.cancellation import CancellationToken, WorkflowCancelled
 from shared.progress import ProgressReporter, ProgressUpdate
 from shared.workflow_errors import WorkflowUserError
+from shared.workflow_logging import report_log_context
 
 
 def friendly_error_message(error: Exception) -> str:
@@ -102,7 +103,8 @@ class WorkflowExecutor:
         )
 
         try:
-            result = definition.runner(context)
+            with report_log_context(definition.name):
+                result = definition.runner(context)
             result = WorkflowResult(
                 success=result.success,
                 message=result.message,

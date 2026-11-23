@@ -1,4 +1,4 @@
-"""Safe failure diagnostics for the Insights API and SSO session exchange."""
+"""Safe request diagnostics for the Insights API and SSO session exchange."""
 
 from html import unescape
 from http import HTTPStatus
@@ -7,8 +7,23 @@ import re
 
 import requests
 
+from shared.workflow_logging import current_report_name
 
 _LOG = logging.getLogger("highered_automation.insights")
+DATASET_PATH = "/api/dataset"
+
+
+def _query_log_fields(request: requests.PreparedRequest | None) -> str:
+    body = request.body if request is not None else None
+    size = len(body) if isinstance(body, bytes) else "unavailable"
+    return f"report={current_report_name.get()!r}, request_bytes={size}"
+
+
+def log_query_success(response: requests.Response) -> None:
+    _LOG.info(
+        "Insights query succeeded: POST %s, http=%s, %s",
+        DATASET_PATH, response.status_code, _query_log_fields(response.request),
+    )
 
 # Only fixed phrases may leave an API error body. Unknown text can
 # contain the submitted SQL, bound identifiers, or authentication details.
@@ -125,7 +140,9 @@ def log_request_failure(
             if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", request_id):
                 details.append(f"request_id={request_id}")
                 break
-    if request is not None and isinstance(request.body, bytes):
+    if path == DATASET_PATH:
+        details.append(_query_log_fields(request))
+    elif request is not None and isinstance(request.body, bytes):
         details.append(f"request_bytes={len(request.body)}")
     if timeout is not None:
         details.append(f"timeout_seconds={timeout}")

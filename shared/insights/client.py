@@ -9,7 +9,7 @@ import pandas as pd
 import requests
 from requests.exceptions import RequestException, Timeout
 
-from shared.insights.diagnostics import log_request_failure
+from shared.insights.diagnostics import DATASET_PATH, log_query_success, log_request_failure
 
 
 _Result = TypeVar("_Result")
@@ -173,11 +173,14 @@ class InsightsClient:
             ) from None
 
         try:
-            return parse(result)
+            parsed = parse(result)
         except InsightsAPIError as error:
             log_request_failure(method, path, error.code or "invalid_response",
                                 response=response, result=result)
             raise
+        if path == DATASET_PATH:
+            log_query_success(response)
+        return parsed
 
     def logout(self) -> None:
         """Revoke the current Metabase session token."""
@@ -215,7 +218,7 @@ class InsightsClient:
         """Execute SQL and return the results as a pandas DataFrame."""
 
         return self._request_json(
-            "POST", "/api/dataset", self._query_frame, payload=self._build_payload(sql),
+            "POST", DATASET_PATH, self._query_frame, payload=self._build_payload(sql),
         )
 
     @staticmethod

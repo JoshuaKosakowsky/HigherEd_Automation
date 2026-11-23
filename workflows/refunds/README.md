@@ -721,7 +721,10 @@ Cancellation interrupts the wait; authentication/permission errors, invalid
 SQL (including HTTP 400), and invalid results are not retried. Completeness
 checks still apply to every successful response.
 
-Choose **Open logs** and search the latest GUI log for `Insights request failed`.
+Choose **Open logs** and search for `Insights query succeeded` and
+`Insights request failed`. Both query entries include the report title and
+the prepared HTTP body size in bytes, when Requests supplies the prepared
+request. For Refund Review, the preceding extraction lines identify the batch.
 Each failed attempt records the operation and failure category, including attempts
 that later succeed on retry. If a response arrived, the entry includes its HTTP
 status, format and size, plus the query status, recognized reason, request size

@@ -28,6 +28,7 @@ from shared.insights.session_auth import (
 )
 from shared.insights.session_cache import DailyInsightsSessionCache, InsightsCredentialError
 from shared.mines_paths import get_shared_gui_access_path
+from shared.workflow_logging import report_log_context
 
 
 CONNECTION_SQL = Path(__file__).resolve().parents[3] / "query/insights_testing/connection_check.sql"
@@ -148,7 +149,8 @@ def run_insights_connection(context: WorkflowContext) -> WorkflowResult:
             experience_url=profile.experience_url,
             use_saved_mines_login=True,
         )
-        with client:
+        report_name = query.title if action == "query_export" else "Insights connection check"
+        with client, report_log_context(report_name):
             if action == "query_export":
                 if activity is not None:
                     result = extract_banner_activity(
