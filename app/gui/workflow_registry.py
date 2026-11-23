@@ -217,9 +217,8 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         workflow_id="refund_review",
         name="Refund Review",
         description=(
-            "Calculates a read-only refund review workbook from uploaded Insights "
-            "files or direct Insights SQL extraction. It does not "
-            "approve or issue refunds."
+            "Creates a refund review workbook from downloaded files, batched Insights extracts, "
+            "or the standalone Refund Review SQL backup."
         ),
         category="Accounts Receivable",
         runner=_defer_runner("refunds", "run_refund_review"),

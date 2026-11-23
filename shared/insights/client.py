@@ -241,7 +241,7 @@ class InsightsClient:
                 "Insights returned no query result data."
             )
 
-        rows = data.get("rows", [])
+        rows = data.get("rows")
         metadata = data.get("cols", [])
 
         if not isinstance(rows, list) or not isinstance(metadata, list):
@@ -267,11 +267,16 @@ class InsightsClient:
             )
 
         try:
-            return pd.DataFrame(rows, columns=columns)
+            frame = pd.DataFrame(rows, columns=columns)
         except (ValueError, TypeError):
             raise InsightsAPIError(
                 "Insights returned rows incompatible with its column metadata.", code="invalid_response",
             ) from None
+        # Some callers subdivide capped results. Single-query reports can use
+        # this Metabase flag to reject a partial workbook before publication.
+        if data.get("rows_truncated"):
+            frame.attrs["rows_truncated"] = True
+        return frame
 
     def get_current_user(self) -> InsightsUser:
         """Return allow-listed fields for the authenticated principal."""

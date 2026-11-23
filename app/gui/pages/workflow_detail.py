@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.models import (
-    MANUAL_SOURCE, SQL_SOURCE, ParameterDefinition, ParameterKind, WorkflowContext, WorkflowDefinition, WorkflowMode,
+    MANUAL_SOURCE, SQL_SOURCE, STANDALONE_REFUND_SOURCE, ParameterDefinition, ParameterKind,
+    WorkflowContext, WorkflowDefinition, WorkflowMode,
 )
 from app.gui.parameter_defaults import ParameterDefaults
 from app.gui.progress import WorkflowProgressWidget
@@ -179,7 +180,9 @@ class WorkflowDetailPage(QScrollArea):
                 self.refund_source.setAccessibleName("Refund data source")
                 self.refund_source.addItem("Drop, browse, or enter source file paths", MANUAL_SOURCE)
                 if is_administrator:
-                    self.refund_source.addItem("Run SQL from PROD Insights", SQL_SOURCE)
+                    self.refund_source.addItem("Run batched extracts from PROD Insights", SQL_SOURCE)
+                    self.refund_source.addItem("Run standalone Refund Review SQL from PROD Insights (backup)",
+                                               STANDALONE_REFUND_SOURCE)
                 form_layout.addWidget(self.refund_source)
                 form_layout.addSpacing(8)
         if definition.workflow_id == "textbook_brokers":
@@ -244,6 +247,12 @@ class WorkflowDetailPage(QScrollArea):
         return self.refund_source if self.refund_source is not None else self.recon_source
 
     @property
+    def _uses_prod_sql(self) -> bool:
+        return self._source_control is not None and self._source_control.currentData() in (
+            SQL_SOURCE, STANDALONE_REFUND_SOURCE,
+        )
+
+    @property
     def _source_heading(self) -> str:
         if self.refund_source is not None:
             return "Refund data source"
@@ -266,7 +275,7 @@ class WorkflowDetailPage(QScrollArea):
     def _update_production_warning(self) -> None:
         self.production_warning.setVisible(
             self.mode.currentData() == WorkflowMode.PRODUCTION.value or
-            (self._source_control is not None and self._source_control.currentData() == SQL_SOURCE)
+            self._uses_prod_sql
         )
 
     def _is_sql_source_parameter(self, key: str) -> bool:
@@ -296,7 +305,7 @@ class WorkflowDetailPage(QScrollArea):
         definitions = self.definition.parameters
         if self._source_control is not None:
             source = self._source_control.currentData()
-            if source == SQL_SOURCE:
+            if self._uses_prod_sql:
                 definitions = tuple(parameter for parameter in definitions
                                     if not self._is_manual_source_parameter(parameter.key))
             else:
@@ -356,8 +365,7 @@ class WorkflowDetailPage(QScrollArea):
             form.addRow(label("Opening balances to use", "field"),
                         label(balance_summary(context.parameters["_opening_balances"])))
         if self._source_control is not None:
-            source_label = "Run SQL from PROD Insights" if self._source_control.currentData() == SQL_SOURCE else self._source_control.currentText()
-            form.addRow(label(self._source_heading, "field"), label(source_label))
+            form.addRow(label(self._source_heading, "field"), label(self._source_control.currentText()))
         if self.textbook_step is not None:
             form.addRow(label("Workflow step", "field"), label(self.textbook_step.currentText()))
         for parameter in self.definition.parameters:
@@ -403,7 +411,7 @@ class WorkflowDetailPage(QScrollArea):
             self.ensureWidgetVisible(self.error)
             return
         value = self.mode.currentData()
-        mode = (WorkflowMode.PRODUCTION if (parameters.get("banner_source") == SQL_SOURCE or parameters.get("refund_source") == SQL_SOURCE) else
+        mode = (WorkflowMode.PRODUCTION if self._uses_prod_sql else
                 WorkflowMode(value) if value else None)
         context = WorkflowContext(self.definition.workflow_id, parameters, mode)
         if not self._confirm(context) or not self.authorize():

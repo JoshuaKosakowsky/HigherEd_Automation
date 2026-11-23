@@ -1,13 +1,24 @@
 # Refund review workflow
 
-This read-only workflow moves the expensive allocation work out of Insights.
-It does not approve or issue refunds.
+The standard workflow calculates allocations locally from two extracts. All
+sources produce a workbook for staff review.
 
-For a single Insights execution, `query/AR/refunds/Refunds.sql` also implements
-the current allocation rules entirely in SQL. See the
-[single-query guide](../../query/AR/refunds/README.md#single-query-alternative-refundssql)
-for its execution design and performance limits. The SQL result is one account
-report; this Python workflow adds the refund-type workbook tabs.
+From **0.31.0**, administrators can select **Run standalone Refund Review SQL
+from PROD Insights (backup)** under **Refund data source**. It runs
+`Refunds.sql` once from the same catalog entry as Connections. The current
+term uses the file as written. A different selected term uses the SQL's
+target-term override. Python routes the returned account allocations to the
+usual 14 worksheets and reconciles the portions for each account. **Run
+Details** records the source, target term, account count and total. This option
+saves to the workflow's selected output and operates independently of the
+transaction/context extract cache.
+
+The standalone report supplies the third-party review flag. Sponsor names,
+IDs, contract numbers, sponsor term, TPPY/Z0LE term totals and recent Z0LE
+activity require separate verification. A flagged account stays on **Third
+Party Reviews** unless a higher-priority hold or future-term rule applies.
+The backup stops if Insights reports truncation. The standalone SQL has no
+independent population count. See the [single-query guide](../../query/AR/refunds/README.md#single-query-alternative-refundssql).
 
 ## What runs where
 

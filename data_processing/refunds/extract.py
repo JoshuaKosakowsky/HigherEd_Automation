@@ -234,7 +234,7 @@ def _write_atomic(frame: pd.DataFrame, path: Path) -> None:
     temporary.replace(path)
 
 
-def _normalized_result(frame: pd.DataFrame) -> pd.DataFrame:
+def normalize_refund_columns(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     result.columns = [
         re.sub(r"[^a-z0-9]+", "_", str(column).strip().lower()).strip("_")
@@ -260,7 +260,7 @@ def _validate_complete_result(
     label: str,
     batch_index: int | None,
 ) -> pd.DataFrame:
-    result = _normalized_result(frame)
+    result = normalize_refund_columns(frame)
     location = (
         f"batch {batch_index + 1}"
         if batch_index is not None
@@ -369,7 +369,7 @@ def _complete_partition(
             f"Extracting refund {label} — batch/partition {location}",
             completed=batch_index * 2 + (label == "context"), total=settings.batch_count * 2,
         )
-    raw = _normalized_result(_run_partition_query(
+    raw = normalize_refund_columns(_run_partition_query(
         client, _render_partition_sql(sql, label), label, location,
         cancellation=cancellation, progress=progress,
     ))

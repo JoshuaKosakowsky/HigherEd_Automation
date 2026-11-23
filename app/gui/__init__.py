@@ -1,4 +1,4 @@
 """Desktop interface for HigherEd Automation workflows."""
 
 APP_NAME = "Mines Bursar Automation"
-APP_VERSION = "0.30.40"
+APP_VERSION = "0.31.0"

@@ -179,7 +179,10 @@ Python process. Run settings and optional validation filters remain near the top
 The result has one row per account with the allocator's existing column order,
 source breakdown, recipient amounts, delivery methods, and review flags. SQL
 produces one result set; the separate Excel tabs remain a Python workbook-export
-feature. The two-download Python workflow remains available if Insights cannot
+feature. The Refund Review workflow can run this report directly with its
+**standalone SQL backup** data source and write the tabbed workbook. See the
+[workflow guide](../../../workflows/refunds/README.md).
+The two-download Python workflow remains available if Insights cannot
 complete the single query within its ten-minute limit.
 
 ### Terms, population, and settlement

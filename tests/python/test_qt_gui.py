@@ -259,7 +259,7 @@ class QtGuiTests(unittest.TestCase):
         window = self.open_app()
         window.show_workflow(get_workflow("refund_review"))
         page = window.current_page
-        self.assertEqual(page.refund_source.count(), 2)
+        self.assertEqual(page.refund_source.count(), 3)
         self.assertEqual(page.refund_source.currentData(), "manual")
         with self.assertRaisesRegex(ValueError, "was not found"):
             page._parse_parameters()
@@ -272,17 +272,19 @@ class QtGuiTests(unittest.TestCase):
         parsed = page._parse_parameters()
         self.assertEqual(parsed["refund_source"], "manual")
         self.assertEqual(parsed["transaction_file"], transaction)
-        page.refund_source.setCurrentIndex(page.refund_source.findData("sql"))
-        self.assertTrue(page.inputs["transaction_file"].isHidden())
-        self.assertTrue(page.inputs["context_file"].isHidden())
-        self.assertTrue(page.production_warning.isVisible())
-        captured = []
-        with patch.object(page, "_confirm", side_effect=lambda context: captured.append(context) or False):
-            page._run()
-        self.assertEqual(captured[0].mode, WorkflowMode.PRODUCTION)
-        self.assertEqual(captured[0].parameters["refund_source"], "sql")
-        self.assertNotIn("transaction_file", captured[0].parameters)
-        self.assertNotIn("context_file", captured[0].parameters)
+        for source in ("sql", "standalone_sql"):
+            with self.subTest(source=source):
+                page.refund_source.setCurrentIndex(page.refund_source.findData(source))
+                self.assertTrue(page.inputs["transaction_file"].isHidden())
+                self.assertTrue(page.inputs["context_file"].isHidden())
+                self.assertTrue(page.production_warning.isVisible())
+                with patch.object(page, "_confirm", return_value=False) as confirm:
+                    page._run()
+                selected = confirm.call_args.args[0]
+                self.assertEqual(selected.mode, WorkflowMode.PRODUCTION)
+                self.assertEqual(selected.parameters["refund_source"], source)
+                self.assertNotIn("transaction_file", selected.parameters)
+                self.assertNotIn("context_file", selected.parameters)
         page.refund_source.setCurrentIndex(0)
         self.assertFalse(page.inputs["transaction_file"].isHidden())
         self.assertTrue(page.production_warning.isHidden())

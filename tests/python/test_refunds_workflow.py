@@ -10,13 +10,13 @@ from tempfile import TemporaryDirectory
 import unittest
 import json
 import sqlite3
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 from openpyxl import load_workbook
 
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
-from data_processing.refunds.export import REFUND_SHEETS, WORKBOOK_COLUMNS, export_refund_report
+from data_processing.refunds.export import REFUND_SHEETS, THIRD_PARTY_COLUMNS, WORKBOOK_COLUMNS, export_refund_report
 from data_processing.refunds.extract import (
     ExtractSettings,
     RefundExtractError,
@@ -28,9 +28,10 @@ from data_processing.refunds.extract import (
     render_manual_extract_sql,
 )
 from data_processing.refunds.ingest import read_refund_download
-from data_processing.refunds.pipeline import _create_review
+from data_processing.refunds.pipeline import _create_review, run_standalone_refund_pipeline
 from shared.cancellation import CancellationToken, WorkflowCancelled
-from shared.insights.client import InsightsAPIError
+from shared.insights.client import InsightsAPIError, InsightsClient
+from shared.insights.query_catalog import get_query
 from shared.progress import ProgressReporter
 from data_processing.refunds.terms import derive_target_term, fiscal_year_start, previous_term
 from workflows.refunds.run_refunds import main as run_refunds
@@ -2086,6 +2087,101 @@ class RefundLauncherOutputTests(unittest.TestCase):
             self.assertEqual(run_refunds(), 0)
         self.assertTrue(output.is_file())
         self.assertFalse(self.refund_folder.exists())
+
+
+class StandaloneRefundReviewTests(unittest.TestCase):
+    def setUp(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name) / "period" / "review.xlsx"
+        self.columns = [col for col in REPORT_COLUMNS if col not in THIRD_PARTY_COLUMNS]
+        self.client = Mock()
+
+    def run_backup(self, term="209980", token=None):
+        return run_standalone_refund_pipeline(
+            client=self.client, target_term=term, run_date=date(2099, 8, 31),
+            output_file=self.output, cancellation=token,
+        )
+
+    def test_current_term_uses_connections_query_and_routes_sql_allocations(self):
+        split = dict(cwid="0001", parent_plus_target_term="209980", total_refund_amount="150.67",
+                     student_refund_amount="100.52", parent_refund_amount="50.15",
+                     student_refund_available_amount="100.52", parent_refund_available_amount="50.15",
+                     student_clearing_reserve_amount=0, parent_clearing_reserve_amount=0,
+                     proposed_student_delivery="ARFD (System)", proposed_parent_delivery="RFDP",
+                     ed_activity_date="2099-08-01T11:35:00Z", student_address_zip="01234")
+        third_party = dict(split, cwid="0002", third_party_review_required_ind="Y")
+        held = dict(third_party, cwid="0003", refund_hold_ind="Y")
+        frame = pd.DataFrame([split, third_party, held], columns=self.columns)
+        frame.columns = [col.replace("_", " ").title() for col in frame.columns]
+        self.client.run_sql.return_value = frame
+        self.run_backup()
+        self.client.run_sql.assert_called_once_with(get_query("refund_review").sql_path.read_text(encoding="utf-8"))
+        book = load_workbook(self.output)
+        self.addCleanup(book.close)
+        self.assertEqual(book.sheetnames, [*REFUND_SHEETS, "Run Details"])
+        self.assertEqual(book["Run Details"]["B3"].value, 3)
+        self.assertEqual(book["Run Details"]["B4"].value, 452.01)
+        for sheet, cwid, amount in (("Refund to Parent", "0001", 50.15), ("Direct Deposit", "0001", 100.52),
+                                    ("Third Party Reviews", "0002", 150.67), ("Refund Holds", "0003", 150.67)):
+            headers, values = book[sheet].values
+            row = dict(zip(headers, values))
+            self.assertEqual((row["CWID"], row["Detail_Code_Refund_Amt"]), (cwid, amount))
+            self.assertEqual(row["ED Start"], datetime(2099, 8, 1, 11, 35))
+            self.assertEqual(row["Student Address ZIP"], "01234")
+            if sheet == "Third Party Reviews":
+                self.assertIsNone(row["TPPY Current Term Total"])
+                self.assertIn("Refunds.sql omits sponsor", row["Detail_Code_Note"])
+
+    def test_empty_result_for_requested_historical_term_creates_header_only_review(self):
+        self.client.run_sql.return_value = pd.DataFrame(columns=self.columns)
+        self.run_backup("209955")
+        self.assertIn("CAST('209955' AS varchar(6)) AS target_term_override",
+                      self.client.run_sql.call_args.args[0])
+        book = load_workbook(self.output)
+        self.addCleanup(book.close)
+        self.assertEqual(book["Run Details"]["B2"].value, "209955")
+        self.assertEqual(book["Run Details"]["B3"].value, 0)
+        self.assertEqual(book["Direct Deposit"].max_row, 1)
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.run_backup("209955")
+
+    def test_incomplete_or_mismatched_result_stops_before_creating_output(self):
+        capped = InsightsClient._query_frame({"status": "completed", "data": {
+            "cols": [{"name": c} for c in self.columns], "rows": [[None] * len(self.columns)], "rows_truncated": 1,
+        }})
+        for frame, message in (
+            (capped, "truncated"),
+            (pd.DataFrame(columns=self.columns[1:]), "expected Refund Review columns"),
+            (pd.DataFrame([{"parent_plus_target_term": "209955"}], columns=self.columns), "target term"),
+            (pd.DataFrame([{"parent_plus_target_term": "209980", "total_refund_amount": "invalid"}],
+                          columns=self.columns), "unreadable value for total_refund_amount"),
+        ):
+            with self.subTest(message=message):
+                self.client.run_sql.return_value = frame
+                with self.assertRaisesRegex(RefundExtractError, message):
+                    self.run_backup()
+                self.assertFalse(self.output.parent.exists())
+
+    def test_cancellation_during_the_only_request_prevents_publication(self):
+        token = CancellationToken()
+
+        def cancel(sql):
+            token.request()
+            return pd.DataFrame(columns=self.columns)
+
+        self.client.run_sql.side_effect = cancel
+        with self.assertRaises(WorkflowCancelled):
+            self.run_backup(token=token)
+        self.client.run_sql.assert_called_once()
+        self.assertFalse(self.output.parent.exists())
+
+    def test_dataset_refusal_is_reported_without_running_another_query(self):
+        self.client.run_sql.side_effect = InsightsAPIError("Insights rejected POST /api/dataset (HTTP 403).")
+        with self.assertRaisesRegex(RefundExtractError, "Standalone Refund Review SQL failed.*403"):
+            self.run_backup()
+        self.client.run_sql.assert_called_once()
+        self.assertFalse(self.output.exists())
 
 
 class RefundCancellationTests(unittest.TestCase):

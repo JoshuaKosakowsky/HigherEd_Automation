@@ -13,6 +13,7 @@ from shared.progress import ProgressReporter
 
 MANUAL_SOURCE = "manual"
 SQL_SOURCE = "sql"
+STANDALONE_REFUND_SOURCE = "standalone_sql"
 
 
 class WorkflowMode(str, Enum):
