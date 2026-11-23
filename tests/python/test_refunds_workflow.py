@@ -16,7 +16,7 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from data_processing.refunds import REPORT_COLUMNS, RefundParameters, allocate_refunds
-from data_processing.refunds.export import REFUND_SHEETS, THIRD_PARTY_COLUMNS, WORKBOOK_COLUMNS, export_refund_report
+from data_processing.refunds.export import REFUND_SHEETS, WORKBOOK_COLUMNS, export_refund_report
 from data_processing.refunds.extract import (
     ExtractSettings,
     RefundExtractError,
@@ -2094,7 +2094,7 @@ class StandaloneRefundReviewTests(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.output = Path(directory.name) / "period" / "review.xlsx"
-        self.columns = [col for col in REPORT_COLUMNS if col not in THIRD_PARTY_COLUMNS]
+        self.columns = REPORT_COLUMNS
         self.client = Mock()
 
     def run_backup(self, term="209980", token=None):
@@ -2110,7 +2110,10 @@ class StandaloneRefundReviewTests(unittest.TestCase):
                      student_clearing_reserve_amount=0, parent_clearing_reserve_amount=0,
                      proposed_student_delivery="ARFD (System)", proposed_parent_delivery="RFDP",
                      ed_activity_date="2099-08-01T11:35:00Z", student_address_zip="01234")
-        third_party = dict(split, cwid="0002", third_party_review_required_ind="Y")
+        third_party = dict(split, cwid="0002", third_party_review_required_ind="Y",
+                           sponsor_names="Sponsor One", sponsor_ids="TPS-001", contract_numbers="0007",
+                           third_party_current_term="209980", current_term_tppy_total="80.00",
+                           current_term_z0le_total=None, z0le_activity_last_7_days="Y")
         held = dict(third_party, cwid="0003", refund_hold_ind="Y")
         frame = pd.DataFrame([split, third_party, held], columns=self.columns)
         frame.columns = [col.replace("_", " ").title() for col in frame.columns]
@@ -2130,8 +2133,15 @@ class StandaloneRefundReviewTests(unittest.TestCase):
             self.assertEqual(row["ED Start"], datetime(2099, 8, 1, 11, 35))
             self.assertEqual(row["Student Address ZIP"], "01234")
             if sheet == "Third Party Reviews":
-                self.assertIsNone(row["TPPY Current Term Total"])
-                self.assertIn("Refunds.sql omits sponsor", row["Detail_Code_Note"])
+                self.assertEqual(row["Sponsor(s)"], "Sponsor One")
+                self.assertEqual(row["Sponsor ID(s)"], "TPS-001")
+                self.assertEqual(row["Contract Number(s)"], "0007")
+                self.assertEqual(row["Current Term"], "209980")
+                self.assertEqual(row["TPPY Current Term Total"], 80)
+                self.assertIsNone(row["Z0LE Current Term Total"])
+                self.assertEqual(row["Z0LE Activity_Last 7 Days"], "Yes")
+            else:
+                self.assertNotIn("Sponsor(s)", row)
 
     def test_empty_result_for_requested_historical_term_creates_header_only_review(self):
         self.client.run_sql.return_value = pd.DataFrame(columns=self.columns)
@@ -2153,6 +2163,7 @@ class StandaloneRefundReviewTests(unittest.TestCase):
         for frame, message in (
             (capped, "truncated"),
             (pd.DataFrame(columns=self.columns[1:]), "expected Refund Review columns"),
+            (pd.DataFrame(columns=self.columns[:-7]), "expected Refund Review columns"),
             (pd.DataFrame([{"parent_plus_target_term": "209955"}], columns=self.columns), "target term"),
             (pd.DataFrame([{"parent_plus_target_term": "209980", "total_refund_amount": "invalid"}],
                           columns=self.columns), "unreadable value for total_refund_amount"),

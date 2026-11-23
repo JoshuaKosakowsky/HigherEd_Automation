@@ -135,8 +135,9 @@ The integrated workflows are:
   PowerShell launcher.
   **Run standalone Refund Review SQL from PROD Insights (backup)** executes
   the Connections report **Refund review SQL (large)** once. Python formats
-  its calculated amounts into the usual review tabs. **Run Details** identifies
-  the source and the sponsor and term details to verify for third-party reviews.
+  its calculated amounts into the usual review tabs. **Third Party Reviews**
+  includes sponsor and term activity details. **Run Details** records the
+  source, term, account count, and refund total.
   **Save refund review as** defaults to the workstation's current fiscal period
   in shared Mines OneDrive. For November 2026, the folder is
   `GRP-Bursar Office - General\Y-Brswork\Refund\RFND\FY27\Daily Pending Refunds\P05 - November 2026`.

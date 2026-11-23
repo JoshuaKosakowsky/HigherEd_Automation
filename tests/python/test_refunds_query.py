@@ -26,6 +26,7 @@ from data_processing.refunds.extract import (
     ExtractSettings, render_extract_sql, render_non_allowable_policy_sql, render_student_address_sql,
 )
 from data_processing.refunds.pipeline import run_refund_download_pipeline, run_standalone_refund_pipeline
+from data_processing.refunds.terms import derive_target_term
 from tests.python import test_refunds_workflow as python_cases
 
 
@@ -676,6 +677,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         query: str | None = None,
         context_activity_date: str | None = None,
         addresses: list[tuple[object, ...]] | None = None,
+        sponsor_attachments: tuple[tuple[object, ...], ...] = (),
+        sponsor_identities: tuple[tuple[object, ...], ...] = (),
         explain: bool = False,
     ) -> list[dict]:
         report_query = re.sub(
@@ -757,6 +760,10 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
         control_date = context_activity_date or run_date
         for address in addresses or []:
             insert("spraddr", address)
+        for attachment in sponsor_attachments:
+            insert("tbbcstu", attachment)
+        for identity in sponsor_identities:
+            insert("spriden", identity)
         for pidm in sorted({transaction.pidm for transaction in transactions}):
             if addresses is None:
                 insert("spraddr", (pidm, "PR", 1, "1 Synthetic Road", None, None,
@@ -818,8 +825,9 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
 
     def assert_matches_python(self, actual: dict, expected: dict, label: str = "") -> None:
         for column in REPORT_COLUMNS:
-            if column in THIRD_PARTY_COLUMNS:
-                continue  # Sponsor enrichment is provided by the Python workflow.
+            if column in THIRD_PARTY_COLUMNS and actual["third_party_review_required_ind"] != "Y":
+                self.assertIsNone(actual[column], f"{label}: {column}")
+                continue
             a, e = actual[column], expected[column]
             a = None if pd.isna(a) else a
             e = None if pd.isna(e) else e
@@ -837,7 +845,11 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             RefundTransaction("TPPY", "P", "000", 25, balance=-25, pidm=2),
         ]
         client = Mock()
-        client.run_sql.side_effect = lambda sql: pd.DataFrame(self.run_report(transactions, query=sql))
+        client.run_sql.side_effect = lambda sql: pd.DataFrame(self.run_report(
+            transactions, query=sql,
+            sponsor_attachments=((2, 91, "0004", "209980"), (2, 91, "0005", "209980")),
+            sponsor_identities=((91, "TPS-001", "Sponsor", "One", None),),
+        ))
         with TemporaryDirectory() as directory:
             output, report = run_standalone_refund_pipeline(
                 client=client, target_term="209980", run_date=date(2099, 8, 31),
@@ -851,6 +863,12 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                                       ("Third Party Reviews", 25)):
                     headers, values = book[sheet].values
                     self.assertEqual(dict(zip(headers, values))["Detail_Code_Refund_Amt"], amount)
+                headers, values = book["Third Party Reviews"].values
+                third_party = dict(zip(headers, values))
+                self.assertEqual(third_party["Sponsor(s)"], "Sponsor One | Sponsor One")
+                self.assertEqual(third_party["Contract Number(s)"], "0004 | 0005")
+                self.assertEqual(third_party["TPPY Current Term Total"], 25)
+                self.assertEqual(third_party["Z0LE Current Term Total"], 0)
                 self.assertEqual(book["Run Details"]["B4"].value, 95.19)
             finally:
                 book.close()
@@ -867,6 +885,56 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             row["fdpl_priority_tie_rule"],
             "EFFECTIVE_PRIORITY_THEN_EARLIEST_TRAN_NUMBER",
         )
+
+    def test_standalone_sponsor_details_match_flat_extracts_and_python(self) -> None:
+        transactions = [
+            RefundTransaction("TPPY", "P", "000", 100, balance=-100),
+            RefundTransaction("TPPY", "P", "000", -20),
+            RefundTransaction("Z0LE", "P", "000", 50, balance=-50),
+            RefundTransaction("Z0LE", "P", "000", -10),
+            RefundTransaction("Z0LE", "P", "000", -1, term="209910", feed_date="2099-08-25"),
+            RefundTransaction("C529", "P", "000", 20, balance=-20, term="209955"),
+            RefundTransaction("TPPY", "P", "000", None, pidm=2),
+            RefundTransaction("Z0LE", "P", "000", 10, balance=-10, pidm=2, feed_date="2099-08-24"),
+            RefundTransaction("Z0LE", "P", "000", -1, pidm=2, feed_date="2099-09-01"),
+            RefundTransaction("CASH", "P", "000", 30, balance=-30, pidm=2, term="209955"),
+            RefundTransaction("CASH", "P", "000", 25, balance=-25, pidm=3, term="209955"),
+        ]
+        settings = dict(
+            target_term="209955", authorizations={"9900": ["N", "N"]},
+            sponsor_attachments=((1, 91, "0004", "209980"), (1, 91, "0004", "209980"),
+                                 (1, 91, "0005", "209955"), (1, 92, None, "209910"),
+                                 (1, 91, "Ignored", "209880"), (3, 91, "Ignored", "209980")),
+            sponsor_identities=((91, "TPS-001", "Sponsor", "One", None),
+                                (91, "TPS-OLD", "Retired", "Identity", "I")),
+        )
+        result = self.run_report(transactions, **settings)
+        downloads = {
+            name: pd.DataFrame(self.run_report(
+                transactions, query=REFUNDS_QUERY.with_name(f"refund_{name}_manual.sql").read_text(),
+                **settings,
+            ))
+            for name in ("transactions", "context")
+        }
+        expected = allocate_refunds(downloads["transactions"], downloads["context"],
+                                    RefundParameters("209955", date(2099, 8, 31)))
+        by_cwid = {row["cwid"]: row for row in result}
+        self.assertEqual(len(result), 3)
+        self.assertEqual(set(by_cwid), set(expected.cwid))
+        for row in expected.to_dict("records"):
+            self.assert_matches_python(by_cwid[row["cwid"]], row, row["cwid"])
+        first = by_cwid["TEST-1"]
+        self.assertEqual(first["sponsor_ids"], "TPS-001 | TPS-001 | [ID unavailable]")
+        self.assertEqual(first["contract_numbers"], "0004 | 0005 | [Number unavailable]")
+        self.assertEqual(first["third_party_current_term"], "209980")
+        self.assertEqual(first["current_term_tppy_total"], 80)
+        self.assertEqual(first["current_term_z0le_total"], 40)
+        self.assertEqual(first["z0le_activity_last_7_days"], "Y")
+        second = by_cwid["TEST-2"]
+        self.assertIsNone(second["sponsor_names"])
+        self.assertIsNone(second["current_term_tppy_total"])
+        self.assertEqual(second["z0le_activity_last_7_days"], "N")
+        self.assertIsNone(by_cwid["TEST-3"]["third_party_current_term"])
 
     def test_prior_posted_refund_alone_does_not_create_zero_balance_refund(self) -> None:
         rows = self.run_report([
@@ -900,6 +968,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             plus_auth_raw_values negative_source_count ambiguous_source_pool_count
             review_status review_reasons last_ar_activity_date
             account_control_activity_date ed_activity_date plus_auth_activity_date
+            sponsor_names sponsor_ids contract_numbers third_party_current_term
+            current_term_tppy_total current_term_z0le_total z0le_activity_last_7_days
         """.split()
         self.assertEqual(list(self.one(self.worked_example())), expected)
 
@@ -1421,10 +1491,23 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                     detail_code=t.detail_code, type_ind=t.type_ind, priority=t.priority,
                     amount=t.amount, balance=t.stored_balance, term=t.term,
                     aid_year=t.aid_year, effective_date=t.effective_date,
-                    activity_date=t.activity_date, category=t.category,
+                    activity_date=t.activity_date, category=t.category, feed_date=t.feed_date,
                     title_iv=t.title_iv, tran_number=t.tran_number, non_allowable=t.non_allowable,
                 ) for t in transactions]
                 arguments = {key: value for key, value in kwargs.items() if key not in {"expected_rows", "sponsor_context", "progress_reporter"}}
+                if sponsor_context := kwargs.get("sponsor_context"):
+                    current_term = derive_target_term(kwargs.get("run_date", date(2099, 8, 31)))
+                    names = sponsor_context["sponsor_names"].split(" | ")
+                    ids = sponsor_context["sponsor_ids"].split(" | ")
+                    contracts = sponsor_context["contract_numbers"].split(" | ")
+                    arguments["sponsor_identities"] = tuple(
+                        (pidm, sponsor_id, name, None, None)
+                        for pidm, (sponsor_id, name) in enumerate(zip(ids, names, strict=True), 900)
+                    )
+                    arguments["sponsor_attachments"] = tuple(
+                        (1, pidm, contract, current_term)
+                        for pidm, contract in enumerate(contracts, 900)
+                    )
                 if "run_date" in arguments:
                     arguments["run_date"] = arguments["run_date"].isoformat()
                 # These allocator scenarios intentionally vary flags (including

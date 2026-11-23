@@ -13,10 +13,11 @@ Details** records the source, target term, account count and total. This option
 saves to the workflow's selected output and operates independently of the
 transaction/context extract cache.
 
-The standalone report supplies the third-party review flag. Sponsor names,
-IDs, contract numbers, sponsor term, TPPY/Z0LE term totals and recent Z0LE
-activity require separate verification. A flagged account stays on **Third
-Party Reviews** unless a higher-priority hold or future-term rule applies.
+From **0.32.0**, the standalone report also fills the seven sponsor and activity
+columns on **Third Party Reviews**. It looks up sponsor context after calculating
+allocations and uses the same term, reversal, and Feed Date rules as the
+standard workflow. A flagged account stays on **Third Party Reviews** unless
+a higher-priority hold or future-term rule applies.
 The backup stops if Insights reports truncation. The standalone SQL has no
 independent population count. See the [single-query guide](../../query/AR/refunds/README.md#single-query-alternative-refundssql).
 
@@ -455,9 +456,8 @@ sponsors/contracts against TSACONT before operational use. Candidate selection
 now includes historical TPPY accounts; production-size extraction timing needs
 local verification.
 
-The standalone `Refunds.sql` retains its existing output columns and shares the
-new TPPY review condition. The sponsor-detail columns are produced by the Python
-workflow from the flat extracts, not by that standalone allocation report.
+The standalone `Refunds.sql` appends these seven fields for accounts flagged for
+third-party review. Both workflow sources display them on **Third Party Reviews**.
 
 ### Student check address review (0.28.5)
 

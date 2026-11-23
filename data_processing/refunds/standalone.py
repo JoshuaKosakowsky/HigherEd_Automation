@@ -10,7 +10,7 @@ from shared.insights.client import InsightsAPIError
 from shared.insights.query_catalog import get_query
 from shared.workflow_logging import report_log_context
 from .allocation import REPORT_COLUMNS
-from .export import COUNT_COLUMNS, CURRENCY_COLUMNS, THIRD_PARTY_COLUMNS
+from .export import COUNT_COLUMNS, CURRENCY_COLUMNS
 from .extract import RefundExtractError, SQLClient, normalize_refund_columns
 from .terms import derive_target_term, validate_term
 
@@ -60,8 +60,7 @@ def read_standalone_refund_report(
                                  "Use the batched extracts for a complete review.")
 
     report = normalize_refund_columns(result)
-    required = set(REPORT_COLUMNS) - THIRD_PARTY_COLUMNS
-    if not report.columns.is_unique or not required.issubset(report.columns):
+    if not report.columns.is_unique or not set(REPORT_COLUMNS).issubset(report.columns):
         raise RefundExtractError("The standalone query did not return the expected Refund Review columns.")
     if not report["parent_plus_target_term"].map(str).eq(term).all():
         raise RefundExtractError("The target term returned by Refunds.sql differs from the selected term.")
@@ -81,6 +80,4 @@ def read_standalone_refund_report(
             raise RefundExtractError(f"Refunds.sql returned an unreadable value for {column}.") from None
     if any(value is None or value <= 0 for value in report["total_refund_amount"]):
         raise RefundExtractError("Refunds.sql returned an invalid account refund total.")
-    # Missing sponsor and contract fields are unknown. Preserve nulls rather
-    # than fabricating zero totals or clearing a third-party review flag.
-    return report.reindex(columns=REPORT_COLUMNS, fill_value=None)
+    return report[REPORT_COLUMNS]
