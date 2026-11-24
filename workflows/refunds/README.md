@@ -727,7 +727,9 @@ checks between account calculations and workbook stages, and discards staged
 output before publication. A successfully published workbook remains available
 if cancellation is requested after the publication step. Other workflows retain
 their existing close restrictions. Query and processing timings appear in the
-GUI log and launcher progress output.
+GUI log and launcher progress output. From **0.32.2**, the GUI logs
+`accounts_with_refund_proposals` with the source and target term after saving
+the workbook. This count matches the completion message for every input source.
 
 ## Recover from failures
 

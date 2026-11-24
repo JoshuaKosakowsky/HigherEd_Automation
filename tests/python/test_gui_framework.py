@@ -431,10 +431,11 @@ class RefundReviewAdapterTests(unittest.TestCase):
                 },
             )
 
-            with patch(
-                "app.gui.services.refunds.run_refund_download_pipeline",
-                return_value=(output_file, [object(), object()]),
-            ) as pipeline:
+            with (
+                patch("app.gui.services.refunds.run_refund_download_pipeline",
+                      return_value=(output_file, [object(), object()])) as pipeline,
+                self.assertLogs("highered_automation.gui", level="INFO") as log,
+            ):
                 result = run_refund_review(context)
 
             arguments = pipeline.call_args.kwargs
@@ -446,6 +447,8 @@ class RefundReviewAdapterTests(unittest.TestCase):
             self.assertEqual(result.output_path, output_file)
             self.assertIn("2 account(s)", result.message)
             self.assertIn("does not approve or issue refunds", result.message)
+            self.assertIn("source=manual target_term=202680 accounts_with_refund_proposals=2",
+                          log.records[-1].getMessage())
 
     def test_sql_uses_existing_batched_pipeline_and_cleans_extracts(self):
         context = WorkflowContext("refund_review", {
@@ -463,6 +466,7 @@ class RefundReviewAdapterTests(unittest.TestCase):
             patch("app.gui.services.refunds.load_department_profiles", return_value={"PROD": profile}),
             patch("app.gui.services.refunds.build_authenticated_client", return_value=(client, "cached")) as authenticate,
             patch("app.gui.services.refunds.run_refund_pipeline", return_value=(context.parameters["output_file"], [object()])) as pipeline,
+            self.assertLogs("highered_automation.gui", level="INFO") as log,
         ):
             policy.return_value.is_administrator.return_value = True
             result = run_refund_review(context)
@@ -478,6 +482,9 @@ class RefundReviewAdapterTests(unittest.TestCase):
         authenticate.assert_called_once_with(profile.settings, browser="chrome")
         client.__exit__.assert_called_once()
         self.assertTrue(result.success)
+        self.assertIn("1 account(s)", result.message)
+        self.assertIn("source=sql target_term=202680 accounts_with_refund_proposals=1",
+                      log.records[-1].getMessage())
 
     def test_standalone_backup_bypasses_extracts_and_their_cache(self):
         output = self.cache_root / "standalone.xlsx"
@@ -493,13 +500,17 @@ class RefundReviewAdapterTests(unittest.TestCase):
             patch("app.gui.services.refunds.build_authenticated_client", return_value=(client, "cached")),
             patch("app.gui.services.refunds._refund_extract_cache") as cache,
             patch("app.gui.services.refunds.run_refund_pipeline") as batched,
-            patch("app.gui.services.refunds.run_standalone_refund_pipeline", return_value=(output, [object()])) as backup,
+            patch("app.gui.services.refunds.run_standalone_refund_pipeline", return_value=(output, [])) as backup,
+            self.assertLogs("highered_automation.gui", level="INFO") as log,
         ):
             policy.return_value.is_administrator.return_value = True
             result = run_refund_review(context)
         self.assertTrue(result.success)
         self.assertEqual(result.output_path, output)
         self.assertIn("standalone Refunds.sql", result.message)
+        self.assertIn("0 account(s)", result.message)
+        self.assertIn("source=standalone_sql target_term=209980 accounts_with_refund_proposals=0",
+                      log.records[-1].getMessage())
         self.assertEqual(backup.call_args.kwargs["target_term"], "209980")
         self.assertIs(backup.call_args.kwargs["client"], client)
         batched.assert_not_called()

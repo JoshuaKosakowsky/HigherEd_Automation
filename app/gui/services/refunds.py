@@ -149,12 +149,17 @@ def run_refund_review(context: WorkflowContext) -> WorkflowResult:
             progress_reporter=context.progress,
         )
 
+    account_count = len(report)
+    log_progress(
+        "Refund Review workbook created: source=%s target_term=%s accounts_with_refund_proposals=%d",
+        source, target_term, account_count,
+    )
     source_note = ("Used standalone Refunds.sql. See Run Details for the run summary. "
                    if source == STANDALONE_REFUND_SOURCE else "")
     return WorkflowResult(
         success=True,
         message=(
-            f"Created a refund review workbook for {len(report):,} account(s). "
+            f"Created a refund review workbook for {account_count:,} account(s). "
             f"{source_note}"
             "This workflow does not approve or issue refunds."
         ),
