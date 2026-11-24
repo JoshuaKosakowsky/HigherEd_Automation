@@ -13,7 +13,7 @@ first configured in a new Insights environment.
 | [Sponsors](sponsors/README.md) | Sponsored-student contracts and student/sponsor balances | `sponsored_student_summary.sql` |
 | [Loans](loans/README.md) | Historical institutional-loan borrowers with recent graduation/withdrawal or possible stop-out, classified by input-term enrollment | `institutional_loan_exit_review.sql` |
 | [Term corrections](term_corrections/README.md) | Available cash payments posted to a term with no charge history | `payments_without_charges.sql` |
-| [Holds](holds/README.md) | Term balances without current AU; RH delinquency; outreach excluding CO; W&F reconciliation; historical CO demographic/academic profiles | `term_balances_no_au.sql`, `rh_delinquency.sql`, `deliquent_student_accounts.sql`, `collections_tracking.sql`, `collections_student_profile.sql` |
+| [Holds](holds/README.md) | Prior-term nonpayment registration review; term balances without current AU; RH delinquency; outreach excluding CO; W&F reconciliation; historical CO demographic/academic profiles | `prior_term_nonpayment.sql`, `term_balances_no_au.sql`, `rh_delinquency.sql`, `deliquent_student_accounts.sql`, `collections_tracking.sql`, `collections_student_profile.sql` |
 | [Canadian tax](canadian_tax/README.md) | TL11A source-data preparation for a CWID/year, fee review and exchange-rate provenance | API transaction, enrollment and term-effective program templates |
 | [Late fees](late_fees/README.md) | App student review with identities, balances, posted fees, holds and shared staff waivers; TEST/PROD inventories and exact preserved-result comparison | `late_fee_student_review.sql`, `late_fee_populations.sql`, `late_fee_waiver_source_check.sql`, `compare_late_fee_populations.sql` |
 

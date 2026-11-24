@@ -1,5 +1,88 @@
 # Student account holds and delinquency reports
 
+## Prior-term nonpayment review
+
+From **0.33.0**, [`prior_term_nonpayment.sql`](prior_term_nonpayment.sql) returns
+one row per student actively registered in the selected Spring or Fall term
+with a positive balance in a covered prior term or an incomplete covered-term
+balance. It uses the registration and financial records available at run time.
+
+| Registration term | Prior charge terms checked | Example |
+| --- | --- | --- |
+| Fall (`YYYY80`) | Spring and Summer of the same year | `202680` checks `202610` and `202655` |
+| Spring (`YYYY10`) | Fall of the preceding year | `202710` checks `202680` |
+
+Active registration means at least one `SFRSTCR` course with
+`STVRSTS_INCL_SECT_ENRL = Y`. The section count uses distinct CRNs and includes
+zero-credit registrations. Waitlisted, dropped, and withdrawn sections are
+excluded when Banner flags those statuses as excluded from section enrollment. Summer
+is a debt term for Fall and is outside the supported registration terms.
+
+Each prior balance sums the signed remaining `TBRACCD_BALANCE` for charge
+detail types (`TBBDETC_TYPE_IND = C`) within that source term, rounds to cents,
+and floors credits at zero. Banner's charge balance already reflects payments
+applied to the charge, including payments posted in a different term. Applying
+an unapplied payment is a separate Banner operation. `Unapplied Payment Found`
+flags any known payment row with a negative remaining balance, in any term, for
+manual review. The report screens any positive cent balance and uses no separate
+due-date, aid, sponsorship, payment-plan, or hold exception filter.
+
+An in-scope term with no debt displays zero. An out-of-scope term displays
+blank. Missing charge balances or unknown or duplicate detail-code definitions
+leave the affected amount and `Prior Balance Owed` blank and add a review note.
+The other term's known amount remains visible. Otherwise the total is the sum
+of the covered amounts owed. Missing or duplicate current identities are marked
+for review. The report lists distinct `SPRHOLD` codes active on the database's
+current date. A hold must have started (or have a blank start) and end strictly
+after today. A blank end date leaves the hold out of this list. All students meeting
+the registration and balance rules remain eligible for the report regardless
+of which holds they have. Hold codes are context for staff review.
+
+| Synthetic example | Expected result |
+| --- | --- |
+| Fall registration, $100 Spring charge with $60 applied and $25 Summer debt | One row with $40 Spring, $25 Summer, and $65 total |
+| Fall registration, $100 Summer charge fully paid from a Fall payment | No candidate from that charge |
+| Fall registration, $100 open Summer charge and a $100 unapplied credit posted in Fall | $100 Summer and an unapplied-payment review note |
+| Spring registration, $50 prior Fall and $30 prior Summer | $50 Fall only |
+| Waitlisted sections only, or an active registration with only target-term debt | No candidate |
+| Active registration, prior-term balance missing, active PP and AU holds | Blank total with a review note and both hold codes |
+
+### Publish in Insights
+
+1. In the intended Banner Insights database, open **New → SQL query** and run
+   [`validate_hold_schema.sql`](validate_hold_schema.sql). Confirm the report's
+   `SFRSTCR`, `STVRSTS`, `TBRACCD`, `TBBDETC`, `SPRIDEN`, and `SPRHOLD` columns
+   are `FOUND`. Use the same database for the report.
+2. Create a new native SQL question and paste the entire
+   [`prior_term_nonpayment.sql`](prior_term_nonpayment.sql) file. Keep the
+   `{{registration_term}}` placeholder unquoted in the SQL editor.
+3. In the Variables panel, set `registration_term` to **Text**, use an input
+   box, and label it **Registration term**. Leave the default blank and keep
+   **Always require a value** off if shown. That toggle forces a default, while
+   the SQL placeholder itself requires an entry. Enter six digits, for example
+   `202680` or `202710`. Invalid and unsupported terms return no rows.
+4. Run in TEST where available. Compare course status, prior charges, recent
+   application of payments, and hold dates against Banner for representative
+   cases. Save the table as **Prior-term nonpayment review** in the approved AR
+   collection. Use its existing staff permissions.
+5. Keep `Report Row Count` in the SQL. When downloading directly from Insights,
+   compare that value to the exported data-row count to detect a capped export.
+   Recheck current registration and payment application in Banner before taking
+   action, allowing for Insights replication delay. The query is read-only.
+
+See the editor and widget documentation for the Insights controls.
+[Native SQL editor](https://www.metabase.com/docs/latest/questions/native-editor/writing-sql) ·
+[Filter widget settings](https://www.metabase.com/docs/latest/questions/native-editor/filter-widgets)
+
+### Run in the app
+
+Open **Connections → Holds — Prior-term nonpayment review**, choose **TEST**
+or **PROD**, enter the six-digit Spring or Fall Banner term, and select **Run
+selected query and save Excel**. This is an administrator export. The app
+runs the repository SQL directly and checks the result count before saving a new
+workbook. It removes the count column from the workbook. A capped result fails
+before export. Publishing the Insights question is independent of app setup.
+
 ## Term balances > 0 and no AU hold
 
 From **0.26.0**, `term_balances_no_au.sql` reports the current and two previous
