@@ -114,6 +114,12 @@ See [the workflow rules and synthetic acceptance examples](../../../workflows/re
 for netting, applied-aid protection, ownership, and review behavior. This
 version requires the new charge flag; refresh both source downloads before use.
 
+From **0.32.1**, both extracts screen out fully settled accounts before transfer.
+The screen requires a zero net balance, known amounts, and a known zero balance
+on every transaction. Offsetting balances and missing data stay in scope under
+the existing candidate rules. See the
+[late-fee acceptance examples](../../../workflows/refunds/README.md#population-and-refund-amounts).
+
 Re-download both exports when extract columns or candidate scope change. To
 maintain the standalone manual SQL, edit the extract templates or shared scope, then regenerate from the
 repository root:

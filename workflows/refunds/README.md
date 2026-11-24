@@ -76,6 +76,12 @@ Offsetting balances such as a $40 fee and a -$40 aid balance do not qualify,
 even when they occur within the same detail-code group. A real account credit,
 missing amount, or missing balance also cannot satisfy the settlement check.
 
+From **0.32.1**, the transaction and account-context extracts apply this same
+check before downloading the rows. Unresolved accounts retain their complete
+history, including zero-net or positive-balance accounts with a potential
+Title IV refund and a Non-Allowable Charge. Python still checks settlement when
+processing downloads and determines the refund, recipient, and review status.
+
 The owner confirmed this settlement rule and that Trans Paid is sparse and not
 required evidence of the staff correction. The check uses the resulting balances;
 it does not require a Trans Paid value or date and does not validate application

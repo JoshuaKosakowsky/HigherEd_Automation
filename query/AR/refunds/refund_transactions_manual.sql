@@ -147,7 +147,9 @@ account_balances AS MATERIALIZED (
             AND t.tbraccd_amount > 0) AS non_allowable_charge_count,
         COUNT(*) FILTER (WHERE t.tbraccd_amount IS NULL
             OR d.tbbdetc_type_ind IS NULL
-            OR UPPER(TRIM(d.tbbdetc_type_ind)) NOT IN ('C', 'P')) AS invalid_rows
+            OR UPPER(TRIM(d.tbbdetc_type_ind)) NOT IN ('C', 'P')) AS invalid_rows,
+        COUNT(*) FILTER (WHERE t.tbraccd_balance IS NULL
+            OR t.tbraccd_balance <> 0) AS unsettled_balance_rows
     FROM candidate_pidms c
     INNER JOIN taismgr.tbraccd t ON t.tbraccd_pidm = c.pidm
     LEFT JOIN taismgr.tbbdetc d ON d.tbbdetc_detail_code = t.tbraccd_detail_code
@@ -157,8 +159,11 @@ SELECT a.pidm, p.target_term,
     p.current_term, p.run_date
 FROM account_balances a
 CROSS JOIN params p
-WHERE ROUND(a.full_account_balance, 2) <= 0 OR a.invalid_rows > 0
-   OR (a.title_iv_payment_count > 0 AND a.non_allowable_charge_count > 0)
+WHERE (ROUND(a.full_account_balance, 2) <= 0 OR a.invalid_rows > 0
+       OR (a.title_iv_payment_count > 0 AND a.non_allowable_charge_count > 0))
+  /* Match Python's settled-account check. Offsetting row balances still need review. */
+  AND NOT (ROUND(a.full_account_balance, 2) = 0
+           AND a.invalid_rows = 0 AND a.unsettled_balance_rows = 0)
 
 )
 SELECT

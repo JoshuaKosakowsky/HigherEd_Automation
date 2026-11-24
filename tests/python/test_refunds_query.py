@@ -451,6 +451,21 @@ class RefundExtractSqlTests(unittest.TestCase):
             self.assertEqual(row.full_account_balance, Decimal(late_fee - 200))
             self.assertEqual(row.title_iv_balance_due_note, "Yes")
 
+    def test_settlement_screen_keeps_zero_net_accounts_with_missing_data(self) -> None:
+        for pidm, payment_amount, payment_balance in (
+            (5, 100, 0), (6, 100, None), (7, None, 0),
+        ):
+            self.database.executemany(
+                "INSERT INTO taismgr.tbraccd VALUES (?, '209910', '9899', ?, ?, ?, ?, "
+                "'2099-01-01', '2099-01-01', NULL)",
+                [(pidm, 1, "CHG", 100, 0), (pidm, 2, "FREE", payment_amount, payment_balance)],
+            )
+        for name in ("transactions", "context"):
+            with self.subTest(extract=name):
+                pids = set(self.extract(name).pidm)
+                self.assertNotIn(5, pids)
+                self.assertTrue({6, 7}.issubset(pids))
+
     def test_snapshot_blocks_all_eleven_codes_by_funding_not_priority(self) -> None:
         # Owner's 2026-11-14 snapshot. Include an unlisted charge at 789 to prove
         # priority is not a proxy for the charge restriction.
@@ -1377,7 +1392,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             # Positive full-account balance, despite current activity/unused payment.
             RefundTransaction("CHG9", "C", "899", 100, pidm=7),
             RefundTransaction("PAY7", "P", "897", 50, balance=-50, pidm=7),
-            # Settled target-term account: SQL candidate, later omitted by Python.
+            # Fully settled target-term account can be screened out before transfer.
             RefundTransaction("CHG9", "C", "899", 100, pidm=8),
             RefundTransaction("PAY0", "P", "000", 100, pidm=8),
             # Negative charge balance does not qualify as a payment credit.
@@ -1401,9 +1416,21 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                               effective_date="2099-07-30"),
             RefundTransaction("TPPY", "P", "800", -10, term="209955", pidm=14),
             RefundTransaction("FREE", "P", "000", 50, term="209955", pidm=14),
+            # All balances known zero after the late-fee correction.
+            RefundTransaction("CHG9", "C", "899", 1000, pidm=15),
+            RefundTransaction("LPPF", "C", "789", 40, pidm=15),
+            RefundTransaction("PELL", "P", "800", 1040, pidm=15, category="FA", title_iv="Y"),
+            # The same net balance with offsetting fee and aid balances.
+            RefundTransaction("CHG9", "C", "899", 1000, pidm=16),
+            RefundTransaction("LPPF", "C", "789", 40, balance=40, pidm=16),
+            RefundTransaction("PELL", "P", "800", 1040, balance=-40, pidm=16, category="FA", title_iv="Y"),
+            # Positive balance with a possible Title IV refund.
+            RefundTransaction("CHG9", "C", "899", 1000, pidm=17),
+            RefundTransaction("LPPF", "C", "789", 300, balance=300, pidm=17),
+            RefundTransaction("PELL", "P", "800", 1200, balance=-200, pidm=17, category="FA", title_iv="Y"),
         ]
         root = REFUNDS_QUERY.parent
-        expected = {1, 2, 4, 8, 10, 12, 13, 14}
+        expected = {1, 2, 4, 10, 12, 13, 14, 16, 17}
         downloads = {}
         for name in ("transactions", "context"):
             with self.subTest(export=name):
@@ -1441,7 +1468,7 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
             )
             expected_refunds = {
                 "TEST-2": 20, "TEST-4": 10, "TEST-10": 10,
-                "TEST-12": 50, "TEST-13": 60, "TEST-14": 50,
+                "TEST-12": 50, "TEST-13": 60, "TEST-14": 50, "TEST-16": 40, "TEST-17": 200,
             }
             self.assertEqual(dict(zip(report.cwid, report.total_refund_amount)), expected_refunds)
             sql_rows = self.run_report(transactions)
@@ -1458,6 +1485,8 @@ class RefundsPostgresPolicyTests(unittest.TestCase):
                     self.assertIn("Possible Third Party refund", row["review_reasons"])
                 if row["cwid"] == "TEST-14":
                     self.assertIn("Possible Third Party refund", row["review_reasons"] or "")
+                if row["cwid"] in {"TEST-16", "TEST-17"}:
+                    self.assertEqual(row["title_iv_balance_due_note"], "Yes")
             sheets = pd.read_excel(output, sheet_name=None)
             for name, sheet in sheets.items():
                 expected_columns = (
