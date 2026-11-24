@@ -560,6 +560,14 @@ marked when active. Unknown data stays visible for review. Existing TEST/PROD,
 administrator, complete-result and non-overwrite export controls apply. See
 [rules and acceptance examples](../../query/AR/holds/term_balances_no_au_README.md).
 
+In **0.33.0**, choose **Holds — Prior-term nonpayment review**, select TEST or
+PROD, and enter the Spring `10` or Fall `80` registration term. Fall checks
+Spring and Summer of the same year. Spring checks the preceding Fall. The
+administrator export shows one row per actively registered student with a
+remaining prior-term balance or incomplete balance data. It includes active
+holds and flags unapplied payments for review. The app checks completeness
+before saving. See [balance rules and Insights publishing steps](../../query/AR/holds/README.md#prior-term-nonpayment-review).
+
 Choose **Holds — Delinquent student accounts** for the delinquency outreach
 review workbook. It needs no term input and exports all-term net balance,
 past-due amount, preferred email/phone, and `Hold`. Any CO record excludes the

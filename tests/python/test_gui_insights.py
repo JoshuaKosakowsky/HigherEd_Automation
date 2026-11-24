@@ -662,6 +662,23 @@ class ConnectionsPageTests(unittest.TestCase):
         self.assertEqual(params["query_id"], "late_fee_student_review")
         self.assertEqual(params["term_code"], "202680")
 
+    def test_nonpayment_picker_accepts_spring_but_rejects_summer(self):
+        self.page.queries.setCurrentIndex(self.page.queries.findData("prior_term_nonpayment"))
+        self.assertFalse(self.page.term.isHidden())
+        self.page.term.setText("202655")
+        with patch.object(QMessageBox, "warning") as warning, patch.object(QFileDialog, "getSaveFileName") as save:
+            self.page._run("query_export")
+        warning.assert_called_once()
+        save.assert_not_called()
+        self.page.term.setText("202710")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            QFileDialog, "getSaveFileName", return_value=(str(Path(directory) / "nonpayment.xlsx"), "")
+        ):
+            self.page._run("query_export")
+        params = self.executor.run_async.call_args.args[1].parameters
+        self.assertEqual(params["query_id"], "prior_term_nonpayment")
+        self.assertEqual(params["term_code"], "202710")
+
     def test_wf_defaults_no_date_inputs_and_parameters_reach_background_task(self):
         self.page.queries.setCurrentIndex(self.page.queries.findData('wf_mines_balance_transactions'))
         self.assertTrue(self.page.activity_inputs.isHidden())

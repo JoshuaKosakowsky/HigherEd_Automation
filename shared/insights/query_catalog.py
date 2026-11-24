@@ -59,7 +59,8 @@ class InsightsQuery:
         if self.fall_term_only and not term.endswith("80"):
             raise ValueError("Enter a Fall Banner term ending in 80.")
         if self.allowed_term_suffixes and term[-2:] not in self.allowed_term_suffixes:
-            raise ValueError("Enter a Spring (10), Summer (55), or Fall (80) Banner term.")
+            allowed = ", ".join(self.allowed_term_suffixes)
+            raise ValueError(f"Enter a Banner term with an allowed ending ({allowed}).")
         marker = "{{" + self.term_variable + "}}"
         if marker not in sql or "[[" in sql:
             raise ValueError("This query's term template is not supported.")
@@ -70,6 +71,15 @@ class InsightsQuery:
 
 
 QUERIES: tuple[InsightsQuery, ...] = (
+    InsightsQuery(
+        "prior_term_nonpayment", "Holds", "Prior-term nonpayment review",
+        "AR/holds/prior_term_nonpayment.sql",
+        "Enter a Fall (80) registration term to check Spring and Summer balances, or a Spring (10) "
+        "term to check the preceding Fall. One row per actively registered student with prior-term "
+        "debt or a balance requiring review. Includes active holds and flags unapplied payments.",
+        term_variable="registration_term", allowed_term_suffixes=("10", "80"),
+        administrator_only=True, result_count_column="Report Row Count",
+    ),
     InsightsQuery(
         "late_fee_student_review", "Late fees", "Student detail and population verification",
         "AR/late_fees/late_fee_student_review.sql",
