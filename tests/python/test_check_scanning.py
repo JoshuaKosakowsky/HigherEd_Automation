@@ -388,3 +388,71 @@ class CheckScanTests(unittest.TestCase):
         view.approve.click()
         target = self.home / "Documents" / "Tests" / "Example Inc. - 000483.pdf"
         self.assertEqual(page_count(target.read_bytes()), 2)
+
+    def test_queue_summarizes_approved_files_and_closes_after_intake_catches_up(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit
+        from app.gui.pages.check_scans import CheckInbox, CheckReview
+
+        app = QApplication.instance() or QApplication([])
+        first = self.inbox / "first scan.pdf"
+        second = self.inbox / "second scan.pdf"
+        first.write_bytes(self.source)
+        second.write_bytes(self.source + b"\n% second synthetic scan\n")
+        intake = ScanIntake(self.queue)
+        self.index(intake)
+        pending = self.inbox / "incoming memo.txt"
+        pending.write_text("This file should not interrupt check review.", encoding="utf-8")
+        self.assertTrue(self.queue.has_pending_intake())
+
+        serials = iter(("000482", "000483"))
+        summaries = []
+
+        def approve(viewer):
+            viewer.show_page(1)
+            viewer.number.setText(next(serials))
+            viewer.confirm.click()
+            self.assertTrue(viewer.approve.isEnabled())
+            viewer.approve.click()
+            self.assertIsNotNone(viewer.saved_path)
+
+        def read_summary(dialog):
+            summaries.append(dialog.windowTitle())
+            self.assertEqual(dialog.windowTitle(), "Queue complete")
+            labels = [label.text() for label in dialog.findChildren(QLabel)]
+            self.assertIn("2 redacted PDFs saved.", labels)
+            self.assertIn(str(self.inbox), labels)
+            self.assertIn(str(self.home / "Documents" / "Tests"), labels)
+            files = dialog.findChild(QPlainTextEdit).toPlainText().splitlines()
+            self.assertEqual(files, [
+                "first scan.pdf → Example Company LLC - 000482.pdf",
+                "second scan.pdf → Example Company LLC - 000483.pdf",
+            ])
+            buttons = dialog.findChild(QDialogButtonBox)
+            buttons.button(QDialogButtonBox.StandardButton.Close).click()
+            self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+        with (patch("app.gui.pages.check_scans.start_check_scan_process") as launch,
+              patch.object(CheckReview, "exec", approve),
+              patch.object(QDialog, "exec", read_summary)):
+            worker = launch.return_value
+            worker.poll.return_value = None
+            view = CheckInbox(self.queue)
+            self.addCleanup(view.close)
+            view.show()
+            app.processEvents()
+            view.review()
+            self.assertEqual(summaries, [])
+            self.assertTrue(view.isVisible())
+            self.assertIn("Checking remaining incoming scans", view.status.text())
+            with patch("workflows.check_scanning.intake.monotonic", side_effect=[7, 10]):
+                intake.poll()
+                intake.poll()
+            self.assertFalse(self.queue.has_pending_intake())
+            view.check_completion()
+            self.assertEqual(summaries, ["Queue complete"])
+            self.assertFalse(view.isVisible())
+            worker.kill.assert_called_once()
+        self.assertEqual(first.read_bytes(), self.source)
+        self.assertTrue(second.is_file())
+        self.assertTrue(pending.is_file())

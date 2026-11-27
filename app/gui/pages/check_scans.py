@@ -11,9 +11,9 @@ import sys
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFormLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from app.gui.services.check_scanning import start_check_scan_process
@@ -154,9 +154,10 @@ class PageCanvas(QWidget):
 
 
 class CheckReview(QDialog):
-    def __init__(self, parent, queue, record):
+    def __init__(self, parent, queue, record, previous_output: Path | None = None):
         super().__init__(parent)
         self.queue, self.record = queue, record
+        self.saved_path: Path | None = None
         self.source = queue.source(record)
         self.count = page_count(self.source)
         finding = decode_finding(record)
@@ -165,6 +166,8 @@ class CheckReview(QDialog):
         self.setWindowTitle("Review check and backup pages")
         self.resize(1050, 850)
         layout = QVBoxLayout(self)
+        if previous_output is not None:
+            layout.addWidget(QLabel(f"Saved {previous_output.name}", textFormat=Qt.TextFormat.PlainText))
         layout.addWidget(QLabel(record["name"], textFormat=Qt.TextFormat.PlainText))
         missing = missing_redactions(self.marks)
         toolbar = QHBoxLayout()
@@ -272,7 +275,7 @@ class CheckReview(QDialog):
         if not self.approve.isEnabled():
             return
         try:
-            self.queue.file(self.record, self.marks, self.issuer.text(), self.number.text())
+            self.saved_path = self.queue.file(self.record, self.marks, self.issuer.text(), self.number.text())
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
             QMessageBox.warning(self, "Check was not filed", str(exc))
             return
@@ -284,6 +287,8 @@ class CheckInbox(QDialog):
         super().__init__()
         self.queue = queue
         self.displayed = None
+        self.saved: list[tuple[str, Path]] = []
+        self.awaiting_completion = False
         self.setWindowTitle("Check Scan Review")
         self.resize(775, 560)
         layout = QVBoxLayout(self)
@@ -312,6 +317,7 @@ class CheckInbox(QDialog):
         self.timer = QTimer(self, interval=3000)
         self.timer.timeout.connect(self.refresh)
         self.timer.timeout.connect(self.check_startup_result)
+        self.timer.timeout.connect(self.check_completion)
         self.timer.start()
         self.refresh()
 
@@ -369,7 +375,8 @@ class CheckInbox(QDialog):
         elif not records:
             self.status.setText("No scans to review. Watching for new scans.")
         else:
-            self.status.setText(f"{len(records)} shown. New scans are checked automatically.")
+            saved_status = f"{len(self.saved)} saved this session. " if self.saved else ""
+            self.status.setText(f"{saved_status}{len(records)} shown. New scans are checked automatically.")
         self.open_button.setEnabled(bool(records))
         self.dismiss_button.setEnabled(bool(records))
 
@@ -378,8 +385,11 @@ class CheckInbox(QDialog):
         if item:
             self.queue.dismiss(item.data(Qt.ItemDataRole.UserRole))
             self.refresh()
+            self.awaiting_completion = bool(self.saved)
+            self.check_completion()
 
     def review(self):
+        self.awaiting_completion = False
         while item := self.listing.currentItem():
             record = item.data(Qt.ItemDataRole.UserRole)
             if record["status"] == "Filed":
@@ -390,17 +400,65 @@ class CheckInbox(QDialog):
                                         "Verify and separate the packet or redact it manually in Acrobat.")
                 return
             try:
-                viewer = CheckReview(self, self.queue, record)
+                previous_output = self.saved[-1][1] if self.saved else None
+                viewer = CheckReview(self, self.queue, record, previous_output)
             except (OSError, ValueError, RuntimeError):
                 QMessageBox.warning(self, "Scan unavailable", "Check whether the complete PDF is synced and readable.")
                 return
-            approved = viewer.exec() == QDialog.DialogCode.Accepted
+            viewer.exec()
+            saved_path = viewer.saved_path
             viewer.deleteLater()
-            self.refresh()
-            if not approved and self.listing.count():
-                self.listing.setCurrentRow((self.listing.currentRow()+1) % self.listing.count())
-            if not approved or self.other.isChecked():
+            if saved_path is None:
+                self.refresh()
+                if self.listing.count():
+                    self.listing.setCurrentRow((self.listing.currentRow()+1) % self.listing.count())
                 return
+            self.saved.append((record["name"], saved_path))
+            self.refresh()
+            if self.other.isChecked():
+                break
+        self.awaiting_completion = bool(self.saved)
+        self.check_completion()
+
+    def check_completion(self):
+        if not self.awaiting_completion:
+            return
+        try:
+            pending_intake = self.queue.has_pending_intake()
+            remaining = self.queue.records()
+        except (OSError, sqlite3.Error):
+            return
+        if remaining:
+            self.awaiting_completion = False
+        elif pending_intake:
+            if self.worker is not None and self.worker.poll() is None:
+                self.status.setText(f"Saved {len(self.saved)}. Checking remaining incoming scans…")
+        else:
+            self.awaiting_completion = False
+            self.show_completion()
+            self.accept()
+
+    def show_completion(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Queue complete")
+        dialog.resize(680, 420)
+        layout = QVBoxLayout(dialog)
+        count = len(self.saved)
+        caption = "redacted PDF saved" if count == 1 else "redacted PDFs saved"
+        layout.addWidget(QLabel(f"{count} {caption}."))
+        locations = QFormLayout()
+        layout.addLayout(locations)
+        folders = "\n".join(str(path) for path in dict.fromkeys(output.parent for _, output in self.saved))
+        locations.addRow("Redacted copies saved to", QLabel(folders, textFormat=Qt.TextFormat.PlainText, wordWrap=True))
+        locations.addRow("Original scans kept in", QLabel(str(self.queue.inbox), textFormat=Qt.TextFormat.PlainText, wordWrap=True))
+        files = QPlainTextEdit("\n".join(f"{source} → {output.name}" for source, output in self.saved))
+        files.setReadOnly(True)
+        files.setAccessibleName("Original scan and redacted copy filenames")
+        layout.addWidget(files)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def done(self, result):
         self.timer.stop()

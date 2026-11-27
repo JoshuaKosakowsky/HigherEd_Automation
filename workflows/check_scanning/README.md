@@ -62,6 +62,11 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
   MICR or signature boxes, and resolve filename errors. Then check the review
   confirmation to enable **Approve & Next**. Changes to the filename or boxes
   require a fresh confirmation.
+- The next review shows the filename just saved. Once the review queue is
+  empty and intake has caught up, **Queue complete** shows the session's count,
+  source and destination folders, and original and redacted filenames. Closing
+  the summary ends the review session. The optional sign-in watcher can keep
+  checking for later scans.
 
 ## Pilot output
 
@@ -79,7 +84,7 @@ embeds only those resulting images in a fresh PDF. This deliberately removes
 text layers, attachments and interactivity throughout the packet, including
 backup pages. Page sizes and order are preserved. The staged copy is reopened
 to verify its page count before publication. Existing destination files are
-never overwritten. Originals are not archived or deleted by this workflow.
+never overwritten. During the pilot, originals stay in the PaperCut inbox.
 
 After pilot approval, the planned shared destination is the Controller's
 `Accounting/Accounting (Shared)/CASHIER/CASHNet Copies/FYxx` folder. The

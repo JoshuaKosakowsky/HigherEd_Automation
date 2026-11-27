@@ -35,6 +35,19 @@ def fingerprint(path: Path) -> tuple[int, int, int]:
     return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
+def inbox_versions(inbox: Path) -> dict[str, tuple[int, int, int]]:
+    versions = {}
+    for path in inbox.iterdir():
+        if path.is_symlink() or path.suffix.lower() in {".tmp", ".partial", ".crdownload", ".part"}:
+            continue
+        try:
+            if path.is_file():
+                versions[path.name] = fingerprint(path)
+        except OSError:
+            continue
+    return versions
+
+
 def decode_finding(record) -> Finding:
     info = json.loads(record["finding"])
     return Finding(info["status"], [Mark(m["page"], m["kind"], Box(**m["box"])) for m in info["marks"]],
@@ -69,9 +82,21 @@ class ScanQueue:
             yield db
 
     def records(self, include_other: bool = False):
-        clause = "" if include_other else "WHERE status NOT IN ('Unrelated', 'Dismissed', 'Filed')"
+        clause = (
+            "WHERE status != 'Not a PDF'" if include_other
+            else "WHERE status NOT IN ('Not a PDF', 'Unrelated', 'Dismissed', 'Filed')"
+        )
         with self.connect() as db:
             return db.execute(f"SELECT * FROM scans {clause} ORDER BY mtime, name").fetchall()
+
+    def known_versions(self) -> dict[str, tuple[int, int, int]]:
+        with self.connect() as db:
+            return {r["name"]: tuple(r)[1:] for r in db.execute("SELECT name,size,mtime,ctime FROM scans")}
+
+    def has_pending_intake(self) -> bool:
+        files = inbox_versions(self.inbox)
+        known = self.known_versions()
+        return any(version[0] and known.get(name) != version for name, version in files.items())
 
     def source(self, record) -> bytes:
         path = self.inbox / record["name"]
@@ -164,30 +189,20 @@ class ScanIntake:
         self.queue = queue
         self.recognize = recognize
         self.observed = {}
-        self.non_pdfs = {}
 
     def poll(self, stop=lambda: False) -> None:
         """Reconcile the entire directory; duplicate events or a restart need no special handling."""
         now = monotonic()
-        files = {}
-        for path in self.queue.inbox.iterdir():
-            if path.is_symlink() or path.suffix.lower() in {".tmp", ".partial", ".crdownload", ".part"}:
-                continue
-            try:
-                if path.is_file():
-                    files[path.name] = fingerprint(path)
-            except OSError:
-                continue
+        files = inbox_versions(self.queue.inbox)
+        known = self.queue.known_versions()
         with self.queue.connect() as db:
-            known = {r["name"]: tuple(r)[1:] for r in db.execute("SELECT name,size,mtime,ctime FROM scans")}
             for name in known.keys() - files.keys():
                 db.execute("DELETE FROM scans WHERE name=?", (name,))
         self.observed = {name: value for name, value in self.observed.items() if name in files}
-        self.non_pdfs = {name: value for name, value in self.non_pdfs.items() if name in files}
         for name, version in files.items():
             if stop():
                 return
-            if known.get(name) == version or self.non_pdfs.get(name) == version:
+            if known.get(name) == version:
                 continue
             last, since = self.observed.get(name, (None, now))
             if last != version:
@@ -200,7 +215,9 @@ class ScanIntake:
                 with path.open("rb") as src:
                     head = src.read(1024)
                     if b"%PDF-" not in head and path.suffix.lower() != ".pdf":
-                        self.non_pdfs[name] = version
+                        with self.queue.connect() as db:
+                            db.execute("INSERT OR REPLACE INTO scans VALUES(?,?,?,?,?,?,?)",
+                                       (name, *version, "", "Not a PDF", "{}"))
                         continue
                     data = head + src.read()
                 if fingerprint(path) != version:
