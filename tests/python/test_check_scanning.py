@@ -51,6 +51,34 @@ def packet(*pages):
         return result.getvalue()
 
 
+def pdf_with_invisible_text() -> bytes:
+    # Use a standard PDF font and invisible text rendering mode (3 Tr).
+    # The input text is searchable without depending on the host's Qt fonts.
+    content = b"BT /F1 18 Tf 3 Tr 72 550 Td (SYNTHETIC PRIVATE CHECK LINE) Tj ET"
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+        b"<< /Title (PRIVATE TEST TITLE) >>",
+    )
+    fixture = io.BytesIO()
+    fixture.write(b"%PDF-1.4\n")
+    offsets = []
+    for number, obj in enumerate(objects, 1):
+        offsets.append(fixture.tell())
+        fixture.write(b"%d 0 obj\n%s\nendobj\n" % (number, obj))
+    xref = fixture.tell()
+    fixture.write(b"xref\n0 %d\n0000000000 65535 f \n" % (len(offsets) + 1))
+    for offset in offsets:
+        fixture.write(b"%010d 00000 n \n" % offset)
+    fixture.write(b"trailer\n<< /Size %d /Root 1 0 R /Info 6 0 R >>\n"
+                  b"startxref\n%d\n%%%%EOF\n" % (len(offsets) + 1, xref))
+    return fixture.getvalue()
+
+
 class CheckScanTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -188,36 +216,31 @@ class CheckScanTests(unittest.TestCase):
             redact_pdf(self.source, [Mark(0, "MICR", Box(.2,.3,.1,.4))], io.BytesIO())
 
     def test_hidden_text_attachment_and_rotated_crop_do_not_survive_as_source_objects(self):
-        # A scanner may include an invisible searchable text layer and PDF metadata.
-        from PySide6.QtCore import QBuffer, QIODevice
-        from PySide6.QtGui import QPainter, QPdfWriter
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        from PySide6.QtWidgets import QApplication
-        app = QApplication.instance() or QApplication([])
-        buffer = QBuffer()
-        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        writer = QPdfWriter(buffer)
-        writer.setTitle("PRIVATE TEST TITLE")
-        p = QPainter(writer)
-        p.drawText(500, 600, "SYNTHETIC PRIVATE CHECK LINE")
-        p.end()
-        del writer
-        with pdf.PdfDocument(bytes(buffer.data())) as doc:
-            self.assertGreater(doc[0].get_textpage().count_chars(), 5)
+        with pdf.PdfDocument(pdf_with_invisible_text()) as doc:
             doc[0].set_cropbox(2, 4, 500, 660)
             doc[0].set_rotation(90)
             doc.new_attachment("unredacted-original").set_data(b"PRIVATE-ATTACHMENT")
             original = io.BytesIO()
             doc.save(original)
+        source = original.getvalue()
+        with pdf.PdfDocument(source) as doc:
+            self.assertEqual(doc[0].get_rotation(), 90)
+            self.assertEqual(doc[0].get_cropbox(), (2, 4, 500, 660))
+            self.assertIn("SYNTHETIC PRIVATE CHECK LINE", doc[0].get_textpage().get_text_range())
+            self.assertEqual(doc.get_metadata_value("Title"), "PRIVATE TEST TITLE")
+            self.assertEqual(doc.count_attachments(), 1)
+        source_pixels = page_pixels(source, 0)
+        self.assertTrue(np.all(source_pixels == 255))
+
         out = io.BytesIO()
-        redact_pdf(original.getvalue(), [Mark(0, "MICR", Box(.15,.25,.55,.35))], out)
+        redact_pdf(source, [Mark(0, "MICR", Box(.15, .25, .55, .35))], out)
         with pdf.PdfDocument(out.getvalue()) as result:
             self.assertEqual(result.count_attachments(), 0)
             self.assertEqual(result[0].get_textpage().count_chars(), 0)
             self.assertNotIn("PRIVATE", str(result.get_metadata_dict()))
             pixels = page_pixels(out.getvalue(), 0)
             height, width = pixels.shape[:2]
-            self.assertEqual(pixels.shape, page_pixels(original.getvalue(), 0).shape)
+            self.assertEqual(pixels.shape, source_pixels.shape)
             self.assertEqual(pixels[int(height*.30),int(width*.3)].max(),0)
 
     def test_two_check_faces_block_filing(self):
