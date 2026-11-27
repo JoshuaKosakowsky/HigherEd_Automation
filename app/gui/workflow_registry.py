@@ -313,6 +313,12 @@ WORKFLOWS: tuple[WorkflowDefinition, ...] = (
         ),
     ),
     WorkflowDefinition(
+        workflow_id="check_scan_review", name="Check Scan Review", category="Cashier Tools",
+        description="Review incoming PaperCut PDFs, adjust MICR and signature redactions, "
+                    "and save an approved test copy under Documents / Tests.",
+        runner=_defer_runner("check_scanning", "run_check_scanning"),
+    ),
+    WorkflowDefinition(
         workflow_id="setup_report_watcher",
         name="Set Up Report Watcher",
         description=(

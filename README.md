@@ -311,6 +311,10 @@ from another computer. If the repository is in OneDrive, keep it available
 locally using **Always keep on this device**. A successful install followed by
 missing files needs investigation rather than repeated reinstallations.
 
+For incoming checks, **Cashier Tools → Check Scan Review** opens the PaperCut
+intake and approval queue. See the [check scan workflow](workflows/check_scanning/README.md)
+for workstation setup and the local pilot destination.
+
 The report watcher uses PowerShell/Windows Forms independently of Qt. For an
 RDC failure, check the exact downloaded filename, the employee's access to the
 Daily Closing destination, and

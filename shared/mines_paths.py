@@ -99,6 +99,16 @@ def get_graduate_contract_recon_directory(
             / GRADUATE_CONTRACT_RECON_FOLDER / period)
 
 
+def get_papercut_scan_directory(environment: Mapping[str, str] | None = None) -> Path:
+    return get_mines_onedrive_root(environment) / "Apps" / "Scans for PaperCut MF"
+
+
+def get_cashnet_copies_directory(day: date, environment: Mapping[str, str] | None = None) -> Path:
+    fiscal_year, _ = _fiscal_folder_names(day)
+    return (get_mines_onedrive_root(environment) / "GRP-Office of the Controller - Documents"
+            / "Accounting" / "Accounting (Shared)" / "CASHIER" / "CASHNet Copies" / fiscal_year)
+
+
 def get_refund_review_directory(
     day: date, environment: Mapping[str, str] | None = None,
 ) -> Path:

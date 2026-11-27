@@ -89,6 +89,10 @@ These display changes do not modify shared calendar data or workflow rules.
 
 The integrated workflows are:
 
+- **Check Scan Review** (`check_scan_review`) opens the PaperCut review queue.
+  Cashiers review check and backup pages, adjust redactions and confirm the
+  issuer, check number and Documents / Tests destination before saving. See the
+  [workflow guide](../../workflows/check_scanning/README.md).
 - **Set Up Report Watcher** (`setup_report_watcher`), calling the existing
   `setup/setup_report_filing_watcher.ps1` installer on Windows. It installs or
   updates the scheduled task for the signed-in employee, requests an immediate
