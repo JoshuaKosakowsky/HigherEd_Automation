@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import closing, contextmanager
 from dataclasses import asdict
 import hashlib
+from itertools import count
 import json
 import os
 from pathlib import Path
@@ -57,6 +58,24 @@ def decode_finding(record) -> Finding:
 def missing_redactions(marks: list[Mark]) -> tuple[str, ...]:
     marked = {mark.kind for mark in marks}
     return tuple(kind for kind in ("MICR", "Signature") if kind not in marked)
+
+
+def review_output_path(record, issuer: str, number: str) -> Path:
+    target = check_scan_output_directory() / output_name(issuer, number)
+    if record["status"] == "Filed" and target.exists():
+        for copy in count(2):
+            candidate = target.with_stem(f"{target.stem} ({copy})")
+            if not candidate.exists():
+                return candidate
+    return target
+
+
+def _publish_copy(stage: Path, target: Path) -> None:
+    # Windows rename refuses existing destinations. POSIX link gives the same guarantee.
+    if os.name == "nt":
+        os.rename(stage, target)
+    else:
+        os.link(stage, target)
 
 
 class ScanQueue:
@@ -115,19 +134,21 @@ class ScanQueue:
     def file(self, record, marks, issuer: str, number: str) -> Path:
         if decode_finding(record).status == "Multiple check pages":
             raise ValueError("Separate or verify this multi-check packet manually before filing.")
-        target = check_scan_output_directory() / output_name(issuer, number)
+        target = review_output_path(record, issuer, number)
+        repeat_review = record["status"] == "Filed"
         if missing_redactions(marks):
             raise ValueError("Mark the MICR band and the issuer signature before filing.")
         source = self.source(record)
         digest = record["digest"]
-        with self.connect() as db:
-            old = db.execute("SELECT * FROM publications WHERE digest=?", (digest,)).fetchone()
-            if old and Path(old["target"]).is_file():
-                if hashlib.sha256(Path(old["target"]).read_bytes()).hexdigest() != old["checksum"]:
-                    raise ValueError("The previously filed copy has changed. Review the destination manually.")
-                db.execute("UPDATE publications SET completed=1 WHERE digest=?", (digest,))
-                db.execute("UPDATE scans SET status='Filed' WHERE digest=?", (digest,))
-                return Path(old["target"])
+        if not repeat_review:
+            with self.connect() as db:
+                old = db.execute("SELECT * FROM publications WHERE digest=?", (digest,)).fetchone()
+                if old and Path(old["target"]).is_file():
+                    if hashlib.sha256(Path(old["target"]).read_bytes()).hexdigest() != old["checksum"]:
+                        raise ValueError("The previously filed copy has changed. Review the destination manually.")
+                    db.execute("UPDATE publications SET completed=1 WHERE digest=?", (digest,))
+                    db.execute("UPDATE scans SET status='Filed' WHERE digest=?", (digest,))
+                    return Path(old["target"])
         if target.exists():
             raise FileExistsError("That filename already exists. Review the issuer and check number.")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -145,8 +166,12 @@ class ScanQueue:
                 db.execute("BEGIN IMMEDIATE")
                 current = db.execute("SELECT status FROM scans WHERE name=? AND digest=?",
                                      (record["name"], digest)).fetchone()
-                if current is None or current["status"] == "Filed":
+                if current is None or (current["status"] == "Filed") != repeat_review:
                     raise ValueError("The queue entry changed. Refresh before filing.")
+                if repeat_review:
+                    # Pilot copies leave the initial filing receipt available for deduplication.
+                    _publish_copy(stage, target)
+                    return target
                 pending = db.execute("SELECT target FROM publications WHERE digest=?", (digest,)).fetchone()
                 if pending and Path(pending["target"]).exists():
                     raise ValueError("A copy was already filed. Reopen the queue to reconcile it.")
@@ -157,11 +182,7 @@ class ScanQueue:
                 intent = db.execute("SELECT target, checksum FROM publications WHERE digest=?", (digest,)).fetchone()
                 if tuple(intent) != (str(target), checksum):
                     raise ValueError("Another review changed this filing. Reopen the queue.")
-                # Windows rename refuses existing destinations. POSIX link provides the same guarantee.
-                if os.name == "nt":
-                    os.rename(stage, target)
-                else:
-                    os.link(stage, target)
+                _publish_copy(stage, target)
                 db.execute("UPDATE publications SET completed=1 WHERE digest=?", (digest,))
                 db.execute("UPDATE scans SET status='Filed' WHERE digest=?", (digest,))
             return target

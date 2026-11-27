@@ -23,7 +23,7 @@ from workflows.check_scanning.detection import Box, Mark
 from workflows.check_scanning.documents import page_count, page_pixels
 from workflows.check_scanning.intake import (
     ScanQueue, check_scan_output_directory, decode_finding, missing_redactions,
-    output_name, queue_path,
+    queue_path, review_output_path,
 )
 
 
@@ -231,7 +231,7 @@ class CheckReview(QDialog):
         directory = check_scan_output_directory()
         issues = []
         try:
-            target = directory / output_name(self.issuer.text(), self.number.text())
+            target = review_output_path(self.record, self.issuer.text(), self.number.text())
             self.destination.setText(str(target))
         except ValueError as exc:
             self.destination.setText(str(directory))
@@ -295,7 +295,7 @@ class CheckInbox(QDialog):
         layout.addWidget(QLabel(str(queue.inbox), textFormat=Qt.TextFormat.PlainText))
         self.status = QLabel("Looking for completed PaperCut scans…")
         layout.addWidget(self.status)
-        self.other = QCheckBox("Show all scans, including unrelated and dismissed items")
+        self.other = QCheckBox("Show all scans, including filed, unrelated, and dismissed items")
         layout.addWidget(self.other)
         self.listing = QListWidget()
         layout.addWidget(self.listing)
@@ -392,9 +392,6 @@ class CheckInbox(QDialog):
         self.awaiting_completion = False
         while item := self.listing.currentItem():
             record = item.data(Qt.ItemDataRole.UserRole)
-            if record["status"] == "Filed":
-                QMessageBox.information(self, "Already filed", "This scan already has a filed copy.")
-                return
             if decode_finding(record).status == "Multiple check pages":
                 QMessageBox.information(self, "Multiple check faces",
                                         "Verify and separate the packet or redact it manually in Acrobat.")

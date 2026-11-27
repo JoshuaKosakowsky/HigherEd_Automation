@@ -47,8 +47,10 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
 
 - **Check** and **Needs a look** appear in the queue. **Could not read** indicates
   an incomplete or unreadable PDF. Replace or resync the source to retry it.
-- **Show all scans** also reveals unrelated and dismissed items so a cashier
-  can open a missed check. Dismissal leaves the source in place.
+- **Show all scans** also reveals unrelated, dismissed, and filed items. During
+  the pilot, reopen a filed scan to test another redaction. When the desired
+  filename exists, approval adds a number such as `(2)` to the new test copy.
+  Dismissal leaves the source in place.
 - Verify the issuer and printed check number. A suggested MICR box covers the
   line as a unit. A printed signature label can locate a proposed signing area.
   Missing or inaccurate suggestions require manual correction. Use the page

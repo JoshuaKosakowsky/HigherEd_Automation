@@ -479,3 +479,52 @@ class CheckScanTests(unittest.TestCase):
         self.assertEqual(first.read_bytes(), self.source)
         self.assertTrue(second.is_file())
         self.assertTrue(pending.is_file())
+
+    def test_filed_scan_can_be_reviewed_again_and_saves_numbered_test_copy(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        from app.gui.pages.check_scans import CheckInbox, CheckReview
+
+        app = QApplication.instance() or QApplication([])
+        (self.inbox / "packet.pdf").write_bytes(self.source)
+        self.index(ScanIntake(self.queue))
+        record, = self.queue.records()
+        finding = decode_finding(record)
+        original = self.queue.file(record, finding.marks, "Example LLC", "000482")
+        original_bytes = original.read_bytes()
+        repeated = original.with_stem(f"{original.stem} (2)")
+        summaries = []
+
+        def approve_again(viewer):
+            self.assertEqual(viewer.record["status"], "Filed")
+            viewer.issuer.setText("Example LLC")
+            self.assertEqual(viewer.destination.text(), str(repeated))
+            viewer.show_page(1)
+            viewer.marks.append(Mark(0, "Other", Box(.55, .55, .70, .70)))
+            viewer.confirm.click()
+            self.assertTrue(viewer.approve.isEnabled())
+            viewer.approve.click()
+
+        def record_summary(inbox):
+            summaries.append(inbox.saved.copy())
+
+        with (patch("app.gui.pages.check_scans.start_check_scan_process"),
+              patch.object(CheckReview, "exec", approve_again),
+              patch.object(CheckInbox, "show_completion", record_summary)):
+            view = CheckInbox(self.queue)
+            self.addCleanup(view.close)
+            self.assertEqual(view.listing.count(), 0)
+            view.other.setChecked(True)
+            self.assertEqual(view.listing.count(), 1)
+            view.open_button.click()
+            self.assertEqual(view.saved, [("packet.pdf", repeated)])
+            self.assertEqual(summaries, [view.saved])
+            app.processEvents()
+
+        self.assertEqual(original.read_bytes(), original_bytes)
+        new_pixels = page_pixels(repeated.read_bytes(), 0)
+        old_pixels = page_pixels(original_bytes, 0)
+        point = (int(new_pixels.shape[0] * .6), int(new_pixels.shape[1] * .6))
+        self.assertEqual(new_pixels[point].max(), 0)
+        self.assertEqual(old_pixels[point].min(), 255)
+        self.assertEqual(self.queue.file(record, finding.marks, "Example LLC", "000482"), original)
