@@ -289,7 +289,7 @@ class CheckScanTests(unittest.TestCase):
 
     def test_empty_inbox_waits_for_scans(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QPushButton
         from app.gui.pages.check_scans import CheckInbox
 
         app = QApplication.instance() or QApplication([])
@@ -301,6 +301,10 @@ class CheckScanTests(unittest.TestCase):
                 self.assertEqual(view.listing.count(), 0)
                 self.assertFalse(view.open_button.isEnabled())
                 self.assertIn("Watching for new scans", view.status.text())
+                self.assertNotIn(
+                    "Enable scanning at sign-in",
+                    {button.text() for button in view.findChildren(QPushButton)},
+                )
             finally:
                 view.reject()
                 app.processEvents()

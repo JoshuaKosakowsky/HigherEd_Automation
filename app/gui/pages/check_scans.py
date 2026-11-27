@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -304,50 +303,18 @@ class CheckInbox(QDialog):
         self.open_button = control("Review selected", self.review, actions)
         self.dismiss_button = control("Dismiss from queue", self.dismiss, actions)
         actions.addStretch()
-        if sys.platform == "win32":
-            self.startup_button = control("Enable scanning at sign-in", self.enable_startup, actions)
         control("Close", self.close, actions)
         self.listing.itemDoubleClicked.connect(lambda *_: self.review())
         self.other.toggled.connect(self.refresh)
-        self.installer = None
         try:
             self.worker = start_check_scan_process([sys.executable, "-m", "workflows.check_scanning.watch"])
         except OSError:
             self.worker = None
         self.timer = QTimer(self, interval=3000)
         self.timer.timeout.connect(self.refresh)
-        self.timer.timeout.connect(self.check_startup_result)
         self.timer.timeout.connect(self.check_completion)
         self.timer.start()
         self.refresh()
-
-    def enable_startup(self):
-        executable = shutil.which("powershell.exe")
-        if not executable:
-            QMessageBox.warning(self, "Setup unavailable", "Windows PowerShell could not be found.")
-            return
-        installer = Path(__file__).resolve().parents[3] / "setup" / "setup_report_filing_watcher.ps1"
-        try:
-            self.installer = start_check_scan_process(
-                [executable, "-NoProfile", "-NonInteractive", "-File", str(installer), "-CheckScans"]
-            )
-        except OSError:
-            QMessageBox.warning(self, "Setup failed", "Windows PowerShell could not be started.")
-        else:
-            self.startup_button.setEnabled(False)
-
-    def check_startup_result(self):
-        if self.installer is None:
-            return
-        code = self.installer.poll()
-        if code is None:
-            return
-        self.installer = None
-        self.startup_button.setEnabled(True)
-        if code:
-            QMessageBox.warning(self, "Setup failed", "Check that Windows permits a scheduled task for this login.")
-        else:
-            QMessageBox.information(self, "Watcher enabled", "Check recognition will also run while this window is closed.")
 
     def refresh(self, *_):
         previous = self.listing.currentItem()

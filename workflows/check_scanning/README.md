@@ -19,12 +19,12 @@ repository, and reopen the app.
 
 An administrator can assign **Check Scan Review** (`check_scan_review`) to the
 Cashier view under **Staff access → Manage views & permissions**. Opening it
-starts intake and catches up while the review queue is open. To prepare the queue
-while the window is closed, select **Enable scanning at sign-in** under the
-cashier's Windows login. This installs and starts a separate limited, per-user
-scheduled task. The equivalent setup command is
-`setup/setup_report_filing_watcher.ps1 -CheckScans`. The check watcher has its
-own single-instance lock and never opens a per-file prompt.
+starts intake and catches up while the review queue is open. The check watcher
+has its own single-instance lock and never opens a per-file prompt.
+
+For background intake, run `setup/setup_report_filing_watcher.ps1 -CheckScans`
+once under the cashier's Windows login. This installs and starts a separate
+limited, per-user scheduled task.
 
 The pilot queue is stored at
 `%LOCALAPPDATA%/HigherEdAutomation/check-scanning/pilot-queue.sqlite3`.
