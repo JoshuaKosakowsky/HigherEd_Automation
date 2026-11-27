@@ -165,8 +165,9 @@ with a tracking branch and repository authentication already configured by the
 administrator. A downloaded ZIP or copied folder without Git metadata cannot
 update this way. Do not share one live Git working directory between employees
 or concurrently update a checkout through OneDrive. Normal staff updates do not
-require terminal commands. Administrators can switch a test installation to
-`Development` and return it to `main` from **App updates**. See the
+require terminal commands. Administrators can choose `main` or `Development`
+from the **Update branch** dropdown. Installing a different revision from the
+other branch switches the installation to it. See the
 [GUI update details](app/gui/README.md#app-updates) for branch switching and
 [release process](tests/README.md#ci-checks-and-staff-releases) for promotion.
 

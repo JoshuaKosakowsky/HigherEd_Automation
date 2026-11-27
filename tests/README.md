@@ -108,13 +108,15 @@ login and shortcut.
 
 1. On `main`, use **App updates** to install the current release, then close and
    reopen. Bring `Development` up to that same release before testing it.
-2. As an app administrator, choose **Check for development updates**. Confirm
-   the offered version and revision while the installation still shows `main`.
+2. As an app administrator, select `Development` in **Update branch** and
+   click **Check for updates**. When the branches match, confirm the app reports
+   the shared commit and disables installation. Publish a development-only fix
+   and check again. Review the version and revision while still on `main`.
    Choose **Install from Development**, reopen and confirm the branch changed.
-3. Publish a development-only fix to `Development`. Check for and install it,
+3. Publish another development-only fix. Check for and install it,
    then reopen and verify the revision changed. A separate `main` installation
-   should stay at the stable revision and should show no switch control for staff.
-4. While `Development` is ahead, choose **Check for stable updates**, then
+   should stay at the stable revision and hide the dropdown from staff.
+4. While `Development` is ahead, select `main` and choose **Check for updates**, then
    **Install from main**. Reopen and verify the stable revision and that
    ordinary updates follow `main` again.
    Rerun `setup.ps1` before reopening whenever the app reports setup changes.

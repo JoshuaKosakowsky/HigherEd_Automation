@@ -798,11 +798,14 @@ and `launcher` are flagged as requiring an administrator to rerun setup before
 reopening. Setup also applies when switching removes a change to one of those
 files. The app leaves dependency installation and relaunch to the workstation.
 
-Staff installations follow `main`. An administrator can choose **Check for
-development updates** on `main` or **Check for stable updates** on
-`Development`. The check fetches the branches and previews the offered version,
-Git revision and setup requirement while the installation stays on its current
-branch. A development check refuses a version older than the installed one.
+Staff installations follow `main`. Administrators can select `main` or
+`Development` in the **Update branch** dropdown and then choose **Check for
+updates**. The dropdown starts on the installed branch. Checking the other
+branch previews its version, Git revision and setup requirement while the
+installation stays on its current branch. When the branches point to the same
+commit, the app reports that they match and offers no branch switch. A pending
+update on the installed branch can still be installed through a normal check.
+A development check refuses a version older than the installed one.
 
 Choose **Install from Development** or **Install from main** to install the
 checked revision and follow that branch. The installer reloads the signed-in

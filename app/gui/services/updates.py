@@ -32,6 +32,7 @@ class UpdatePlan:
     target_commit: str
     commit_count: int
     setup_required: bool
+    branches_equivalent: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,13 @@ class BranchSwitchPlan:
     target_commit: str
     version: str
     setup_required: bool
+
+
+@dataclass(frozen=True)
+class EquivalentBranches:
+    installed_branch: str
+    installed_commit: str
+    shared_commit: str
 
 
 class RepositoryUpdater:
@@ -134,11 +142,10 @@ class RepositoryUpdater:
         ))
         return branch, remote, upstream, self._git("rev-parse", "HEAD")
 
-    def _fetch(self, remote: str, remote_branch: str, upstream: str) -> None:
-        # Fetch the exact branch so a deleted remote branch cannot appear up to
-        # date merely because an old tracking ref still exists locally.
-        self._git("fetch", "--no-tags", "--no-recurse-submodules", remote,
-                  f"+{remote_branch}:{upstream}", message=(
+    def _fetch(self, remote: str, *refs: tuple[str, str]) -> None:
+        # Fetch exact branches so a deleted branch cannot appear up to date.
+        refspecs = [f"+{source}:{tracking}" for source, tracking in refs]
+        self._git("fetch", "--atomic", "--no-tags", "--no-recurse-submodules", remote, *refspecs, message=(
             "Could not reach the update source. Check network/VPN access or ask IT to verify Git authentication and repository access."
         ))
 
@@ -149,12 +156,12 @@ class RepositoryUpdater:
             for path in changed
         )
 
-    def check(self) -> UpdatePlan:
+    def check(self, *, compare_branches: bool = False) -> UpdatePlan:
         before = self._state()
         remote_branch = self._git("config", "--get", f"branch.{before[0]}.merge")
         if not remote_branch.startswith("refs/heads/") or not before[2].startswith("refs/remotes/"):
             raise UpdateError("The update source must be a remote tracking branch.")
-        self._fetch(before[1], remote_branch, before[2])
+        self._fetch(before[1], (remote_branch, before[2]))
         branch, remote, upstream, current = self._state()
         if before != (branch, remote, upstream, current):
             raise UpdateError("The installation changed during the check. Check for updates again.")
@@ -162,8 +169,23 @@ class RepositoryUpdater:
         ahead, behind = map(int, self._git("rev-list", "--left-right", "--count", f"{current}...{target}").split())
         if ahead:
             raise UpdateError("This installation has local commits or differs from the update source. Ask your administrator to resolve it; automatic updates cannot merge or discard commits.")
+        branches_equivalent = False
+        if compare_branches and not behind and branch in UPDATE_BRANCHES and remote_branch == f"refs/heads/{branch}":
+            branches_equivalent = self._branches_equivalent(branch, remote, target)
         return UpdatePlan(self.root, branch, remote, upstream, current, target, behind,
-                          self._setup_required(current, target))
+                          self._setup_required(current, target), branches_equivalent)
+
+    def _branches_equivalent(self, branch: str, remote: str, target: str) -> bool:
+        if not self.can_switch_branch():
+            return False
+        other = next(name for name in UPDATE_BRANCHES if name != branch)
+        other_upstream = f"refs/remotes/{remote}/{other}"
+        try:
+            self._fetch(remote, (f"refs/heads/{other}", other_upstream))
+            return self._git("rev-parse", other_upstream) == target
+        except UpdateError:
+            # An unavailable alternate branch does not invalidate an ordinary check.
+            return False
 
     def install(self, plan: UpdatePlan) -> None:
         if plan.root != self.root or self._state() != (
@@ -205,23 +227,24 @@ class RepositoryUpdater:
             raise UpdateError("Could not identify the application version at the checked revision.")
         return tuple(map(int, match[1].split(".")))
 
-    def check_branch(self, target_branch: str) -> BranchSwitchPlan:
+    def check_branch(self, target_branch: str) -> BranchSwitchPlan | EquivalentBranches:
         before = self._switch_state(target_branch)
         branch, remote, upstream, current = before
-        self._fetch(remote, f"refs/heads/{branch}", upstream)
+        target_ref = f"refs/heads/{target_branch}"
+        target_upstream = f"refs/remotes/{remote}/{target_branch}"
+        self._fetch(remote, (f"refs/heads/{branch}", upstream), (target_ref, target_upstream))
+        if self._state() != before:
+            raise UpdateError("The installation changed during the check. Check for updates again.")
         self._git("merge-base", "--is-ancestor", current, upstream, message=(
             "The current branch has local commits or differs from its update source. Review it before switching."
         ))
-        target_ref = f"refs/heads/{target_branch}"
-        target_upstream = f"refs/remotes/{remote}/{target_branch}"
-        self._fetch(remote, target_ref, target_upstream)
         target = self._git("rev-parse", target_upstream)
+        if target == self._git("rev-parse", upstream):
+            return EquivalentBranches(branch, current, target)
         target_version = self._version_at(target)
         version = ".".join(map(str, target_version))
         if target_branch == "Development" and target_version < self._version_at(current):
             raise UpdateError(f"Development offers older version {version}. Bring Development up to the released main and check again.")
-        if self._state() != before:
-            raise UpdateError("The installation changed during the check. Check for updates again.")
         return BranchSwitchPlan(self.root, before, target_branch, target, version,
                                 self._setup_required(current, target))
 
@@ -234,6 +257,8 @@ class RepositoryUpdater:
         target_upstream = f"refs/remotes/{remote}/{target_branch}"
         if plan.root != self.root or before != plan.source_state or self._git("rev-parse", target_upstream) != target:
             raise UpdateError("The installation or update source changed. Check for updates again.")
+        if target == self._git("rev-parse", upstream):
+            raise UpdateError("main and Development are on the same commit. Check for updates on the current branch.")
         self._git("merge-base", "--is-ancestor", current, upstream, message=(
             "The current branch has local commits or differs from its update source. Review it before switching."
         ))

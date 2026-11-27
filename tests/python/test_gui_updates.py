@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app.gui.services.updates import RepositoryUpdater, UpdateError
+from app.gui.services.updates import BranchSwitchPlan, EquivalentBranches, RepositoryUpdater, UpdateError
 
 
 @unittest.skipUnless(shutil.which('git'), 'Git is required for local integration tests')
@@ -72,6 +72,7 @@ class RepositoryUpdaterTests(unittest.TestCase):
     def switch(self, branch, login='ADMIN'):
         with patch('app.gui.services.updates.get_current_login', return_value=login):
             plan = self.staff_updater.check_branch(branch)
+            self.assertIsInstance(plan, BranchSwitchPlan)
             self.staff_updater.switch_branch(plan)
             return plan
 
@@ -200,6 +201,7 @@ class RepositoryUpdaterTests(unittest.TestCase):
     def test_stable_installation_tests_development_and_returns_to_updated_main(self):
         self.publish(text='selector release\n')
         self.publish_development()
+        self.publish(text='initial development fix\n')
         (self.clone / 'settings.local').write_text('private value')
         staff_clone = self.root / 'staff'
         self.git(self.root, 'clone', '--branch', 'main', str(self.remote), str(staff_clone))
@@ -209,7 +211,8 @@ class RepositoryUpdaterTests(unittest.TestCase):
         release = self.updater.installed_revision()
         self.assertEqual((self.clone / 'app.txt').read_text(), 'selector release\n')
         self.assertEqual(self.switch('Development').branch, 'Development')
-        self.assertEqual(self.updater.installed_revision().commit, release.commit)
+        self.assertNotEqual(self.updater.installed_revision().commit, release.commit)
+        self.assertEqual((self.clone / 'app.txt').read_text(), 'initial development fix\n')
 
         self.publish('requirements.txt', 'synthetic==1.0\n')
         (self.source / 'app/gui/__init__.py').write_text('APP_VERSION = "0.34.2"\n', encoding='utf-8')
@@ -299,6 +302,7 @@ class RepositoryUpdaterTests(unittest.TestCase):
         self.git(self.root, 'clone', '--single-branch', str(self.remote), str(narrow_clone))
         self.staff_updater = RepositoryUpdater(narrow_clone, access_config_path=self.policy)
         self.publish_development()
+        self.publish('development.txt', 'development change\n')
         self.switch('Development')
         self.publish()
         self.staff_updater.install(self.staff_updater.check())
@@ -319,6 +323,10 @@ class RepositoryUpdaterTests(unittest.TestCase):
             self.assertEqual(self.updater.installed_revision(), before)
             self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
             self.git(self.source, 'push', 'origin', 'main:Development')
+            self.assertIsInstance(self.staff_updater.check_branch('Development'), EquivalentBranches)
+            self.git(self.source, 'checkout', 'Development')
+            self.git(self.source, 'merge', '--ff-only', 'main')
+            self.publish()
             plan = self.staff_updater.check_branch('Development')
             self.assertEqual(plan.version, '0.34.2')
             self.assertEqual(self.updater.installed_revision(), before)
@@ -327,6 +335,7 @@ class RepositoryUpdaterTests(unittest.TestCase):
 
     def test_branch_install_rejects_target_changed_after_preview(self):
         self.publish_development()
+        self.publish(text='first development update\n')
         with patch('app.gui.services.updates.get_current_login', return_value='ADMIN'):
             plan = self.staff_updater.check_branch('Development')
             self.publish()
@@ -335,8 +344,42 @@ class RepositoryUpdaterTests(unittest.TestCase):
                 self.staff_updater.switch_branch(plan)
         self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
 
+    def test_equal_branch_tips_offer_only_a_pending_update_on_the_current_branch(self):
+        self.publish(text='shared release\n')
+        self.publish_development()
+        with patch('app.gui.services.updates.get_current_login', return_value='ADMIN'):
+            for installed, other in (('main', 'Development'), ('Development', 'main')):
+                with self.subTest(installed=installed):
+                    before = self.updater.installed_revision()
+                    equivalent = self.staff_updater.check_branch(other)
+                    self.assertIsInstance(equivalent, EquivalentBranches)
+                    self.assertEqual(equivalent.installed_branch, installed)
+                    self.assertEqual(self.updater.installed_revision(), before)
+                    pending = self.staff_updater.check(compare_branches=True)
+                    self.assertEqual(pending.commit_count, 1)
+                    self.assertEqual(pending.target_commit, equivalent.shared_commit)
+                    self.staff_updater.install(pending)
+                    current = self.staff_updater.check(compare_branches=True)
+                    self.assertEqual(current.commit_count, 0)
+                    self.assertTrue(current.branches_equivalent)
+                    if installed == 'main':
+                        self.git(self.clone, 'checkout', '-b', 'Development', equivalent.installed_commit)
+                        self.git(self.clone, 'branch', '--set-upstream-to=origin/Development')
+
+    def test_branch_install_refuses_a_preview_when_branches_have_since_aligned(self):
+        self.publish_development()
+        self.publish(text='development update\n')
+        with patch('app.gui.services.updates.get_current_login', return_value='ADMIN'):
+            plan = self.staff_updater.check_branch('Development')
+            self.git(self.source, 'push', 'origin', 'Development:main')
+            self.staff_updater.check()
+            with self.assertRaisesRegex(UpdateError, 'same commit'):
+                self.staff_updater.switch_branch(plan)
+        self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
+
     def test_access_revoked_during_fetch_prevents_checkout(self):
         self.publish_development()
+        self.publish()
         fetch = self.staff_updater._fetch
 
         def fetch_then_remove_policy(*args):

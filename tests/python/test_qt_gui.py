@@ -1009,7 +1009,7 @@ class QtGuiTests(unittest.TestCase):
             window.show_updates()
         page = window.current_page
         self.assertIsInstance(page, UpdatesPage)
-        self.assertTrue(page.check_other_button.isHidden())
+        self.assertTrue(page.branch_controls.isHidden())
         self.assertIn("main", page.branch_label.text())
         self.assertTrue(page.check_button.isEnabled())
         plan = UpdatePlan(self.root, "main", "origin", "refs/remotes/origin/main",
@@ -1039,15 +1039,19 @@ class QtGuiTests(unittest.TestCase):
         self.assertTrue(window.close())
 
     def test_admin_previews_stable_revision_before_install_and_restart(self):
-        from app.gui.services.updates import BranchSwitchPlan, InstalledRevision, RepositoryUpdater
+        from app.gui.services.updates import (
+            BranchSwitchPlan, EquivalentBranches, InstalledRevision, RepositoryUpdater, UpdatePlan,
+        )
 
         with patch.object(RepositoryUpdater, "installed_revision", return_value=InstalledRevision("Development", "a" * 12)):
             window = self.open_app()
         with patch("app.gui.services.updates.get_current_login", return_value="OWNER"):
             window.show_updates()
         page = window.current_page
-        self.assertFalse(page.check_other_button.isHidden())
-        self.assertEqual(page.check_other_button.text(), "Check for stable updates")
+        self.assertFalse(page.branch_controls.isHidden())
+        self.assertEqual([page.branch_picker.itemText(i) for i in range(page.branch_picker.count())],
+                         ["main", "Development"])
+        self.assertEqual(page.branch_picker.currentText(), "Development")
         plan = BranchSwitchPlan(self.root, ("Development", "origin", "refs/remotes/origin/Development", "a" * 40),
                                 "main", "b" * 40, "0.34.0", True)
 
@@ -1057,8 +1061,26 @@ class QtGuiTests(unittest.TestCase):
                 self.qt.processEvents()
                 time.sleep(0.01)
 
+        current = UpdatePlan(self.root, "Development", "origin", "refs/remotes/origin/Development",
+                             "a" * 40, "a" * 40, 0, False, branches_equivalent=True)
+        with patch.object(page.updater, "check", return_value=current) as check_current:
+            page.check_button.click()
+            wait_for_result()
+            check_current.assert_called_once_with(compare_branches=True)
+        self.assertIn("main and Development are on the same commit", page.status.text())
+        self.assertFalse(page.install_button.isEnabled())
+
+        page.branch_picker.setCurrentText("main")
+        equivalent = EquivalentBranches("Development", "a" * 40, "a" * 40)
+        with patch.object(page.updater, "check_branch", return_value=equivalent):
+            page.check_button.click()
+            wait_for_result()
+        self.assertIn("main and Development are on the same commit", page.status.text())
+        self.assertFalse(page.install_button.isEnabled())
+        self.assertIsNone(page.plan)
+
         with patch.object(page.updater, "check_branch", return_value=plan) as check:
-            page.check_other_button.click()
+            page.check_button.click()
             wait_for_result()
             check.assert_called_once_with("main")
         self.assertFalse(window._busy)
@@ -1066,9 +1088,16 @@ class QtGuiTests(unittest.TestCase):
         self.assertIn("0.34.0", page.status.text())
         self.assertIn("Development", page.branch_label.text())
         self.assertEqual(page.install_button.text(), "Install from main")
+        page.branch_picker.setCurrentText("Development")
+        self.assertFalse(page.install_button.isEnabled())
+        self.assertIsNone(page.plan)
+        page.branch_picker.setCurrentText("main")
+        with patch.object(page.updater, "check_branch", return_value=plan):
+            page.check_button.click()
+            wait_for_result()
         with patch.object(page.updater, "switch_branch") as switch:
             page.install_button.click()
-            self.assertFalse(page.check_other_button.isEnabled())
+            self.assertFalse(page.branch_picker.isEnabled())
             wait_for_result()
             switch.assert_called_once_with(plan)
         self.assertTrue(window._restart_required)
