@@ -82,6 +82,7 @@ class CheckScanTests(unittest.TestCase):
                          "Accounting", "Accounting (Shared)", "CASHIER", "CASHNet Copies", "FY26"))
         self.assertEqual(get_cashnet_copies_directory(self.day), folder.with_name("FY27"))
         self.assertEqual(output_name("Example LLC", "000482"), "Example LLC - 000482.pdf")
+        self.assertEqual(output_name("Example, Inc.", "000482"), "Example, Inc. - 000482.pdf")
         for name, number in (("../Other", "123"), ("A", "../other"), ("", "001"), ("A", "")):
             with self.assertRaises(ValueError):
                 output_name(name, number)
@@ -240,6 +241,47 @@ class CheckScanTests(unittest.TestCase):
             self.assertEqual(instance.queue.database.name, "pilot-queue.sqlite3")
             self.assertTrue(instance.queue.database.is_file())
 
+    def test_missing_renderer_shows_setup_instructions(self):
+        from app.gui.models import WorkflowContext
+        from app.gui.services import check_scanning
+        from shared.workflow_errors import WorkflowUserError
+
+        missing = ModuleNotFoundError("No module named 'pypdfium2'", name="pypdfium2")
+        with (patch.object(check_scanning, "import_module", side_effect=missing),
+              patch.object(check_scanning, "start_check_scan_process") as launch):
+            with self.assertRaisesRegex(WorkflowUserError, r"run setup\.ps1") as error:
+                check_scanning.run_check_scanning(WorkflowContext("check_scan_review", {}))
+            self.assertIs(error.exception.__cause__, missing)
+            launch.assert_not_called()
+
+    def test_check_scan_process_uses_no_console_flag_on_windows(self):
+        from app.gui.services import check_scanning
+
+        command = ["python.exe", "-m", "workflows.check_scanning.watch"]
+        with (patch.object(check_scanning.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True),
+              patch.object(check_scanning.subprocess, "Popen") as launch):
+            self.assertIs(check_scanning.start_check_scan_process(command), launch.return_value)
+            self.assertEqual(launch.call_args.args, (command,))
+            self.assertEqual(launch.call_args.kwargs["creationflags"], 0x08000000)
+
+    def test_empty_inbox_waits_for_scans(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        from app.gui.pages.check_scans import CheckInbox
+
+        app = QApplication.instance() or QApplication([])
+        self.assertEqual(list(self.inbox.iterdir()), [])
+        ScanIntake(self.queue).poll()
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.root / "profile")}):
+            view = CheckInbox(self.queue)
+            try:
+                self.assertEqual(view.listing.count(), 0)
+                self.assertFalse(view.open_button.isEnabled())
+                self.assertIn("Watching for new scans", view.status.text())
+            finally:
+                view.reject()
+                app.processEvents()
+
     def test_visible_transit_shapes_locate_band_without_any_recognized_text(self):
         from workflows.check_scanning.micr import transit_bands
         pixels = np.full((800,1000,3), 255, np.uint8)
@@ -303,8 +345,46 @@ class CheckScanTests(unittest.TestCase):
         QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=QPoint(50,40))
         self.assertEqual(len(view.marks), 1)
         self.assertFalse(view.approve.isEnabled())
+        self.assertIn("missing redactions (Signature)", view.approval_status.text())
         view.marks.append(Mark(0, "Signature", Box(.65, .55, .9, .75)))
+        view.update_approval()
+        self.assertTrue(view.confirm.isEnabled())
         view.confirm.setChecked(True)
         view.approve.click()
         self.assertEqual(page_count(target.read_bytes()), 1)
         self.assertEqual(self.queue.records(), [])
+
+    def test_review_explains_approval_requirements_before_saving(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication
+        from app.gui.pages.check_scans import CheckReview
+
+        app = QApplication.instance() or QApplication([])
+        (self.inbox / "packet.pdf").write_bytes(self.source)
+        self.index(ScanIntake(self.queue))
+        record, = self.queue.records()
+        view = CheckReview(None, self.queue, record)
+        view.show()
+        self.addCleanup(view.close)
+        app.processEvents()
+        self.assertFalse(view.approve.isEnabled())
+        self.assertIn("remaining page", view.approval_status.text())
+        view.next.click()
+        view.issuer.setText("Example: Inc.")
+        self.assertIn("Windows filename characters", view.approval_status.text())
+        view.issuer.setText("Example Inc.")
+        self.assertIn("review confirmation", view.approval_status.text())
+        view.confirm.click()
+        self.assertTrue(view.approve.isEnabled())
+        point = view.canvas.box_rect(view.marks[0].box).center().toPoint()
+        QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=point)
+        self.assertTrue(view.approve.isEnabled())
+        view.number.setText("000483")
+        self.assertFalse(view.approve.isEnabled())
+        self.assertIn("review confirmation", view.approval_status.text())
+        view.confirm.click()
+        view.approve.click()
+        target = self.home / "Documents" / "Tests" / "Example Inc. - 000483.pdf"
+        self.assertEqual(page_count(target.read_bytes()), 2)

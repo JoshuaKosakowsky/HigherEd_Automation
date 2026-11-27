@@ -41,6 +41,11 @@ def decode_finding(record) -> Finding:
                    info["issuer"], info["number"])
 
 
+def missing_redactions(marks: list[Mark]) -> tuple[str, ...]:
+    marked = {mark.kind for mark in marks}
+    return tuple(kind for kind in ("MICR", "Signature") if kind not in marked)
+
+
 class ScanQueue:
     def __init__(self, inbox: Path, database: Path):
         self.inbox = inbox
@@ -86,7 +91,7 @@ class ScanQueue:
         if decode_finding(record).status == "Multiple check pages":
             raise ValueError("Separate or verify this multi-check packet manually before filing.")
         target = check_scan_output_directory() / output_name(issuer, number)
-        if not {"MICR", "Signature"} <= {mark.kind for mark in marks}:
+        if missing_redactions(marks):
             raise ValueError("Mark the MICR band and the issuer signature before filing.")
         source = self.source(record)
         digest = record["digest"]
@@ -141,11 +146,16 @@ class ScanQueue:
 
 def output_name(issuer: str, number: str) -> str:
     issuer, number = issuer.strip(), number.strip()
-    if (not issuer or not re.fullmatch(r"[0-9A-Za-z-]+", number)
-            or re.search(r'[<>:"/\\|?*\x00-\x1f]', issuer) or issuer.endswith((".", " "))
-            or re.match(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])\.", issuer, re.I)
-            or len(issuer) + len(number) > 210):
-        raise ValueError("Enter a company name and check number suitable for a Windows filename.")
+    if not issuer or not number:
+        raise ValueError("Enter the company name and check number.")
+    if not re.fullmatch(r"[0-9A-Za-z-]+", number):
+        raise ValueError("Use letters, digits or hyphens in the check number.")
+    if re.search(r'[<>:"/\\|?*\x00-\x1f]', issuer):
+        raise ValueError('Remove any forbidden Windows filename characters from the company name (< > : " / \\ | ? *).')
+    if re.match(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])\.", issuer, re.I):
+        raise ValueError("Edit the company name so it can be used in a Windows filename.")
+    if len(issuer) + len(number) > 210:
+        raise ValueError("Shorten the company name or check number so the filename fits.")
     return f"{issuer} - {number}.pdf"
 
 

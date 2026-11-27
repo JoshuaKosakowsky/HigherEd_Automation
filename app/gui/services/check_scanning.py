@@ -1,21 +1,44 @@
 """Open the interactive check queue through the ordinary authorized workflow runner."""
 
+from importlib import import_module
 from pathlib import Path
 import subprocess
 import sys
 
 from app.gui.models import WorkflowContext, WorkflowResult
 from shared.mines_paths import get_papercut_scan_directory
-from workflows.check_scanning.intake import queue_path
+from shared.workflow_errors import WorkflowUserError
+
+
+def start_check_scan_process(command: list[str]) -> subprocess.Popen:
+    """Start a review or support process without a Windows console."""
+    return subprocess.Popen(
+        command,
+        cwd=Path(__file__).resolve().parents[3],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
 
 def run_check_scanning(context: WorkflowContext) -> WorkflowResult:
     if not get_papercut_scan_directory().is_dir():
         raise ValueError("Sync Apps / Scans for PaperCut MF in business OneDrive and reopen Check Scan Review.")
-    queue_path()
+    try:
+        # Intake imports the PDF renderer. Verify the OCR runtime before
+        # starting the watcher, which would otherwise load it on the first scan.
+        intake = import_module("workflows.check_scanning.intake")
+        import_module("rapidocr")
+        import_module("onnxruntime")
+    except (ImportError, OSError) as error:
+        raise WorkflowUserError(
+            "Check Scan Review could not load its PDF or OCR components. "
+            "Close the app, run setup.ps1 from the updated repository, then reopen the app."
+        ) from error
+    intake.queue_path()
     context.progress.report("Reviewing PaperCut scans in the check queue")
-    result = subprocess.run([sys.executable, "-m", "app.gui.pages.check_scans"],
-                            cwd=Path(__file__).resolve().parents[3], check=False,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return WorkflowResult(result.returncode == 0, "Check Scan Review closed." if result.returncode == 0
+    with start_check_scan_process([sys.executable, "-m", "app.gui.pages.check_scans"]) as process:
+        code = process.wait()
+    return WorkflowResult(code == 0, "Check Scan Review closed." if code == 0
                           else "Check Scan Review could not run. Verify setup and local OneDrive access.")

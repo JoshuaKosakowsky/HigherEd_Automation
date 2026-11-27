@@ -5,9 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import sys
 
-from PySide6.QtCore import QPointF, QProcess, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFormLayout,
@@ -15,12 +16,14 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
+from app.gui.services.check_scanning import start_check_scan_process
 from app.gui.theme import apply_theme
 from shared.mines_paths import get_papercut_scan_directory
 from workflows.check_scanning.detection import Box, Mark
 from workflows.check_scanning.documents import page_count, page_pixels
 from workflows.check_scanning.intake import (
-    ScanQueue, check_scan_output_directory, decode_finding, output_name, queue_path,
+    ScanQueue, check_scan_output_directory, decode_finding, missing_redactions,
+    output_name, queue_path,
 )
 
 
@@ -39,6 +42,7 @@ class PageCanvas(QWidget):
         self.image = QImage()
         self.selected = None
         self.drag = None
+        self.original_marks = []
         self.scale = 1.0
         self.setMouseTracking(True)
 
@@ -93,8 +97,8 @@ class PageCanvas(QWidget):
         if event.button() != Qt.MouseButton.LeftButton or self.review.preview.isChecked():
             return
         start = self.position(event)
-        self.review.history.append(self.review.marks.copy())
-        self.review.confirm.setChecked(False)
+        self.original_marks = self.review.marks.copy()
+        self.review.approve.setEnabled(False)
         self.selected = None
         for i in reversed(range(len(self.review.marks))):
             mark = self.review.marks[i]
@@ -141,6 +145,11 @@ class PageCanvas(QWidget):
                 self.review.marks.pop(self.selected)
                 self.selected = None
             self.drag = None
+            if self.review.marks == self.original_marks:
+                self.review.update_approval()
+            else:
+                self.review.history.append(self.original_marks)
+                self.review.review_changed()
             self.update()
 
 
@@ -157,9 +166,7 @@ class CheckReview(QDialog):
         self.resize(1050, 850)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(record["name"], textFormat=Qt.TextFormat.PlainText))
-        missing = {"MICR", "Signature"} - {mark.kind for mark in self.marks}
-        if missing:
-            layout.addWidget(QLabel("No initial box suggested for " + ", ".join(sorted(missing)) + ". Draw the missing areas."))
+        missing = missing_redactions(self.marks)
         toolbar = QHBoxLayout()
         layout.addLayout(toolbar)
         self.prev = control("Previous page", lambda: self.show_page(self.page-1), toolbar)
@@ -183,7 +190,7 @@ class CheckReview(QDialog):
         self.kind = QComboBox()
         self.kind.addItems(["MICR", "Signature", "Other"])
         if len(missing) == 1:
-            self.kind.setCurrentText(next(iter(missing)))
+            self.kind.setCurrentText(missing[0])
         edit.addWidget(self.kind)
         edit.addWidget(QLabel("Drag inside to move. Drag a corner to resize."))
         edit.addStretch()
@@ -198,6 +205,8 @@ class CheckReview(QDialog):
         form.addRow("Check number", self.number)
         self.destination = QLabel(textFormat=Qt.TextFormat.PlainText, wordWrap=True)
         form.addRow("Test copy", self.destination)
+        self.approval_status = QLabel(textFormat=Qt.TextFormat.PlainText, wordWrap=True)
+        layout.addWidget(self.approval_status)
         self.confirm = QCheckBox("I reviewed every page, the MICR and signature coverage, and the filename.")
         layout.addWidget(self.confirm)
         actions = QHBoxLayout()
@@ -206,21 +215,34 @@ class CheckReview(QDialog):
         actions.addStretch()
         self.approve = control("Approve && Next", self.save, actions)
         for signal in (self.issuer.textChanged, self.number.textChanged):
-            signal.connect(self.update_destination)
-        self.confirm.toggled.connect(self.approve.setEnabled)
-        self.update_destination()
+            signal.connect(self.review_changed)
+        self.confirm.toggled.connect(self.update_approval)
         self.show_page(0)
         QTimer.singleShot(0, self.canvas.fit)
 
-    def update_destination(self, *_):
+    def review_changed(self, *_):
         self.confirm.setChecked(False)
-        self.approve.setEnabled(False)
+        self.update_approval()
+
+    def update_approval(self):
         directory = check_scan_output_directory()
+        issues = []
         try:
-            name = output_name(self.issuer.text(), self.number.text())
-        except ValueError:
-            name = "(enter company and check number)"
-        self.destination.setText(str(directory / name))
+            target = directory / output_name(self.issuer.text(), self.number.text())
+            self.destination.setText(str(target))
+        except ValueError as exc:
+            self.destination.setText(str(directory))
+            issues.append(str(exc))
+        if len(self.visited) != self.count:
+            issues.append("Open each remaining page before approving.")
+        missing = missing_redactions(self.marks)
+        if missing:
+            issues.append("Draw boxes for the missing redactions (" + ", ".join(missing) + ").")
+        self.confirm.setEnabled(not issues)
+        self.approve.setEnabled(not issues and self.confirm.isChecked() and self.canvas.drag is None)
+        if not issues and not self.confirm.isChecked():
+            issues.append("Check the review confirmation to enable approval.")
+        self.approval_status.setText(" ".join(issues))
 
     def show_page(self, page):
         self.canvas.load(self.source, page)
@@ -229,27 +251,25 @@ class CheckReview(QDialog):
         self.prev.setEnabled(page > 0)
         self.next.setEnabled(page < self.count-1)
         self.page_label.setText(f"{page+1} of {self.count}")
+        self.update_approval()
 
     def remove(self):
         if self.canvas.selected is not None:
             self.history.append(self.marks.copy())
             self.marks.pop(self.canvas.selected)
             self.canvas.selected = None
-            self.confirm.setChecked(False)
+            self.review_changed()
             self.canvas.update()
 
     def undo(self):
         if self.history:
             self.marks = self.history.pop()
             self.canvas.selected = None
-            self.confirm.setChecked(False)
+            self.review_changed()
             self.canvas.update()
 
     def save(self):
-        if not self.confirm.isChecked():
-            return
-        if len(self.visited) != self.count:
-            QMessageBox.information(self, "Review backup pages", "Open each page in this packet before approving.")
+        if not self.approve.isEnabled():
             return
         try:
             self.queue.file(self.record, self.marks, self.issuer.text(), self.number.text())
@@ -284,13 +304,14 @@ class CheckInbox(QDialog):
         control("Close", self.close, actions)
         self.listing.itemDoubleClicked.connect(lambda *_: self.review())
         self.other.toggled.connect(self.refresh)
-        self.worker = QProcess(self)
-        self.worker.setWorkingDirectory(str(Path(__file__).resolve().parents[3]))
-        self.worker.setStandardErrorFile(QProcess.nullDevice())
-        self.worker.setStandardOutputFile(QProcess.nullDevice())
-        self.worker.start(sys.executable, ["-m", "workflows.check_scanning.watch"])
+        self.installer = None
+        try:
+            self.worker = start_check_scan_process([sys.executable, "-m", "workflows.check_scanning.watch"])
+        except OSError:
+            self.worker = None
         self.timer = QTimer(self, interval=3000)
         self.timer.timeout.connect(self.refresh)
+        self.timer.timeout.connect(self.check_startup_result)
         self.timer.start()
         self.refresh()
 
@@ -300,15 +321,22 @@ class CheckInbox(QDialog):
             QMessageBox.warning(self, "Setup unavailable", "Windows PowerShell could not be found.")
             return
         installer = Path(__file__).resolve().parents[3] / "setup" / "setup_report_filing_watcher.ps1"
-        self.installer = QProcess(self)
-        self.installer.setStandardOutputFile(QProcess.nullDevice())
-        self.installer.setStandardErrorFile(QProcess.nullDevice())
-        self.startup_button.setEnabled(False)
-        self.installer.finished.connect(self.startup_result)
-        self.installer.errorOccurred.connect(lambda _: self.startup_result(1))
-        self.installer.start(executable, ["-NoProfile", "-NonInteractive", "-File", str(installer), "-CheckScans"])
+        try:
+            self.installer = start_check_scan_process(
+                [executable, "-NoProfile", "-NonInteractive", "-File", str(installer), "-CheckScans"]
+            )
+        except OSError:
+            QMessageBox.warning(self, "Setup failed", "Windows PowerShell could not be started.")
+        else:
+            self.startup_button.setEnabled(False)
 
-    def startup_result(self, code, *_):
+    def check_startup_result(self):
+        if self.installer is None:
+            return
+        code = self.installer.poll()
+        if code is None:
+            return
+        self.installer = None
         self.startup_button.setEnabled(True)
         if code:
             QMessageBox.warning(self, "Setup failed", "Check that Windows permits a scheduled task for this login.")
@@ -336,8 +364,10 @@ class CheckInbox(QDialog):
                 self.listing.setCurrentRow(0)
         if not self.queue.inbox.is_dir():
             self.status.setText("The intake folder is unavailable. Check business OneDrive sync.")
-        elif self.worker.state() == QProcess.ProcessState.NotRunning and self.worker.exitCode() != 0:
+        elif self.worker is None or self.worker.poll() is not None:
             self.status.setText("Scan recognition stopped. Rerun setup and reopen the queue.")
+        elif not records:
+            self.status.setText("No scans to review. Watching for new scans.")
         else:
             self.status.setText(f"{len(records)} shown. New scans are checked automatically.")
         self.open_button.setEnabled(bool(records))
@@ -374,9 +404,12 @@ class CheckInbox(QDialog):
 
     def done(self, result):
         self.timer.stop()
-        if self.worker.state() != QProcess.ProcessState.NotRunning:
+        if self.worker is not None and self.worker.poll() is None:
             self.worker.kill()
-            self.worker.waitForFinished(3000)
+            try:
+                self.worker.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
         super().done(result)
 
 

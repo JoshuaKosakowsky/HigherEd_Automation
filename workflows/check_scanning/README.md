@@ -13,6 +13,9 @@ On startup it checks the whole folder, including older scans.
 Run the usual `setup.ps1` after installing this development update. The pinned
 PDFium renderer and RapidOCR CPU models run on the workstation. Models ship with
 the installed wheel. The workflow uses no remote OCR service.
+An empty intake opens normally and waits for scans. If the workflow reports
+missing PDF or OCR components, close the app, run `setup.ps1` from the updated
+repository, and reopen the app.
 
 An administrator can assign **Check Scan Review** (`check_scan_review`) to the
 Cashier view under **Staff access → Manage views & permissions**. Opening it
@@ -55,6 +58,10 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
 - Inspect backup pages and the opaque **Redacted preview**. If a single scan
   contains separate checks or unrelated documents, separate the packet before
   filing. Multiple detected check pages are held for manual handling.
+- The approval area shows the remaining steps. Open every page, add any missing
+  MICR or signature boxes, and resolve filename errors. Then check the review
+  confirmation to enable **Approve & Next**. Changes to the filename or boxes
+  require a fresh confirmation.
 
 ## Pilot output
 
