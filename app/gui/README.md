@@ -798,19 +798,23 @@ and `launcher` are flagged as requiring an administrator to rerun setup before
 reopening. Setup also applies when switching removes a change to one of those
 files. The app leaves dependency installation and relaunch to the workstation.
 
-Staff installations follow `main`. On a test installation, an administrator can
-choose **Switch to Development**, or **Switch to main** to return to stable.
-The switch reloads the signed-in account's administrator permission and fetches
-the two branches from the installation's existing remote. On success, the
-installation follows the target branch at its fetched commit and must restart.
-The target can be older or contain different commits. The old branch stays
-available locally, and ordinary updates remain fast-forward-only on each branch.
+Staff installations follow `main`. An administrator can choose **Check for
+development updates** on `main` or **Check for stable updates** on
+`Development`. The check fetches the branches and previews the offered version,
+Git revision and setup requirement while the installation stays on its current
+branch. A development check refuses a version older than the installed one.
+
+Choose **Install from Development** or **Install from main** to install the
+checked revision and follow that branch. The installer reloads the signed-in
+account's administrator permission and verifies the checked revision before
+switching. Returning to `main` can install an earlier stable version. The old
+branch remains available locally, and ordinary updates are fast-forward-only.
 A single-branch clone gains an additional fetch mapping for the target branch.
 
-The first selector release is 0.34.0. For the work-PC rollout, publish 0.34.0 on
-`main` and bring `Development` up to that release as described in the
-[release process](../../tests/README.md#ci-checks-and-staff-releases). Install it
-through **App updates** on `main`, restart, then use **Switch to Development**.
+For a work PC running 0.33.0 after switching to `Development` in 0.34.0, first
+bring the remote `Development` branch up to the released `main`. Use the regular
+**Check for updates** and **Install update** on the work PC, then restart. See
+the [release process](../../tests/README.md#ci-checks-and-staff-releases).
 
 Administrators must provision a separate clone per workstation, install Git on
 PATH, and configure `main` to track the remote `main` branch. The current

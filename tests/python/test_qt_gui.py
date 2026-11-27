@@ -1009,7 +1009,7 @@ class QtGuiTests(unittest.TestCase):
             window.show_updates()
         page = window.current_page
         self.assertIsInstance(page, UpdatesPage)
-        self.assertTrue(page.switch_button.isHidden())
+        self.assertTrue(page.check_other_button.isHidden())
         self.assertIn("main", page.branch_label.text())
         self.assertTrue(page.check_button.isEnabled())
         plan = UpdatePlan(self.root, "main", "origin", "refs/remotes/origin/main",
@@ -1038,30 +1038,39 @@ class QtGuiTests(unittest.TestCase):
         self.assertIs(window.current_page, page)
         self.assertTrue(window.close())
 
-    def test_admin_switch_prompts_then_requires_restart(self):
-        from app.gui.services.updates import BranchSwitchResult, InstalledRevision, RepositoryUpdater
+    def test_admin_previews_stable_revision_before_install_and_restart(self):
+        from app.gui.services.updates import BranchSwitchPlan, InstalledRevision, RepositoryUpdater
 
         with patch.object(RepositoryUpdater, "installed_revision", return_value=InstalledRevision("Development", "a" * 12)):
             window = self.open_app()
         with patch("app.gui.services.updates.get_current_login", return_value="OWNER"):
             window.show_updates()
         page = window.current_page
-        self.assertFalse(page.switch_button.isHidden())
-        self.assertEqual(page.switch_button.text(), "Switch to main")
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
-            page.switch_button.click()
-        self.assertFalse(window._busy)
-        with (
-            patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes),
-            patch.object(page.updater, "switch_branch", return_value=BranchSwitchResult("main", True)) as switch,
-        ):
-            page.switch_button.click()
-            self.assertFalse(page.switch_button.isEnabled())
+        self.assertFalse(page.check_other_button.isHidden())
+        self.assertEqual(page.check_other_button.text(), "Check for stable updates")
+        plan = BranchSwitchPlan(self.root, ("Development", "origin", "refs/remotes/origin/Development", "a" * 40),
+                                "main", "b" * 40, "0.34.0", True)
+
+        def wait_for_result():
             deadline = time.monotonic() + 3
             while page.result_queue is not None and time.monotonic() < deadline:
                 self.qt.processEvents()
                 time.sleep(0.01)
-            switch.assert_called_once_with("main")
+
+        with patch.object(page.updater, "check_branch", return_value=plan) as check:
+            page.check_other_button.click()
+            wait_for_result()
+            check.assert_called_once_with("main")
+        self.assertFalse(window._busy)
+        self.assertFalse(window._restart_required)
+        self.assertIn("0.34.0", page.status.text())
+        self.assertIn("Development", page.branch_label.text())
+        self.assertEqual(page.install_button.text(), "Install from main")
+        with patch.object(page.updater, "switch_branch") as switch:
+            page.install_button.click()
+            self.assertFalse(page.check_other_button.isEnabled())
+            wait_for_result()
+            switch.assert_called_once_with(plan)
         self.assertTrue(window._restart_required)
         self.assertIn("main", page.branch_label.text())
         self.assertIn("run setup.ps1", page.status.text())

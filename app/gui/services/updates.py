@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -40,8 +41,12 @@ class InstalledRevision:
 
 
 @dataclass(frozen=True)
-class BranchSwitchResult:
+class BranchSwitchPlan:
+    root: Path
+    source_state: tuple[str, str, str, str]
     branch: str
+    target_commit: str
+    version: str
     setup_required: bool
 
 
@@ -179,7 +184,7 @@ class RepositoryUpdater:
         except UpdateError as error:
             raise UpdateError(f"{error} Close and reopen the app before using workflows.", restart_required=True) from None
 
-    def switch_branch(self, target_branch: str) -> BranchSwitchResult:
+    def _switch_state(self, target_branch: str) -> tuple[str, str, str, str]:
         self._require_switch_authorization()
         if target_branch not in UPDATE_BRANCHES:
             raise UpdateError("Choose main or Development as the update branch.")
@@ -190,7 +195,19 @@ class RepositoryUpdater:
         if (branch not in UPDATE_BRANCHES or upstream != f"refs/remotes/{remote}/{branch}"
                 or self._git("config", "--get", f"branch.{branch}.merge") != f"refs/heads/{branch}"):
             raise UpdateError("Switching requires main or Development to track its matching remote branch.")
+        return before
 
+    def _version_at(self, commit: str) -> tuple[int, ...]:
+        source = self._git("show", f"{commit}:app/gui/__init__.py",
+                           message="Could not read the application version at the checked revision.")
+        match = re.search(r'''^APP_VERSION\s*=\s*["'](\d+\.\d+\.\d+)["']\s*$''', source, re.MULTILINE)
+        if not match:
+            raise UpdateError("Could not identify the application version at the checked revision.")
+        return tuple(map(int, match[1].split(".")))
+
+    def check_branch(self, target_branch: str) -> BranchSwitchPlan:
+        before = self._switch_state(target_branch)
+        branch, remote, upstream, current = before
         self._fetch(remote, f"refs/heads/{branch}", upstream)
         self._git("merge-base", "--is-ancestor", current, upstream, message=(
             "The current branch has local commits or differs from its update source. Review it before switching."
@@ -199,14 +216,34 @@ class RepositoryUpdater:
         target_upstream = f"refs/remotes/{remote}/{target_branch}"
         self._fetch(remote, target_ref, target_upstream)
         target = self._git("rev-parse", target_upstream)
-        setup_required = self._setup_required(current, target)
+        target_version = self._version_at(target)
+        version = ".".join(map(str, target_version))
+        if target_branch == "Development" and target_version < self._version_at(current):
+            raise UpdateError(f"Development offers older version {version}. Bring Development up to the released main and check again.")
+        if self._state() != before:
+            raise UpdateError("The installation changed during the check. Check for updates again.")
+        return BranchSwitchPlan(self.root, before, target_branch, target, version,
+                                self._setup_required(current, target))
+
+    def switch_branch(self, plan: BranchSwitchPlan) -> None:
+        target_branch = plan.branch
+        before = self._switch_state(target_branch)
+        _, remote, upstream, current = before
+        target = plan.target_commit
+        target_ref = f"refs/heads/{target_branch}"
+        target_upstream = f"refs/remotes/{remote}/{target_branch}"
+        if plan.root != self.root or before != plan.source_state or self._git("rev-parse", target_upstream) != target:
+            raise UpdateError("The installation or update source changed. Check for updates again.")
+        self._git("merge-base", "--is-ancestor", current, upstream, message=(
+            "The current branch has local commits or differs from its update source. Review it before switching."
+        ))
         local_target = self._git("for-each-ref", "--format=%(refname) %(upstream)", target_ref).splitlines()
         existing_target = any(entry.split()[0] == target_ref for entry in local_target)
         if existing_target and f"{target_ref} {target_upstream}" not in local_target:
             raise UpdateError(f"The local {target_branch} branch must track {remote}/{target_branch} before switching.")
 
         if self._state() != before or self._git("rev-parse", target_upstream) != target:
-            raise UpdateError("The installation or update source changed. Try switching again.")
+            raise UpdateError("The installation or update source changed. Check for updates again.")
         self._require_switch_authorization()
         if existing_target:
             # Advance the inactive branch without resetting it or checking out
@@ -233,4 +270,3 @@ class RepositoryUpdater:
                 raise UpdateError("The installation changed while switching branches. Ask your administrator to inspect it.")
         except UpdateError as error:
             raise UpdateError(f"{error} Close and reopen the app before using workflows.", restart_required=True) from None
-        return BranchSwitchResult(target_branch, setup_required)

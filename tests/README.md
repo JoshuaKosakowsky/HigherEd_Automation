@@ -99,21 +99,24 @@ linear history disabled. Keep automatic branch deletion from removing
 against deletion. Preserve the PR and Windows check requirements for the
 protected release path. The repository owner manages these settings.
 
-### First selector release
+### Workstation update checks
 
-Release 0.34.0 through a temporary feature branch PR targeting `main`, with both
-Windows checks passing before merge. Once it lands, fast-forward `Development`
-to the new `main` before switching a workstation to it. Both branches then have
-the selector. Verify on the work PC with its usual Windows login and shortcut.
+The selector first shipped in 0.34.0 through a temporary feature branch PR
+targeting `main`. Fast-forward `Development` to the stable release before
+testing updates across branches. Verify on the work PC with its usual Windows
+login and shortcut.
 
-1. On `main`, use **App updates** to install 0.34.0, then close and reopen.
-2. As an app administrator, switch to `Development` and reopen. Confirm the
-   branch and running Git revision.
+1. On `main`, use **App updates** to install the current release, then close and
+   reopen. Bring `Development` up to that same release before testing it.
+2. As an app administrator, choose **Check for development updates**. Confirm
+   the offered version and revision while the installation still shows `main`.
+   Choose **Install from Development**, reopen and confirm the branch changed.
 3. Publish a development-only fix to `Development`. Check for and install it,
    then reopen and verify the revision changed. A separate `main` installation
    should stay at the stable revision and should show no switch control for staff.
-4. Switch the work PC back to `main` while `Development` is ahead. Reopen and
-   verify the stable revision and that ordinary updates follow `main` again.
+4. While `Development` is ahead, choose **Check for stable updates**, then
+   **Install from main**. Reopen and verify the stable revision and that
+   ordinary updates follow `main` again.
    Rerun `setup.ps1` before reopening whenever the app reports setup changes.
 
 GitHub Actions documentation:

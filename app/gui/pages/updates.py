@@ -7,11 +7,11 @@ from threading import Thread
 from typing import Callable
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtWidgets import QMessageBox, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QProgressBar, QVBoxLayout, QWidget
 
 from app.gui import APP_VERSION
 from app.gui.services.updates import (
-    UPDATE_BRANCHES, BranchSwitchResult, InstalledRevision, RepositoryUpdater, UpdateError, UpdatePlan,
+    BranchSwitchPlan, InstalledRevision, RepositoryUpdater, UpdateError, UpdatePlan,
 )
 from app.gui.theme import button, label
 
@@ -25,8 +25,8 @@ class UpdatesPage(QWidget):
         super().__init__(parent)
         self.setObjectName("page")
         self.updater = updater
-        self.plan: UpdatePlan | None = None
-        self.result_queue: queue.Queue[tuple[UpdatePlan | BranchSwitchResult | None, UpdateError | None]] | None = None
+        self.plan: UpdatePlan | BranchSwitchPlan | None = None
+        self.result_queue: queue.Queue[tuple[UpdatePlan | BranchSwitchPlan | None, UpdateError | None]] | None = None
         self.needs_restart = False
         self.installing = False
         layout = QVBoxLayout(self)
@@ -50,15 +50,14 @@ class UpdatesPage(QWidget):
         self.check_button = button("Check for updates", lambda: self._start(install=False), "primary")
         self.install_button = button("Install update", lambda: self._start(install=True), "primary")
         self.install_button.setEnabled(False)
-        self.switch_target = next((name for name in UPDATE_BRANCHES if name != branch), None) if (
-            branch in UPDATE_BRANCHES
-        ) else None
-        self.switch_button = button(f"Switch to {self.switch_target}" if self.switch_target else "Switch branch",
-                                    self._confirm_switch)
-        self.switch_button.setVisible(bool(self.switch_target and self.updater.can_switch_branch()))
+        other_branch = {"main": "Development", "Development": "main"}.get(branch)
+        other_updates = "development" if branch == "main" else "stable"
+        self.check_other_button = button(f"Check for {other_updates} updates",
+                                         lambda: self._start(install=False, other_branch=other_branch))
+        self.check_other_button.setVisible(bool(other_branch and self.updater.can_switch_branch()))
         self.close_button = button("Close app", close_app)
         self.close_button.hide()
-        for control in (self.check_button, self.install_button, self.switch_button, self.close_button):
+        for control in (self.check_button, self.check_other_button, self.install_button, self.close_button):
             layout.addWidget(control)
         layout.addStretch()
         self.timer = QTimer(self)
@@ -69,20 +68,7 @@ class UpdatesPage(QWidget):
         name = "Detached HEAD" if branch == "HEAD" else branch or "Unavailable"
         self.branch_label.setText(f"Installation branch · {name}")
 
-    def _confirm_switch(self) -> None:
-        if self.switch_target is None or self.switch_button.isHidden() or self.needs_restart or self.result_queue is not None:
-            return
-        answer = QMessageBox.question(
-            self, "Switch update branch",
-            f"Switch this installation to {self.switch_target}? Close other automation tools first. "
-            "You will need to close and reopen the app after switching.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._start(install=False, switch_to=self.switch_target)
-
-    def _start(self, *, install: bool, switch_to: str | None = None) -> None:
+    def _start(self, *, install: bool, other_branch: str | None = None) -> None:
         if self.result_queue is not None or self.needs_restart or (install and not self.plan):
             return
         plan = self.plan
@@ -91,9 +77,9 @@ class UpdatesPage(QWidget):
         self.result_queue = results
         self.check_button.setEnabled(False)
         self.install_button.setEnabled(False)
-        self.switch_button.setEnabled(False)
-        if switch_to:
-            self.status.setText(f"Switching to {switch_to}…")
+        self.check_other_button.setEnabled(False)
+        if other_branch:
+            self.status.setText(f"Checking {other_branch} for updates…")
         else:
             self.status.setText("Installing update…" if install else "Checking update source…")
         self.progress.show()
@@ -101,11 +87,14 @@ class UpdatesPage(QWidget):
 
         def work() -> None:
             try:
-                if switch_to:
-                    results.put((self.updater.switch_branch(switch_to), None))
-                elif install:
-                    self.updater.install(plan)
+                if install:
+                    if isinstance(plan, BranchSwitchPlan):
+                        self.updater.switch_branch(plan)
+                    else:
+                        self.updater.install(plan)
                     results.put((plan, None))
+                elif other_branch:
+                    results.put((self.updater.check_branch(other_branch), None))
                 else:
                     results.put((self.updater.check(), None))
             except UpdateError as error:
@@ -114,7 +103,7 @@ class UpdatesPage(QWidget):
                 # Outer worker boundary: always release the GUI, without copying
                 # potentially sensitive exception details into the staff UI.
                 results.put((None, UpdateError("The update operation failed. Ask your administrator to inspect the installation.",
-                                               restart_required=install or switch_to is not None)))
+                                               restart_required=install)))
 
         self.installing = install
         Thread(target=work, daemon=True).start()
@@ -133,9 +122,9 @@ class UpdatesPage(QWidget):
         if error:
             self.status.setText(str(error))
             self.needs_restart = error.restart_required
-        elif self.installing or isinstance(plan, BranchSwitchResult):
+        elif self.installing:
             self.needs_restart = True
-            if isinstance(plan, BranchSwitchResult):
+            if isinstance(plan, BranchSwitchPlan):
                 self._show_branch(plan.branch)
                 message = f"Installation switched to {plan.branch}."
             else:
@@ -146,9 +135,13 @@ class UpdatesPage(QWidget):
             self.status.setText(message)
         else:
             self.plan = plan
-            message = f"Source: {plan.remote} • Branch: {plan.branch}\n"
-            message += (f"{plan.commit_count} new commit(s) available. Install update when ready."
-                        if plan.commit_count else "Your installation is up to date.")
+            if isinstance(plan, BranchSwitchPlan):
+                message = f"{plan.branch} offers version {plan.version} • Git {plan.target_commit[:12]}\n"
+                message += f"Installing this revision will make this installation follow {plan.branch}."
+            else:
+                message = f"Source: {plan.remote} • Branch: {plan.branch}\n"
+                message += (f"{plan.commit_count} new commit(s) available. Install update when ready."
+                            if plan.commit_count else "Your installation is up to date.")
             if plan.setup_required:
                 message += "\nSetup must be run again after installation; coordinate with your administrator before installing."
             self.status.setText(message)
@@ -156,6 +149,8 @@ class UpdatesPage(QWidget):
             self.restart_required.emit()
             self.close_button.show()
         self.check_button.setEnabled(not self.needs_restart)
-        self.install_button.setEnabled(bool(self.plan and self.plan.commit_count) and not self.needs_restart)
-        self.switch_button.setEnabled(not self.needs_restart)
+        branch_preview = isinstance(self.plan, BranchSwitchPlan)
+        self.install_button.setText(f"Install from {self.plan.branch}" if branch_preview else "Install update")
+        self.install_button.setEnabled(bool(self.plan and (branch_preview or self.plan.commit_count)) and not self.needs_restart)
+        self.check_other_button.setEnabled(not self.needs_restart)
         self.busy_changed.emit(False)

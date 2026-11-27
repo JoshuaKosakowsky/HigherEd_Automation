@@ -27,6 +27,9 @@ class RepositoryUpdaterTests(unittest.TestCase):
         self.git(self.source, 'config', 'user.email', 'test@example.invalid')
         (self.source / '.gitignore').write_text('settings.local\n', encoding='utf-8')
         (self.source / 'app.txt').write_text('initial\n', encoding='utf-8')
+        version_file = self.source / 'app/gui/__init__.py'
+        version_file.parent.mkdir(parents=True)
+        version_file.write_text('APP_VERSION = "0.34.1"\n', encoding='utf-8')
         self.commit('Initial')
         self.git(self.root, 'clone', '--bare', str(self.source), str(self.remote))
         self.git(self.root, 'clone', str(self.remote), str(self.clone))
@@ -68,7 +71,9 @@ class RepositoryUpdaterTests(unittest.TestCase):
 
     def switch(self, branch, login='ADMIN'):
         with patch('app.gui.services.updates.get_current_login', return_value=login):
-            return self.staff_updater.switch_branch(branch)
+            plan = self.staff_updater.check_branch(branch)
+            self.staff_updater.switch_branch(plan)
+            return plan
 
     def test_check_does_not_install_and_install_preserves_ignored_settings(self):
         self.publish()
@@ -207,6 +212,7 @@ class RepositoryUpdaterTests(unittest.TestCase):
         self.assertEqual(self.updater.installed_revision().commit, release.commit)
 
         self.publish('requirements.txt', 'synthetic==1.0\n')
+        (self.source / 'app/gui/__init__.py').write_text('APP_VERSION = "0.34.2"\n', encoding='utf-8')
         self.publish(text='development-only fix\n')
         self.assertEqual(stable.check().commit_count, 0)
         plan = self.updater.check()
@@ -219,7 +225,9 @@ class RepositoryUpdaterTests(unittest.TestCase):
 
         self.git(self.source, 'checkout', 'main')
         self.publish(text='new stable release\n')
-        self.assertTrue(self.switch('main').setup_required)
+        stable_plan = self.switch('main')
+        self.assertTrue(stable_plan.setup_required)
+        self.assertEqual(stable_plan.version, '0.34.1')
         self.assertEqual(self.updater.installed_revision().branch, 'main')
         self.assertEqual((self.clone / 'app.txt').read_text(), 'new stable release\n')
         self.assertFalse((self.clone / 'requirements.txt').exists())
@@ -297,6 +305,35 @@ class RepositoryUpdaterTests(unittest.TestCase):
         self.assertEqual((narrow_clone / 'app.txt').read_text(), 'updated\n')
         self.switch('main')
         self.assertEqual((narrow_clone / 'app.txt').read_text(), 'initial\n')
+
+    def test_development_preview_refuses_older_release_and_can_be_retried(self):
+        self.publish_development()
+        self.git(self.source, 'checkout', 'main')
+        self.publish('app/gui/__init__.py', 'APP_VERSION = "0.34.2"\n')
+        self.updater.install(self.updater.check())
+        before = self.updater.installed_revision()
+        with patch('app.gui.services.updates.get_current_login', return_value='ADMIN'):
+            with self.assertRaisesRegex(UpdateError, 'Development offers older version 0.34.1') as caught:
+                self.staff_updater.check_branch('Development')
+            self.assertFalse(caught.exception.restart_required)
+            self.assertEqual(self.updater.installed_revision(), before)
+            self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
+            self.git(self.source, 'push', 'origin', 'main:Development')
+            plan = self.staff_updater.check_branch('Development')
+            self.assertEqual(plan.version, '0.34.2')
+            self.assertEqual(self.updater.installed_revision(), before)
+            self.staff_updater.switch_branch(plan)
+        self.assertEqual(self.updater.installed_revision().branch, 'Development')
+
+    def test_branch_install_rejects_target_changed_after_preview(self):
+        self.publish_development()
+        with patch('app.gui.services.updates.get_current_login', return_value='ADMIN'):
+            plan = self.staff_updater.check_branch('Development')
+            self.publish()
+            self.staff_updater.check_branch('Development')
+            with self.assertRaisesRegex(UpdateError, 'update source changed'):
+                self.staff_updater.switch_branch(plan)
+        self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
 
     def test_access_revoked_during_fetch_prevents_checkout(self):
         self.publish_development()
