@@ -1,7 +1,8 @@
 """Real local Git repositories verify update safety without credentials/network."""
 
-from pathlib import Path
+import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,17 @@ class RepositoryUpdaterTests(unittest.TestCase):
         self.git(self.clone, 'config', 'user.name', 'Synthetic Test')
         self.git(self.clone, 'config', 'user.email', 'test@example.invalid')
         self.updater = RepositoryUpdater(self.clone)
+        self.policy = self.root / 'policy.json'
+        self.policy.write_text(json.dumps({
+            'schemaVersion': 3,
+            'metadata': {'ownerLogin': 'ADMIN'},
+            'users': {
+                'ADMIN': {'displayName': 'Test Administrator', 'jobTitle': 'Manager', 'view': 'administrator'},
+                'STAFF': {'displayName': 'Test Staff', 'jobTitle': 'Analyst', 'view': 'analyst'},
+            },
+            'views': {'administrator': {'workflows': ['*']}, 'analyst': {'workflows': []}},
+        }), encoding='utf-8')
+        self.staff_updater = RepositoryUpdater(self.clone, access_config_path=self.policy)
 
     def git(self, cwd, *args):
         environment = os.environ.copy()
@@ -48,7 +60,15 @@ class RepositoryUpdaterTests(unittest.TestCase):
     def publish(self, filename='app.txt', text='updated\n'):
         (self.source / filename).write_text(text, encoding='utf-8')
         self.commit('Update')
-        self.git(self.source, 'push', 'origin', 'main')
+        self.git(self.source, 'push', 'origin', 'HEAD')
+
+    def publish_development(self):
+        self.git(self.source, 'checkout', '-b', 'Development')
+        self.git(self.source, 'push', 'origin', 'Development')
+
+    def switch(self, branch, login='ADMIN'):
+        with patch('app.gui.services.updates.get_current_login', return_value=login):
+            return self.staff_updater.switch_branch(branch)
 
     def test_check_does_not_install_and_install_preserves_ignored_settings(self):
         self.publish()
@@ -156,6 +176,140 @@ class RepositoryUpdaterTests(unittest.TestCase):
         with patch('app.gui.services.updates.subprocess.run', side_effect=subprocess.TimeoutExpired('git', 120)):
             with self.assertRaisesRegex(UpdateError, 'timed out'):
                 self.updater.check()
+
+    def test_staff_and_unavailable_access_cannot_switch_but_can_update(self):
+        self.publish(text='stable release\n')
+        self.publish_development()
+        before = self.updater.installed_revision()
+        with self.assertRaisesRegex(UpdateError, 'Only an administrator'):
+            self.switch('Development', 'STAFF')
+        self.policy.unlink()
+        with self.assertRaisesRegex(UpdateError, 'Only an administrator'):
+            self.switch('Development')
+        self.assertEqual(self.updater.installed_revision(), before)
+        self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
+        plan = self.staff_updater.check()
+        self.staff_updater.install(plan)
+        self.assertEqual((self.clone / 'app.txt').read_text(), 'stable release\n')
+
+    def test_stable_installation_tests_development_and_returns_to_updated_main(self):
+        self.publish(text='selector release\n')
+        self.publish_development()
+        (self.clone / 'settings.local').write_text('private value')
+        staff_clone = self.root / 'staff'
+        self.git(self.root, 'clone', '--branch', 'main', str(self.remote), str(staff_clone))
+        stable = RepositoryUpdater(staff_clone)
+
+        self.updater.install(self.updater.check())
+        release = self.updater.installed_revision()
+        self.assertEqual((self.clone / 'app.txt').read_text(), 'selector release\n')
+        self.assertEqual(self.switch('Development').branch, 'Development')
+        self.assertEqual(self.updater.installed_revision().commit, release.commit)
+
+        self.publish('requirements.txt', 'synthetic==1.0\n')
+        self.publish(text='development-only fix\n')
+        self.assertEqual(stable.check().commit_count, 0)
+        plan = self.updater.check()
+        self.assertEqual((plan.branch, plan.commit_count), ('Development', 2))
+        self.assertTrue(plan.setup_required)
+        self.updater.install(plan)
+        development = self.updater.installed_revision()
+        self.assertNotEqual(development.commit, release.commit)
+        self.assertEqual((self.clone / 'app.txt').read_text(), 'development-only fix\n')
+
+        self.git(self.source, 'checkout', 'main')
+        self.publish(text='new stable release\n')
+        self.assertTrue(self.switch('main').setup_required)
+        self.assertEqual(self.updater.installed_revision().branch, 'main')
+        self.assertEqual((self.clone / 'app.txt').read_text(), 'new stable release\n')
+        self.assertFalse((self.clone / 'requirements.txt').exists())
+        self.assertEqual(self.git(self.clone, 'rev-parse', 'Development'), plan.target_commit)
+
+        self.publish(text='ordinary stable update\n')
+        self.updater.install(self.updater.check())
+        self.assertEqual((self.clone / 'app.txt').read_text(), 'ordinary stable update\n')
+        self.assertEqual((self.clone / 'settings.local').read_text(), 'private value')
+        self.assertTrue(self.switch('Development').setup_required)
+        self.assertEqual(self.updater.installed_revision(), development)
+
+    def test_dirty_edits_untracked_files_and_source_local_commits_block_switch(self):
+        self.publish_development()
+        for filename in ('app.txt', 'untracked.txt'):
+            with self.subTest(filename=filename):
+                path = self.clone / filename
+                path.write_text('local change')
+                with self.assertRaisesRegex(UpdateError, 'local changes'):
+                    self.switch('Development')
+                self.assertEqual(path.read_text(), 'local change')
+                if filename == 'app.txt':
+                    self.git(self.clone, 'restore', filename)
+                else:
+                    path.unlink()
+        self.git(self.clone, 'commit', '--allow-empty', '-m', 'Local commit on main')
+        before = self.updater.installed_revision()
+        with self.assertRaisesRegex(UpdateError, 'local commits'):
+            self.switch('Development')
+        self.assertEqual(self.updater.installed_revision(), before)
+
+    def test_local_commits_on_destination_are_preserved(self):
+        self.publish_development()
+        self.git(self.clone, 'fetch', 'origin')
+        self.git(self.clone, 'checkout', '-b', 'Development', '--track', 'origin/Development')
+        self.git(self.clone, 'commit', '--allow-empty', '-m', 'Local commit on Development')
+        local = self.git(self.clone, 'rev-parse', 'HEAD')
+        self.git(self.clone, 'checkout', 'main')
+        self.publish()
+        with self.assertRaisesRegex(UpdateError, 'local commits'):
+            self.switch('Development')
+        self.assertEqual(self.updater.installed_revision().branch, 'main')
+        self.assertEqual(self.git(self.clone, 'rev-parse', 'Development'), local)
+
+    def test_switch_collision_preserves_ignored_settings_and_source_branch(self):
+        self.publish_development()
+        (self.source / 'settings.local').write_text('published setting')
+        self.git(self.source, 'add', '-f', 'settings.local')
+        self.git(self.source, 'commit', '-m', 'Synthetic ignored-file collision')
+        self.git(self.source, 'push', 'origin', 'Development')
+        (self.clone / 'settings.local').write_text('private value')
+        before = self.updater.installed_revision()
+        with self.assertRaisesRegex(UpdateError, 'conflicting local files') as caught:
+            self.switch('Development')
+        self.assertTrue(caught.exception.restart_required)
+        self.assertEqual(self.updater.installed_revision(), before)
+        self.assertEqual((self.clone / 'settings.local').read_text(), 'private value')
+
+    def test_switch_to_unpublished_branch_leaves_installation_usable(self):
+        before = self.updater.installed_revision()
+        with self.assertRaisesRegex(UpdateError, 'Could not reach') as caught:
+            self.switch('Development')
+        self.assertFalse(caught.exception.restart_required)
+        self.assertEqual(self.updater.installed_revision(), before)
+        self.assertEqual(self.updater.check().commit_count, 0)
+
+    def test_single_branch_clone_can_track_and_update_both_branches(self):
+        narrow_clone = self.root / 'narrow'
+        self.git(self.root, 'clone', '--single-branch', str(self.remote), str(narrow_clone))
+        self.staff_updater = RepositoryUpdater(narrow_clone, access_config_path=self.policy)
+        self.publish_development()
+        self.switch('Development')
+        self.publish()
+        self.staff_updater.install(self.staff_updater.check())
+        self.assertEqual((narrow_clone / 'app.txt').read_text(), 'updated\n')
+        self.switch('main')
+        self.assertEqual((narrow_clone / 'app.txt').read_text(), 'initial\n')
+
+    def test_access_revoked_during_fetch_prevents_checkout(self):
+        self.publish_development()
+        fetch = self.staff_updater._fetch
+
+        def fetch_then_remove_policy(*args):
+            fetch(*args)
+            self.policy.unlink(missing_ok=True)
+
+        with patch.object(self.staff_updater, '_fetch', side_effect=fetch_then_remove_policy):
+            with self.assertRaisesRegex(UpdateError, 'Only an administrator'):
+                self.switch('Development')
+        self.assertEqual(self.git(self.clone, 'branch', '--list'), '* main')
 
 
 if __name__ == '__main__':

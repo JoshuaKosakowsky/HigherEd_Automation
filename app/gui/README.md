@@ -782,9 +782,11 @@ rather than parsing ordinary log messages as progress.
 ## App updates
 
 **App updates** is available to all users, including users without assigned
-workflows. **Check for updates** fetches the current branch's configured upstream
-without changing installed files. It shows the remote name, branch and number of
-new commits. **Install update** applies exactly the checked commit using a
+workflows. It shows the installation branch and the Git revision captured when
+the app started. The revision and application version also appear in the startup
+log. **Check for updates** fetches the current branch's configured upstream
+without changing installed files. It shows the remote name and number of new
+commits. **Install update** applies exactly the checked commit using a
 fast-forward; it does not merge divergent history, reset files, stash changes,
 or push anything. Git operations run in a background thread with bounded command
 timeouts. Navigation and window closing are blocked until the operation ends.
@@ -793,11 +795,25 @@ After installation, workflows remain disabled until the app closes. Reopen it
 with the normal shortcut so Python modules and launchers use the same revision.
 Changes to `requirements.txt`, `setup.ps1`, or files under `setup`, `powershell`,
 and `launcher` are flagged as requiring an administrator to rerun setup before
-reopening. Dependency installation, automatic relaunch, and initial clone/auth
-provisioning are outside this first update feature.
+reopening. Setup also applies when switching removes a change to one of those
+files. The app leaves dependency installation and relaunch to the workstation.
+
+Staff installations follow `main`. On a test installation, an administrator can
+choose **Switch to Development**, or **Switch to main** to return to stable.
+The switch reloads the signed-in account's administrator permission and fetches
+the two branches from the installation's existing remote. On success, the
+installation follows the target branch at its fetched commit and must restart.
+The target can be older or contain different commits. The old branch stays
+available locally, and ordinary updates remain fast-forward-only on each branch.
+A single-branch clone gains an additional fetch mapping for the target branch.
+
+The first selector release is 0.34.0. For the work-PC rollout, publish 0.34.0 on
+`main` and bring `Development` up to that release as described in the
+[release process](../../tests/README.md#ci-checks-and-staff-releases). Install it
+through **App updates** on `main`, restart, then use **Switch to Development**.
 
 Administrators must provision a separate clone per workstation, install Git on
-PATH, and configure its branch to track the intended remote branch. The current
+PATH, and configure `main` to track the remote `main` branch. The current
 development remote is GitHub `origin`; the updater uses each installation's Git
 configuration rather than a hard-coded account or host. Changing that upstream
 to Mines GitLab later needs no updater code change. It does not implement the
@@ -819,8 +835,13 @@ HEADs, missing upstreams, local commits/divergence, and unfinished Git operation
 The updater rechecks the branch, installed commit, clean state and fetched target
 before installation. Ignored settings/data remain in place, and a collision
 with a newly tracked file is refused. Git hooks are disabled for these operations.
-Failures during installation require closing/reopening and administrator review;
-the updater never attempts a destructive rollback. Failed checks can be retried.
+An installation failure requires closing the app and administrator review.
+Switches also refuse local commits on either branch or a destination with a
+different upstream. A failed fetch or safety check leaves the running installation
+in place. If Git fails during checkout, close the app and have an administrator
+check the branch and working tree before reopening. The target's local ref may
+already have advanced by fast-forward. The updater preserves recovery state and
+avoids a destructive reset. Failed checks can be retried.
 
 ## Deployment boundary and next integrations
 
