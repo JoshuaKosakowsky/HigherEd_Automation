@@ -75,9 +75,46 @@ requiring pull requests and both successful **Windows tests (Python 3.11)** and
 Adding the 3.11 matrix job does not automatically add it to an existing branch
 rule: let it run, then select its name in the required checks. Availability
 depends on repository visibility and the GitHub plan.
-Then develop on a branch, open a pull request, inspect the checks, and merge
-after they pass. No second developer is needed to run CI; requiring another
-person's approval is a separate policy choice.
+Requiring another person's approval is a separate policy choice.
+
+### Working on Development
+
+Keep `Development` as a permanent branch. Staff clones follow `main`, and an
+administrator can switch a test installation to `Development` in **App updates**.
+Push and test individual development commits with the current `APP_VERSION`.
+Record the Git revision from **App updates** or the startup log when reporting a
+test result, because several development commits can share the same version.
+
+When a tested group is ready for staff, increment `APP_VERSION` once for the
+whole release. Choose patch, minor or major according to the combined changes.
+Open a PR from `Development` to `main`, review the final diff, and wait for both
+Windows checks. Choose **Create a merge commit** to preserve the tested commit
+history. Leave `Development` in place and bring it up to the released `main`
+with a fast-forward. If both branches have advanced, merge `main` into
+`Development` without rewriting either branch, and verify the result.
+
+For this workflow, enable merge commits and allow them on `main` by leaving
+linear history disabled. Keep automatic branch deletion from removing
+`Development` after promotion by turning it off or protecting `Development`
+against deletion. Preserve the PR and Windows check requirements for the
+protected release path. The repository owner manages these settings.
+
+### First selector release
+
+Release 0.34.0 through a temporary feature branch PR targeting `main`, with both
+Windows checks passing before merge. Once it lands, fast-forward `Development`
+to the new `main` before switching a workstation to it. Both branches then have
+the selector. Verify on the work PC with its usual Windows login and shortcut.
+
+1. On `main`, use **App updates** to install 0.34.0, then close and reopen.
+2. As an app administrator, switch to `Development` and reopen. Confirm the
+   branch and running Git revision.
+3. Publish a development-only fix to `Development`. Check for and install it,
+   then reopen and verify the revision changed. A separate `main` installation
+   should stay at the stable revision and should show no switch control for staff.
+4. Switch the work PC back to `main` while `Development` is ahead. Reopen and
+   verify the stable revision and that ordinary updates follow `main` again.
+   Rerun `setup.ps1` before reopening whenever the app reports setup changes.
 
 GitHub Actions documentation:
 [Understanding GitHub Actions](https://docs.github.com/en/actions/get-started/understand-github-actions).

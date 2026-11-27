@@ -1000,13 +1000,18 @@ class QtGuiTests(unittest.TestCase):
 
     def test_updates_are_available_to_staff_and_restart_blocks_workflows(self):
         from app.gui.pages.updates import UpdatesPage
-        from app.gui.services.updates import UpdatePlan
+        from app.gui.services.updates import InstalledRevision, RepositoryUpdater, UpdatePlan
 
-        window = self.open_app("STAFF")
+        with patch.object(RepositoryUpdater, "installed_revision", return_value=InstalledRevision("main", "a" * 12)):
+            window = self.open_app("STAFF")
         self.assertFalse(window.updates_button.isHidden())
-        window.show_updates()
+        with patch("app.gui.services.updates.get_current_login", return_value="STAFF"):
+            window.show_updates()
         page = window.current_page
         self.assertIsInstance(page, UpdatesPage)
+        self.assertTrue(page.switch_button.isHidden())
+        self.assertIn("main", page.branch_label.text())
+        self.assertTrue(page.check_button.isEnabled())
         plan = UpdatePlan(self.root, "main", "origin", "refs/remotes/origin/main",
                           "a" * 40, "b" * 40, 1, True)
         page.result_queue = queue.Queue()
@@ -1032,6 +1037,36 @@ class QtGuiTests(unittest.TestCase):
         window.show_workflow(get_workflow("refund_review"))
         self.assertIs(window.current_page, page)
         self.assertTrue(window.close())
+
+    def test_admin_switch_prompts_then_requires_restart(self):
+        from app.gui.services.updates import BranchSwitchResult, InstalledRevision, RepositoryUpdater
+
+        with patch.object(RepositoryUpdater, "installed_revision", return_value=InstalledRevision("Development", "a" * 12)):
+            window = self.open_app()
+        with patch("app.gui.services.updates.get_current_login", return_value="OWNER"):
+            window.show_updates()
+        page = window.current_page
+        self.assertFalse(page.switch_button.isHidden())
+        self.assertEqual(page.switch_button.text(), "Switch to main")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+            page.switch_button.click()
+        self.assertFalse(window._busy)
+        with (
+            patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes),
+            patch.object(page.updater, "switch_branch", return_value=BranchSwitchResult("main", True)) as switch,
+        ):
+            page.switch_button.click()
+            self.assertFalse(page.switch_button.isEnabled())
+            deadline = time.monotonic() + 3
+            while page.result_queue is not None and time.monotonic() < deadline:
+                self.qt.processEvents()
+                time.sleep(0.01)
+            switch.assert_called_once_with("main")
+        self.assertTrue(window._restart_required)
+        self.assertIn("main", page.branch_label.text())
+        self.assertIn("run setup.ps1", page.status.text())
+        self.assertFalse(page.close_button.isHidden())
+        self.assertEqual(window.running_revision.branch, "Development")
 
     def test_update_check_runs_in_worker_and_failures_allow_retry(self):
         from app.gui.services.updates import UpdateError

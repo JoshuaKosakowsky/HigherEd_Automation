@@ -151,8 +151,10 @@ reviews from downloaded source ZIPs without Insights sign-in.
 
 ### App updates
 
-Choose **App updates** in the sidebar, then **Check for updates**. If an update
-is available, close other automation tools and choose **Install update**. After
+Choose **App updates** in the sidebar to see the installation's branch and the
+running version and Git revision. Staff installations follow stable `main`.
+Choose **Check for updates** to look for updates to the configured branch. If an
+update is available, close other automation tools and choose **Install update**. After
 installation, close the app and reopen it using the desktop shortcut. If the
 screen says setup is required, ask your administrator to run `setup.ps1` before
 reopening. The updater downloads code; it does not install Python packages or
@@ -163,9 +165,10 @@ with a tracking branch and repository authentication already configured by the
 administrator. A downloaded ZIP or copied folder without Git metadata cannot
 update this way. Do not share one live Git working directory between employees
 or concurrently update a checkout through OneDrive. Normal staff updates do not
-require terminal commands; initial Git provisioning and exceptions remain
-administrator tasks. See [GUI update details](app/gui/README.md#app-updates) for
-the source configuration and safeguards.
+require terminal commands. Administrators can switch a test installation to
+`Development` and return it to `main` from **App updates**. See the
+[GUI update details](app/gui/README.md#app-updates) for branch switching and
+[release process](tests/README.md#ci-checks-and-staff-releases) for promotion.
 
 ### Optional PowerShell shortcuts
 

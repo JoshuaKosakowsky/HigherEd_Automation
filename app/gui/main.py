@@ -25,7 +25,7 @@ from app.gui.pages.operations_calendar import OperationsCalendarPage
 from app.gui.services.operations_calendar import (
     CalendarError, CalendarStore, reminder_entries, unassigned_targets,
 )
-from app.gui.services.updates import RepositoryUpdater
+from app.gui.services.updates import RepositoryUpdater, UpdateError
 from app.gui.services.access import (
     AccessConfiguration, AccessConfigurationError, create_shared_access_configuration,
     filter_workflows_for_view, get_current_login, load_access_configuration,
@@ -56,6 +56,11 @@ class AutomationApplication(QMainWindow):
         self.user_first_name = settings.first_name if settings else DEFAULT_FIRST_NAME
         self.user_login = user_login_override or get_current_login() or ""
         self.access_config_path = access_config_path or get_shared_gui_access_path()
+        self.updater = RepositoryUpdater(PROJECT_ROOT, access_config_path=self.access_config_path)
+        try:
+            self.running_revision = self.updater.installed_revision()
+        except UpdateError:
+            self.running_revision = None
         self.access_configuration = None
         self.profile = None
         self.profile_description = None
@@ -127,7 +132,9 @@ class AutomationApplication(QMainWindow):
         self._setup_view_controls()
         self._reload_access(bootstrap=True)
         self.show_home(reload=False)
-        self.logger.info("Application started: version=%s", APP_VERSION)
+        self.logger.info("Application started: version=%s branch=%s git=%s", APP_VERSION,
+                         self.running_revision.branch if self.running_revision else "unavailable",
+                         self.running_revision.commit if self.running_revision else "unavailable")
 
     def _setup_view_controls(self) -> None:
         view = self.menuBar().addMenu("View")
@@ -327,7 +334,7 @@ class AutomationApplication(QMainWindow):
             return
         for control in (self.home_button, self.access_button, self.connections_button, self.calendar_button):
             control.setChecked(False)
-        page = UpdatesPage(self.content, RepositoryUpdater(PROJECT_ROOT), self.close)
+        page = UpdatesPage(self.content, self.updater, self.close, self.running_revision)
         page.busy_changed.connect(self._set_busy)
         page.restart_required.connect(self._require_restart)
         self._show(page)
