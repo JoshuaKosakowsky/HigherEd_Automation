@@ -15,7 +15,7 @@ import tempfile
 from time import monotonic
 
 from shared.user_settings import get_user_settings_path
-from .detection import Box, Finding, Mark
+from .detection import NEEDS_REVIEW, Box, Finding, Mark
 from .documents import inspect_pdf, local_ocr, page_count, redact_pdf
 
 
@@ -93,6 +93,11 @@ class ScanQueue:
                     digest TEXT PRIMARY KEY, target TEXT NOT NULL, checksum TEXT NOT NULL,
                     completed INTEGER NOT NULL DEFAULT 0);
             """)
+            db.execute("UPDATE scans SET status=? WHERE status=?", (NEEDS_REVIEW, "Needs a look"))
+            db.execute(
+                "UPDATE scans SET finding=json_set(finding,'$.status',?) WHERE json_extract(finding,'$.status')=?",
+                (NEEDS_REVIEW, "Needs a look"),
+            )
 
     @contextmanager
     def connect(self):
@@ -130,6 +135,15 @@ class ScanQueue:
         with self.connect() as db:
             db.execute("UPDATE scans SET status='Dismissed' WHERE name=? AND digest=? AND status!='Filed'",
                        (record["name"], record["digest"]))
+
+    def mark_unrelated(self, record) -> bool:
+        with self.connect() as db:
+            result = db.execute(
+                "UPDATE scans SET status='Unrelated' "
+                "WHERE name=? AND digest=? AND status NOT IN ('Not a PDF', 'Unrelated', 'Filed')",
+                (record["name"], record["digest"]),
+            )
+            return result.rowcount == 1
 
     def file(self, record, marks, issuer: str, number: str) -> Path:
         if decode_finding(record).status == "Multiple check pages":

@@ -39,6 +39,7 @@ class Finding:
     number: str = ""
 
 
+NEEDS_REVIEW = "Needs Review"
 MICR_SYMBOLS = "⑆⑇⑈⑉"
 NUMBER_LABEL = re.compile(r"\b(?:check|cheque)\s*(?:number|no\.?|#)?\s*[:#]?\s*(\d{2,12})\b", re.I)
 ISSUER_SUFFIX = re.compile(r"\b(?:incorporated|inc|llc|ltd|corp(?:oration)?|company|association|foundation|university)\b", re.I)
@@ -89,7 +90,7 @@ def _numeric_rows(lines: list[Line]) -> list[Line]:
 
 def inspect_page(page: int, lines: list[Line], printed_bands: tuple[Box, ...] = ()) -> Finding:
     if not lines and not printed_bands:
-        return Finding("Needs a look")
+        return Finding(NEEDS_REVIEW)
     rows = _numeric_rows(lines)
     bands = [(line, _micr_strength(line.text)) for line in rows]
     payees = [line for line in lines if PAYEE_LABEL.search(line.text)]
@@ -111,7 +112,7 @@ def inspect_page(page: int, lines: list[Line], printed_bands: tuple[Box, ...] = 
     # Optical readers sometimes join the routing and account fields into one
     # run of digits. Independent check-face labels corroborate that weaker band.
     corroborated = candidates and payees and (labels or signatures)
-    finding = Finding("Check" if strong or corroborated else "Needs a look")
+    finding = Finding("Check" if strong or corroborated else NEEDS_REVIEW)
     if len(printed_bands) > 1 or (len(payees) > 1 and len(candidates) > 1):
         finding.status = "Multiple check pages"
     for band in candidates:

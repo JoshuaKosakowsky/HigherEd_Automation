@@ -157,6 +157,7 @@ class CheckReview(QDialog):
         super().__init__(parent)
         self.queue, self.record = queue, record
         self.saved_path: Path | None = None
+        self.marked_unrelated = False
         self.source = queue.source(record)
         self.count = page_count(self.source)
         finding = decode_finding(record)
@@ -214,6 +215,8 @@ class CheckReview(QDialog):
         actions = QHBoxLayout()
         layout.addLayout(actions)
         control("Skip for now", self.reject, actions)
+        if record["status"] not in ("Filed", "Unrelated"):
+            control("Not a check", self.mark_not_a_check, actions)
         actions.addStretch()
         self.approve = control("Approve && Next", self.save, actions)
         for signal in (self.issuer.textChanged, self.number.textChanged):
@@ -281,6 +284,10 @@ class CheckReview(QDialog):
             return
         self.accept()
 
+    def mark_not_a_check(self):
+        self.marked_unrelated = True
+        self.reject()
+
 
 class CheckInbox(QDialog):
     def __init__(self, queue):
@@ -303,9 +310,11 @@ class CheckInbox(QDialog):
         layout.addLayout(actions)
         self.open_button = control("Review selected", self.review, actions)
         self.dismiss_button = control("Dismiss from queue", self.dismiss, actions)
+        self.not_a_check_button = control("Not a check", self.mark_selected_unrelated, actions)
         actions.addStretch()
         control("Close", self.close, actions)
         self.listing.itemDoubleClicked.connect(lambda *_: self.review())
+        self.listing.currentItemChanged.connect(self.update_classification_action)
         self.other.toggled.connect(self.refresh)
         try:
             self.worker = start_check_scan_process("workflows.check_scanning.watch")
@@ -330,8 +339,9 @@ class CheckInbox(QDialog):
             self.displayed = displayed
             self.listing.clear()
             for record in records:
-                item = QListWidgetItem(f"{record['status']}    {record['name']}", self.listing)
+                item = QListWidgetItem(f"{record['status']}    {record['name']}")
                 item.setData(Qt.ItemDataRole.UserRole, dict(record))
+                self.listing.addItem(item)
                 if record["name"] == name:
                     self.listing.setCurrentItem(item)
             if self.listing.currentRow() < 0 and records:
@@ -347,6 +357,13 @@ class CheckInbox(QDialog):
             self.status.setText(f"{saved_status}{len(records)} shown. New scans are checked automatically.")
         self.open_button.setEnabled(bool(records))
         self.dismiss_button.setEnabled(bool(records))
+        self.update_classification_action()
+
+    def update_classification_action(self):
+        item = self.listing.currentItem()
+        self.not_a_check_button.setEnabled(
+            item is not None and item.data(Qt.ItemDataRole.UserRole)["status"] not in ("Filed", "Unrelated")
+        )
 
     def dismiss(self):
         item = self.listing.currentItem()
@@ -355,6 +372,23 @@ class CheckInbox(QDialog):
             self.refresh()
             self.awaiting_completion = bool(self.saved)
             self.check_completion()
+
+    def mark_selected_unrelated(self):
+        item = self.listing.currentItem()
+        if item:
+            self.mark_unrelated(item.data(Qt.ItemDataRole.UserRole))
+
+    def mark_unrelated(self, record):
+        try:
+            changed = self.queue.mark_unrelated(record)
+        except sqlite3.Error:
+            QMessageBox.warning(self, "Queue unavailable", "Check local storage and try again.")
+            return
+        self.refresh()
+        if not changed:
+            QMessageBox.information(self, "Scan changed", "Select the updated scan in the queue to review it.")
+        self.awaiting_completion = bool(self.saved)
+        self.check_completion()
 
     def review(self):
         self.awaiting_completion = False
@@ -372,7 +406,11 @@ class CheckInbox(QDialog):
                 return
             viewer.exec()
             saved_path = viewer.saved_path
+            marked_unrelated = viewer.marked_unrelated
             viewer.deleteLater()
+            if marked_unrelated:
+                self.mark_unrelated(record)
+                return
             if saved_path is None:
                 self.refresh()
                 if self.listing.count():

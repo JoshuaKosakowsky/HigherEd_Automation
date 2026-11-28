@@ -127,7 +127,7 @@ class CheckScanTests(unittest.TestCase):
             self.assertEqual(finding.status, "Check")
             self.assertEqual(finding.marks[0].page, 2)
             self.assertLess(finding.marks[0].box.left, .22)
-        self.assertEqual(inspect_page(0, [line("Pay to the order of", .1, .5)]).status, "Needs a look")
+        self.assertEqual(inspect_page(0, [line("Pay to the order of", .1, .5)]).status, "Needs Review")
         self.assertEqual(inspect_page(0, [line("Invoice number 123456780", .1, .6)]).status, "Unrelated")
 
     def test_stability_mixed_names_unrelated_restart_and_catchup(self):
@@ -587,3 +587,56 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         self.assertEqual(new_pixels[point].max(), 0)
         self.assertEqual(old_pixels[point].min(), 255)
         self.assertEqual(self.queue.file(record, finding.marks, "Example LLC", "000482"), original)
+
+    def test_uncertain_scans_can_be_marked_unrelated_from_queue_and_preview(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from app.gui.pages.check_scans import CheckInbox, CheckReview
+
+        app = QApplication.instance() or QApplication([])
+        first = self.inbox / "first scan.pdf"
+        second = self.inbox / "second scan.pdf"
+        first.write_bytes(self.source)
+        second.write_bytes(self.source + b"\n% separate scan\n")
+        self.index(ScanIntake(self.queue, lambda _: []))
+        with self.queue.connect() as db:
+            db.execute(
+                "UPDATE scans SET status='Needs a look', finding=json_set(finding,'$.status','Needs a look')"
+            )
+        queue = ScanQueue(self.inbox, self.queue.database)
+        self.assertEqual([r["status"] for r in queue.records()], ["Needs Review", "Needs Review"])
+        self.assertEqual(decode_finding(queue.records()[0]).status, "Needs Review")
+        self.assertFalse(queue.mark_unrelated({"name": first.name, "digest": "stale"}))
+
+        def mark_in_preview(viewer):
+            for button in viewer.findChildren(QPushButton):
+                if button.text() == "Not a check":
+                    button.click()
+                    return
+            self.fail("The preview is missing its classification action")
+
+        with (patch("app.gui.pages.check_scans.start_check_scan_process"),
+              patch.object(CheckReview, "exec", mark_in_preview)):
+            view = CheckInbox(queue)
+            self.addCleanup(view.close)
+            self.assertEqual(view.listing.count(), 2)
+            self.assertTrue(view.listing.currentItem().text().startswith("Needs Review"))
+            view.not_a_check_button.click()
+            self.assertEqual(view.listing.count(), 1)
+            view.open_button.click()
+            self.assertEqual(view.listing.count(), 0)
+            view.other.setChecked(True)
+            self.assertEqual(view.listing.count(), 2)
+            self.assertFalse(view.not_a_check_button.isEnabled())
+            statuses = {
+                view.listing.item(i).data(Qt.ItemDataRole.UserRole)["status"]
+                for i in range(view.listing.count())
+            }
+            self.assertEqual(statuses, {"Unrelated"})
+            app.processEvents()
+        reopened = ScanQueue(self.inbox, queue.database)
+        ScanIntake(reopened).poll()
+        self.assertEqual([r["status"] for r in reopened.records(True)], ["Unrelated", "Unrelated"])
+        self.assertEqual(first.read_bytes(), self.source)
+        self.assertTrue(second.is_file())

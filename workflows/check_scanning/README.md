@@ -45,8 +45,11 @@ long numeric band when OCR joins the fields. The band can occur anywhere on a
 page. A weak band, pay-to-order text alone or an unreadable image needs review.
 Ordinary invoice text alone is ignored. No confidence level files a PDF.
 
-- **Check** and **Needs a look** appear in the queue. **Could not read** indicates
+- **Check** and **Needs Review** appear in the queue. **Could not read** indicates
   an incomplete or unreadable PDF. Replace or resync the source to retry it.
+- Use **Not a check** on the selected queue item or in its preview to mark the
+  scan **Unrelated**. It remains available under **Show all scans**, and the
+  original stays in the PaperCut inbox.
 - **Show all scans** also reveals unrelated, dismissed, and filed items. During
   the pilot, reopen a filed scan to test another redaction. When the desired
   filename exists, approval adds a number such as `(2)` to the new test copy.
