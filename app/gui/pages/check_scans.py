@@ -307,7 +307,7 @@ class CheckInbox(QDialog):
         self.listing.itemDoubleClicked.connect(lambda *_: self.review())
         self.other.toggled.connect(self.refresh)
         try:
-            self.worker = start_check_scan_process([sys.executable, "-m", "workflows.check_scanning.watch"])
+            self.worker = start_check_scan_process("workflows.check_scanning.watch")
         except OSError:
             self.worker = None
         self.timer = QTimer(self, interval=3000)

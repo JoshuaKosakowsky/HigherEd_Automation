@@ -1014,6 +1014,8 @@ class GuiPowerShellContractTests(unittest.TestCase):
         self.assertIn(".venv\\Scripts\\pythonw.exe", self.shortcut)
         self.assertIn("$shortcut.TargetPath = $windowedPython", self.shortcut)
         self.assertIn("-m app.gui.runtime_check --launch", self.shortcut)
+        self.assertIn("$shortcut.TargetPath = $baseWindowedPython", self.shortcut)
+        self.assertIn("-m app.gui.runtime_check --bootstrap", self.shortcut)
         self.assertIn("$shortcut.WorkingDirectory = $ProjectRoot", self.shortcut)
 
     def test_setup_verifies_qt_widgets_dependency(self) -> None:

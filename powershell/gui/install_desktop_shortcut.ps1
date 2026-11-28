@@ -24,6 +24,20 @@ $shortcut.TargetPath = $windowedPython
 $shortcut.Arguments = "-m app.gui.runtime_check --launch"
 $shortcut.WorkingDirectory = $ProjectRoot
 $shortcut.Description = "Open Mines Bursar Automation"
+
+$venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
+    $probe = 'import json, sys; from pathlib import Path; print(json.dumps({"Path": str(Path(sys._base_executable).with_name("pythonw.exe"))}))'
+    $interpreter = & $venvPython -c $probe
+    if ($LASTEXITCODE -eq 0 -and $interpreter) {
+        $baseWindowedPython = ($interpreter | Select-Object -Last 1 | ConvertFrom-Json).Path
+        if ($baseWindowedPython -ne $windowedPython -and
+            (Test-Path -LiteralPath $baseWindowedPython -PathType Leaf)) {
+            $shortcut.TargetPath = $baseWindowedPython
+            $shortcut.Arguments = "-m app.gui.runtime_check --bootstrap"
+        }
+    }
+}
 $shortcut.Save()
 
 Write-Host "Desktop shortcut installed: $shortcutPath"

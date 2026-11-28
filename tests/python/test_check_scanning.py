@@ -16,6 +16,7 @@ import numpy as np
 import pypdfium2 as pdf
 
 from shared.mines_paths import get_cashnet_copies_directory, get_papercut_scan_directory
+from app.gui.services.process import python_module_launch
 from workflows.check_scanning.detection import Box, Line, Mark, inspect_page
 from workflows.check_scanning.documents import inspect_pdf, page_count, page_pixels, redact_pdf
 from workflows.check_scanning.intake import ScanIntake, ScanQueue, decode_finding, output_name
@@ -283,11 +284,13 @@ class CheckScanTests(unittest.TestCase):
     def test_check_scan_process_uses_no_console_flag_on_windows(self):
         from app.gui.services import check_scanning
 
-        command = ["python.exe", "-m", "workflows.check_scanning.watch"]
+        module = "workflows.check_scanning.watch"
+        command, environment = python_module_launch(module)
         with (patch.object(check_scanning.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True),
               patch.object(check_scanning.subprocess, "Popen") as launch):
-            self.assertIs(check_scanning.start_check_scan_process(command), launch.return_value)
+            self.assertIs(check_scanning.start_check_scan_process(module), launch.return_value)
             self.assertEqual(launch.call_args.args, (command,))
+            self.assertEqual(launch.call_args.kwargs["env"], environment)
             self.assertEqual(launch.call_args.kwargs["creationflags"], 0x08000000)
 
     def test_windows_pdfium_startup_primes_the_platform_cache_with_native_version(self):
@@ -311,8 +314,10 @@ class CheckScanTests(unittest.TestCase):
             load.assert_called_once_with("pypdfium2")
 
     @unittest.skipUnless(sys.platform == "win32", "Windows console discovery is Windows-only")
-    def test_windows_check_scan_imports_do_not_run_the_ver_shell_command(self):
+    def test_windows_check_scan_imports_keep_the_venv_without_a_console(self):
         probe = r"""
+import ctypes
+from pathlib import Path
 import platform
 import re
 import sys
@@ -326,10 +331,14 @@ from workflows.check_scanning import intake
 import rapidocr
 import onnxruntime
 assert platform.system() == "Windows"
+assert Path(sys.prefix).resolve() == Path(sys.argv[1]).resolve()
+assert not ctypes.windll.kernel32.GetConsoleWindow()
 """
+        command, environment = python_module_launch("workflows.check_scanning.watch")
         result = subprocess.run(
-            [sys.executable, "-c", probe], cwd=Path(__file__).resolve().parents[2],
-            capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+            [command[0], "-c", probe, sys.prefix], cwd=Path(__file__).resolve().parents[2],
+            env=environment, capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 

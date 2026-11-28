@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from app.gui import runtime_check
 from app.gui.runtime_check import require_windows_plugin
+from app.gui.services import process
 
 
 class WindowsPluginTests(unittest.TestCase):
@@ -35,6 +36,27 @@ class WindowsPluginTests(unittest.TestCase):
 
 
 class DesktopShortcutTests(unittest.TestCase):
+    def test_native_launch_preserves_windows_venv(self):
+        windows = SimpleNamespace(
+            platform="win32", executable=r"C:\Program Files\Python311\pythonw.exe",
+            _base_executable=r"C:\Program Files\Python311\pythonw.exe",
+            prefix=r"C:\Program Files\Python311", base_prefix=r"C:\Program Files\Python311",
+        )
+        venv = Path(r"C:\School\Project\.venv\Scripts\pythonw.exe")
+        with patch.object(process, "sys", windows):
+            command, environment = process.python_module_launch(
+                "app.gui.runtime_check", "--launch", venv_executable=venv,
+            )
+        self.assertEqual(command, [windows.executable, "-m", "app.gui.runtime_check", "--launch"])
+        self.assertEqual(environment["__PYVENV_LAUNCHER__"], str(venv))
+
+        windows.executable = str(venv)
+        windows.prefix = r"C:\School\Project\.venv"
+        with patch.object(process, "sys", windows):
+            command, environment = process.python_module_launch("workflows.check_scanning.watch")
+        self.assertEqual(command, [windows._base_executable, "-m", "workflows.check_scanning.watch"])
+        self.assertEqual(environment["__PYVENV_LAUNCHER__"], str(venv))
+
     def test_launch_writes_probe_diagnostics_and_runs_gui_without_shortcut_args(self):
         with TemporaryDirectory() as directory:
             settings = Path(directory) / "HigherEdAutomation" / "user-settings.json"
@@ -50,7 +72,7 @@ class DesktopShortcutTests(unittest.TestCase):
                   patch.dict(sys.modules, {"app.gui.main": SimpleNamespace(main=gui_main)})):
                 self.assertEqual(runtime_check.launch_desktop(), 0)
 
-            self.assertEqual(launch.call_args.args[0], [sys.executable, "-m", "app.gui.runtime_check"])
+            self.assertEqual(launch.call_args.args[0], process.python_module_launch("app.gui.runtime_check")[0])
             self.assertEqual(launch.call_args.kwargs["creationflags"], 0x08000000)
             self.assertIn("verification succeeded", settings.with_name("gui-runtime-check.log").read_text())
             gui_main.assert_called_once_with([])
@@ -69,6 +91,25 @@ class DesktopShortcutTests(unittest.TestCase):
             gui_main.assert_not_called()
             self.assertIn("setup.ps1 -RepairGui", error.call_args.args[0])
             self.assertIn(str(settings.with_name("gui-runtime-check.log")), error.call_args.args[0])
+
+    def test_shortcut_bootstrap_uses_the_project_virtual_environment(self):
+        with TemporaryDirectory() as directory:
+            project = Path(directory)
+            venv = project / ".venv"
+            venv.mkdir()
+            (venv / "pyvenv.cfg").touch()
+            command = ["base-pythonw.exe", "-m", "app.gui.runtime_check", "--launch"]
+            environment = {"__PYVENV_LAUNCHER__": str(venv / "Scripts" / "pythonw.exe")}
+            with (patch.object(runtime_check, "PROJECT_ROOT", project),
+                  patch.object(runtime_check, "python_module_launch", return_value=(command, environment)) as build,
+                  patch.object(runtime_check.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as launch):
+                self.assertEqual(runtime_check.bootstrap_desktop(), 0)
+
+            build.assert_called_once_with(
+                "app.gui.runtime_check", "--launch", venv_executable=venv / "Scripts" / "pythonw.exe",
+            )
+            self.assertEqual(launch.call_args.args[0], command)
+            self.assertEqual(launch.call_args.kwargs["env"], environment)
 
 
 if __name__ == "__main__":

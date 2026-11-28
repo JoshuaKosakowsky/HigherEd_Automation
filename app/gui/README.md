@@ -76,8 +76,9 @@ These display changes do not modify shared calendar data or workflow rules.
   `progress.py` renders them in one shared Qt widget for all workflows.
 - workflow-specific service adapters translate form values into existing
   pipeline configuration. They do not reimplement processing rules.
-- The Windows desktop shortcut starts the repository's `pythonw.exe` directly.
-  Rerun setup if your desktop shortcut still opens PowerShell. Use
+- The Windows desktop shortcut uses the installed windowed interpreter to
+  launch the app in the repository's virtual environment. Rerun setup to
+  refresh the shortcut after a launcher update. Use
   `launcher/run_gui.ps1 -Console` for a terminal launch.
 - Setup installs pinned `PySide6-Essentials` and verifies a real Qt window.
   The GUI launcher verifies native plugin initialization using

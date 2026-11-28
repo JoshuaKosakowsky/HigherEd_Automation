@@ -3,18 +3,20 @@
 from importlib import import_module
 from pathlib import Path
 import subprocess
-import sys
 
 from app.gui.models import WorkflowContext, WorkflowResult
+from app.gui.services.process import python_module_launch
 from shared.mines_paths import get_papercut_scan_directory
 from shared.workflow_errors import WorkflowUserError
 
 
-def start_check_scan_process(command: list[str]) -> subprocess.Popen:
+def start_check_scan_process(module: str) -> subprocess.Popen:
     """Start a review or support process without a Windows console."""
+    command, environment = python_module_launch(module)
     return subprocess.Popen(
         command,
         cwd=Path(__file__).resolve().parents[3],
+        env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -38,7 +40,7 @@ def run_check_scanning(context: WorkflowContext) -> WorkflowResult:
         ) from error
     intake.queue_path()
     context.progress.report("Reviewing PaperCut scans in the check queue")
-    with start_check_scan_process([sys.executable, "-m", "app.gui.pages.check_scans"]) as process:
+    with start_check_scan_process("app.gui.pages.check_scans") as process:
         code = process.wait()
     return WorkflowResult(code == 0, "Check Scan Review closed." if code == 0
                           else "Check Scan Review could not run. Verify setup and local OneDrive access.")

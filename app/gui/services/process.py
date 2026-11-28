@@ -3,14 +3,31 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 from threading import Thread
 
 from shared.progress import ProgressReporter, ProgressUpdate
 
 
 PROGRESS_MARKER = "HIGHERED_PROGRESS="
+
+
+def python_module_launch(
+    module: str, *arguments: str, venv_executable: Path | None = None,
+) -> tuple[list[str], dict[str, str] | None]:
+    """Build a Python command that preserves the virtual environment."""
+    executable = sys.executable
+    environment = None
+    if sys.platform == "win32" and (venv_executable is not None or sys.prefix != sys.base_prefix):
+        # The Windows venv redirector creates another process without passing
+        # CREATE_NO_WINDOW on. Invoke the native interpreter and give CPython
+        # the same virtual environment path that its redirector would supply.
+        environment = dict(os.environ, __PYVENV_LAUNCHER__=str(venv_executable or executable))
+        executable = sys._base_executable
+    return [executable, "-m", module, *arguments], environment
 
 
 def _report_marker(line: str, reporter: ProgressReporter) -> None:
