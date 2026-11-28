@@ -47,13 +47,14 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
 
 - **Check** and **Needs Review** appear in the queue. **Could not read** indicates
   an incomplete or unreadable PDF. Replace or resync the source to retry it.
-- Use **Not a check** on the selected queue item or in its preview to mark the
-  scan **Unrelated**. It remains available under **Show all scans**, and the
-  original stays in the PaperCut inbox.
-- **Show all scans** also reveals unrelated, dismissed, and filed items. During
-  the pilot, reopen a filed scan to test another redaction. When the desired
-  filename exists, approval adds a number such as `(2)` to the new test copy.
-  Dismissal leaves the source in place.
+- Use **Not a check** on the highlighted queue item or next to **Skip for now**
+  in the preview to mark the scan **Unrelated**. It remains available under
+  **Show all scans**, and the original stays in the PaperCut inbox. The action
+  is disabled for scans already filed or marked unrelated.
+- **Show all scans** also reveals unrelated, previously dismissed, and filed
+  items. During the pilot, reopen a filed scan to test another redaction. When
+  the desired filename exists, approval adds a number such as `(2)` to the new
+  test copy.
 - Filter by filename or sort the list by filename or scan date. Check the files
   you want to process and choose **Review queue**. **Select shown** checks
   the visible files. Checked files stay selected through filtering and sorting.

@@ -127,11 +127,6 @@ class ScanQueue:
             raise ValueError("The source PDF is incomplete. Wait for the scan to finish syncing.")
         return data
 
-    def dismiss(self, record):
-        with self.connect() as db:
-            db.execute("UPDATE scans SET status='Dismissed' WHERE name=? AND digest=? AND status!='Filed'",
-                       (record["name"], record["digest"]))
-
     def mark_unrelated(self, record) -> bool:
         with self.connect() as db:
             result = db.execute(

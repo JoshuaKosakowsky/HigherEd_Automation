@@ -559,7 +559,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
 
     def test_filed_scan_can_be_reviewed_again_and_saves_numbered_test_copy(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QPushButton
         from app.gui.pages.check_scans import CheckInbox, CheckReview
 
         app = QApplication.instance() or QApplication([])
@@ -574,6 +574,9 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
 
         def approve_again(viewer):
             self.assertEqual(viewer.record["status"], "Filed")
+            buttons = {button.text(): button for button in viewer.findChildren(QPushButton)}
+            self.assertIn("Not a check", buttons)
+            self.assertFalse(buttons["Not a check"].isEnabled())
             viewer.issuer.setText("Example LLC")
             self.assertEqual(viewer.destination.text(), str(repeated))
             viewer.show_page(1)
@@ -628,11 +631,13 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         self.assertFalse(queue.mark_unrelated({"name": first.name, "digest": "stale"}))
 
         def mark_in_preview(viewer):
-            for button in viewer.findChildren(QPushButton):
-                if button.text() == "Not a check":
-                    button.click()
-                    return
-            self.fail("The preview is missing its classification action")
+            layout = viewer.layout()
+            actions = layout.itemAt(layout.count() - 1).layout()
+            skip = actions.itemAt(0).widget()
+            not_a_check = actions.itemAt(1).widget()
+            self.assertEqual((skip.text(), not_a_check.text()), ("Skip for now", "Not a check"))
+            self.assertTrue(not_a_check.isEnabled())
+            not_a_check.click()
 
         def verify_summary(inbox, skipped, unrelated):
             self.assertEqual(skipped, [])
@@ -643,6 +648,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
               patch.object(CheckInbox, "show_completion", verify_summary)):
             view = CheckInbox(queue)
             self.addCleanup(view.close)
+            self.assertNotIn("Dismiss from queue", [button.text() for button in view.findChildren(QPushButton)])
             self.assertEqual(view.listing.count(), 2)
             self.assertTrue(view.listing.currentItem().text().startswith("Needs Review"))
             view.select_shown_button.click()

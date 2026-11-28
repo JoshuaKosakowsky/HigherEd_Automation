@@ -222,8 +222,10 @@ class CheckReview(QDialog):
         actions = QHBoxLayout()
         layout.addLayout(actions)
         control("Skip for now", self.skip, actions)
-        if record["status"] not in ("Filed", "Unrelated"):
-            control("Not a check", self.mark_not_a_check, actions)
+        not_a_check = control("Not a check", self.mark_not_a_check, actions)
+        if record["status"] in ("Filed", "Unrelated"):
+            not_a_check.setEnabled(False)
+            not_a_check.setToolTip(f"This scan is already {record['status'].lower()}.")
         actions.addStretch()
         self.approve = control("Approve && Next", self.save, actions)
         for signal in (self.issuer.textChanged, self.number.textChanged):
@@ -335,7 +337,6 @@ class CheckInbox(QDialog):
         actions = QHBoxLayout()
         layout.addLayout(actions)
         self.open_button = control("Review queue", lambda: self.review(), actions)
-        self.dismiss_button = control("Dismiss from queue", self.dismiss, actions)
         self.not_a_check_button = control("Not a check", self.mark_selected_unrelated, actions)
         actions.addStretch()
         control("Close", self.close, actions)
@@ -412,7 +413,6 @@ class CheckInbox(QDialog):
         self.open_button.setEnabled(bool(count))
         self.select_shown_button.setEnabled(bool(self.visible_items))
         self.clear_selection_button.setEnabled(bool(count))
-        self.dismiss_button.setEnabled(item is not None)
         self.not_a_check_button.setEnabled(
             item is not None and item.data(Qt.ItemDataRole.UserRole)["status"] not in ("Filed", "Unrelated")
         )
@@ -438,15 +438,6 @@ class CheckInbox(QDialog):
             for key, item in self.visible_items.items():
                 item.setCheckState(Qt.CheckState.Checked if key in self.checked else Qt.CheckState.Unchecked)
         self.update_actions()
-
-    def dismiss(self):
-        item = self.listing.currentItem()
-        if item:
-            record = item.data(Qt.ItemDataRole.UserRole)
-            self.queue.dismiss(record)
-            self.checked.discard(scan_key(record))
-            self.refresh()
-            self.sync_checkboxes()
 
     def mark_selected_unrelated(self):
         item = self.listing.currentItem()
