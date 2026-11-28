@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from importlib import import_module
 import math
 from pathlib import Path
 from threading import Lock
+from types import ModuleType
 
 import numpy as np
-import pypdfium2 as pdf
 
+from shared.windows_platform import prime_windows_platform
 from .detection import Box, Finding, Line, Mark, combine_pages, inspect_page
 from .micr import transit_bands
+
+
+def _load_pdfium() -> ModuleType:
+    # PDFium and ONNX Runtime both consult Python's platform cache.
+    prime_windows_platform()
+    return import_module("pypdfium2")
+
+
+pdf = _load_pdfium()
 
 # PDFium cannot be called concurrently, even for different documents. Keep
 # OCR outside the lock so an arriving scan does not block the cashier's preview.

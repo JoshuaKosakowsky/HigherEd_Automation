@@ -1009,10 +1009,12 @@ class GuiPowerShellContractTests(unittest.TestCase):
         self.assertIn('-m", "app.gui.main', self.launcher)
         self.assertIn("-WorkingDirectory $projectRoot", self.launcher)
 
-    def test_shortcut_uses_hidden_powershell_and_gui_launcher(self) -> None:
+    def test_shortcut_uses_windowed_python_and_runtime_launcher(self) -> None:
         self.assertIn("Mines Bursar Automation.lnk", self.shortcut)
-        self.assertIn("-WindowStyle Hidden", self.shortcut)
-        self.assertIn("launcher\\run_gui.ps1", self.shortcut)
+        self.assertIn(".venv\\Scripts\\pythonw.exe", self.shortcut)
+        self.assertIn("$shortcut.TargetPath = $windowedPython", self.shortcut)
+        self.assertIn("-m app.gui.runtime_check --launch", self.shortcut)
+        self.assertIn("$shortcut.WorkingDirectory = $ProjectRoot", self.shortcut)
 
     def test_setup_verifies_qt_widgets_dependency(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

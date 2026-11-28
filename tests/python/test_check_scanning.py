@@ -4,7 +4,10 @@ from datetime import date
 import io
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -286,6 +289,49 @@ class CheckScanTests(unittest.TestCase):
             self.assertIs(check_scanning.start_check_scan_process(command), launch.return_value)
             self.assertEqual(launch.call_args.args, (command,))
             self.assertEqual(launch.call_args.kwargs["creationflags"], 0x08000000)
+
+    def test_windows_pdfium_startup_primes_the_platform_cache_with_native_version(self):
+        from shared import windows_platform
+        from workflows.check_scanning import documents
+
+        windows = SimpleNamespace(
+            platform="win32", getwindowsversion=lambda: SimpleNamespace(platform_version=(10, 0, 26100))
+        )
+        original_lookup = windows_platform.platform._syscmd_ver
+
+        def check_lookup():
+            self.assertEqual(windows_platform.platform._syscmd_ver(), ("", "", "10.0.26100"))
+
+        with (patch.object(windows_platform, "sys", windows),
+              patch.object(windows_platform.platform, "uname", side_effect=check_lookup) as uname,
+              patch.object(documents, "import_module", return_value=pdf) as load):
+            self.assertIs(documents._load_pdfium(), pdf)
+            self.assertIs(windows_platform.platform._syscmd_ver, original_lookup)
+            uname.assert_called_once()
+            load.assert_called_once_with("pypdfium2")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows console discovery is Windows-only")
+    def test_windows_check_scan_imports_do_not_run_the_ver_shell_command(self):
+        probe = r"""
+import platform
+import re
+import sys
+
+def check_for_console_probe(event, args):
+    if event == "subprocess.Popen" and re.search(r"\bver\b", str(args[1]), flags=re.I):
+        raise AssertionError("Check scan startup attempted to run the Windows ver command")
+
+sys.addaudithook(check_for_console_probe)
+from workflows.check_scanning import intake
+import rapidocr
+import onnxruntime
+assert platform.system() == "Windows"
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", probe], cwd=Path(__file__).resolve().parents[2],
+            capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_empty_inbox_waits_for_scans(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

@@ -76,10 +76,12 @@ These display changes do not modify shared calendar data or workflow rules.
   `progress.py` renders them in one shared Qt widget for all workflows.
 - workflow-specific service adapters translate form values into existing
   pipeline configuration. They do not reimplement processing rules.
-- `launcher/run_gui.ps1` starts the app with the repository virtual environment.
+- The Windows desktop shortcut starts the repository's `pythonw.exe` directly.
+  Rerun setup if your desktop shortcut still opens PowerShell. Use
+  `launcher/run_gui.ps1 -Console` for a terminal launch.
 - Setup installs pinned `PySide6-Essentials` and verifies a real Qt window.
   The GUI launcher verifies native plugin initialization using
-  `app.gui.runtime_check` before starting windowed Python. Diagnostics go to
+  `app.gui.runtime_check` before opening the app. Diagnostics go to
   `%LOCALAPPDATA%\HigherEdAutomation\gui-runtime-check.log`.
   Run `setup.ps1 -RepairGui` to re-download the pinned GUI runtime when files
   are missing or damaged. See the root README's Qt troubleshooting instructions.
