@@ -38,6 +38,11 @@ def scan_key(record) -> tuple[str, str]:
     return record["name"], record["digest"]
 
 
+def recycle_file(path: Path) -> bool:
+    recycled, _ = QFile.moveToTrash(str(path))
+    return recycled
+
+
 class PageCanvas(QWidget):
     def __init__(self, review):
         super().__init__()
@@ -157,9 +162,11 @@ class PageCanvas(QWidget):
 
 
 class CheckReview(QDialog):
-    def __init__(self, parent, queue, record, previous_output: Path | None = None, progress: str = ""):
+    def __init__(self, parent, queue, record, previous_output: Path | None = None, progress: str = "",
+                 *, classify=None):
         super().__init__(parent)
         self.queue, self.record = queue, record
+        self.classify = classify
         self.filing: FiledScan | None = None
         self.marked_unrelated = False
         self.skipped = False
@@ -223,9 +230,9 @@ class CheckReview(QDialog):
         layout.addLayout(actions)
         control("Skip for now", self.skip, actions)
         not_a_check = control("Not a check", self.mark_not_a_check, actions)
-        if record["status"] in ("Filed", "Unrelated"):
+        if record["status"] == "Unrelated":
             not_a_check.setEnabled(False)
-            not_a_check.setToolTip(f"This scan is already {record['status'].lower()}.")
+            not_a_check.setToolTip("This scan is already marked unrelated.")
         actions.addStretch()
         self.approve = control("Approve && Next", self.save, actions)
         for signal in (self.issuer.textChanged, self.number.textChanged):
@@ -294,8 +301,9 @@ class CheckReview(QDialog):
         self.accept()
 
     def mark_not_a_check(self):
-        self.marked_unrelated = True
-        self.reject()
+        if self.classify is not None and self.classify(self.record, self):
+            self.marked_unrelated = True
+            self.reject()
 
     def skip(self):
         self.skipped = True
@@ -414,7 +422,7 @@ class CheckInbox(QDialog):
         self.select_shown_button.setEnabled(bool(self.visible_items))
         self.clear_selection_button.setEnabled(bool(count))
         self.not_a_check_button.setEnabled(
-            item is not None and item.data(Qt.ItemDataRole.UserRole)["status"] not in ("Filed", "Unrelated")
+            item is not None and item.data(Qt.ItemDataRole.UserRole)["status"] != "Unrelated"
         )
 
     def update_selection(self, item):
@@ -444,19 +452,68 @@ class CheckInbox(QDialog):
         if item:
             self.mark_unrelated(item.data(Qt.ItemDataRole.UserRole))
 
-    def mark_unrelated(self, record):
+    def mark_unrelated(self, record, dialog: QDialog | None = None) -> bool:
+        parent = self if dialog is None else dialog
         try:
+            if record["status"] == "Filed":
+                return self.correct_filing(record, parent)
             changed = self.queue.mark_unrelated(record)
         except sqlite3.Error:
-            QMessageBox.warning(self, "Queue unavailable", "Check local storage and try again.")
+            QMessageBox.warning(parent, "Queue unavailable", "Check local storage and try again.")
+            return False
+        except OSError:
+            QMessageBox.warning(parent, "Scan unavailable", "Check that the original scan is synced and try again.")
+            return False
+        except ValueError as error:
+            QMessageBox.warning(parent, "Filing correction stopped", str(error))
             return False
         if changed:
             self.checked.discard(scan_key(record))
         self.refresh()
         self.sync_checkboxes()
         if not changed:
-            QMessageBox.information(self, "Scan changed", "Select the updated scan in the queue to review it.")
+            QMessageBox.information(parent, "Scan changed", "Select the updated scan in the queue to review it.")
         return changed
+
+    def correct_filing(self, record, parent: QDialog) -> bool:
+        digest = record["digest"]
+        copies = self.queue.filed_copies(digest)
+        prompt = QMessageBox(
+            QMessageBox.Icon.Warning, "Correct mistaken filing?",
+            f"Mark {record['name']} as Unrelated?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, parent,
+        )
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        prompt.button(QMessageBox.StandardButton.Yes).setText("Correct filing")
+        prompt.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if copies:
+            prompt.setInformativeText(
+                "The original stays in PaperCut. Verified filed copies listed under Show Details "
+                "will move to the Recycle Bin. "
+                "Older copies without a filing record may need manual cleanup."
+            )
+            prompt.setDetailedText("\n".join(str(path) for path in copies))
+        else:
+            prompt.setInformativeText(
+                "The original stays in PaperCut. Check the filing folder for copies that need manual removal."
+            )
+        if prompt.exec() != QMessageBox.StandardButton.Yes.value:
+            return False
+
+        remaining = self.queue.correct_filing(record, copies, recycle_file)
+        self.saved = [filing for filing in self.saved if filing.source_digest != digest]
+        self.checked.discard(scan_key(record))
+        self.refresh()
+        self.sync_checkboxes()
+        if remaining:
+            warning = QMessageBox(
+                QMessageBox.Icon.Warning, "Some filed copies need manual review",
+                "The scan is now Unrelated. Review the listed filed copies and remove them manually if needed.",
+                QMessageBox.StandardButton.Ok, parent,
+            )
+            warning.setDetailedText("\n".join(f"{path} — {reason}" for path, reason in remaining.items()))
+            warning.exec()
+        return True
 
     def review_one(self, item):
         self.review((scan_key(item.data(Qt.ItemDataRole.UserRole)),))
@@ -481,7 +538,10 @@ class CheckInbox(QDialog):
                 continue
             try:
                 previous_output = self.saved[-1].output if self.saved else None
-                viewer = CheckReview(self, self.queue, record, previous_output, f"Reviewing {index} of {len(keys)}")
+                viewer = CheckReview(
+                    self, self.queue, record, previous_output, f"Reviewing {index} of {len(keys)}",
+                    classify=self.mark_unrelated,
+                )
             except (OSError, ValueError, RuntimeError):
                 skipped.append(f"{record['name']} (scan could not be opened)")
                 self.checked.discard(key)
@@ -490,10 +550,7 @@ class CheckInbox(QDialog):
             if viewer.filing is not None:
                 self.saved.append(viewer.filing)
             elif viewer.marked_unrelated:
-                if self.mark_unrelated(record):
-                    unrelated.append(record["name"])
-                else:
-                    skipped.append(record["name"])
+                unrelated.append(record["name"])
             elif viewer.skipped:
                 skipped.append(record["name"])
             else:
@@ -561,12 +618,11 @@ class CheckInbox(QDialog):
         for name, filing in originals.items():
             try:
                 original = self.queue.original_for_recycling(filing)
-                recycled, _ = QFile.moveToTrash(str(original))
-                if not recycled:
+                if not recycle_file(original):
                     kept.append(f"{name} — Could not move this scan to the Recycle Bin.")
             except ValueError as error:
                 kept.append(f"{name} — {error}")
-            except OSError:
+            except (OSError, sqlite3.Error):
                 kept.append(f"{name} — The original scan could not be verified or moved.")
         if kept:
             warning = QMessageBox(QMessageBox.Icon.Warning, "Some originals were kept",

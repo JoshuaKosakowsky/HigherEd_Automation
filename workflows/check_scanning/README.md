@@ -49,8 +49,12 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
   an incomplete or unreadable PDF. Replace or resync the source to retry it.
 - Use **Not a check** on the highlighted queue item or next to **Skip for now**
   in the preview to mark the scan **Unrelated**. It remains available under
-  **Show all scans**, and the original stays in the PaperCut inbox. The action
-  is disabled for scans already filed or marked unrelated.
+  **Show all scans**, and the original stays in the PaperCut inbox.
+- For a mistakenly **Filed** scan, **Not a check** asks you to confirm the
+  correction. It moves recorded copies from the filing folder to the Recycle
+  Bin if they still match the saved files. Review any copies the app reports
+  it could not verify or recycle. Older numbered pilot copies saved before
+  repeat filings were recorded may need manual cleanup.
 - **Show all scans** also reveals unrelated, previously dismissed, and filed
   items. During the pilot, reopen a filed scan to test another redaction. When
   the desired filename exists, approval adds a number such as `(2)` to the new

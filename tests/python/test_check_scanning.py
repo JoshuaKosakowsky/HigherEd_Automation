@@ -241,6 +241,61 @@ class CheckScanTests(unittest.TestCase):
             self.queue.original_for_recycling(filing)
         self.assertTrue(original.is_file())
 
+    def test_correct_filing_recycles_verified_copies_and_remembers_the_classification(self):
+        original = self.inbox / "packet.pdf"
+        original.write_bytes(self.source)
+        self.index(ScanIntake(self.queue))
+        record, = self.queue.records()
+        finding = decode_finding(record)
+        first = self.queue.file(record, finding.marks, "Example LLC", "001")
+        filed, = self.queue.records(True)
+        confirmed = self.queue.filed_copies(filed["digest"])
+        repeat = self.queue.file(filed, finding.marks, "Example LLC", "001")
+        changed = self.queue.file(filed, finding.marks, "Example LLC", "001")
+        blocked = self.queue.file(filed, finding.marks, "Example LLC", "001")
+        changed.output.write_bytes(b"replacement PDF")
+        untracked = first.output.with_stem(f"{first.output.stem} (5)")
+        untracked.write_bytes(first.output.read_bytes())
+        recycled = self.root / "recycled"
+        recycled.mkdir()
+
+        def recycle(path):
+            if path == blocked.output:
+                return False
+            path.rename(recycled / path.name)
+            return True
+
+        with self.assertRaisesRegex(ValueError, "filed copies changed"):
+            self.queue.correct_filing(filed, confirmed, recycle)
+        self.assertEqual(list(recycled.iterdir()), [])
+        copies = self.queue.filed_copies(filed["digest"])
+        remaining = self.queue.correct_filing(filed, copies, recycle)
+        self.assertEqual(remaining, {
+            changed.output: "The redacted copy changed after approval.",
+            blocked.output: "Could not move this copy to the Recycle Bin.",
+        })
+        self.assertEqual({path.name for path in recycled.iterdir()}, {first.output.name, repeat.output.name})
+        self.assertEqual(changed.output.read_bytes(), b"replacement PDF")
+        self.assertTrue(untracked.is_file())
+        self.assertEqual(original.read_bytes(), self.source)
+        self.assertEqual(self.queue.filed_copies(filed["digest"]), {})
+        self.assertEqual(self.queue.records(), [])
+        self.assertEqual(self.queue.records(True)[0]["status"], "Unrelated")
+        with self.assertRaisesRegex(ValueError, "filing was withdrawn"):
+            self.queue.original_for_recycling(blocked)
+        with self.assertRaisesRegex(ValueError, "queue entry changed"):
+            self.queue.file(filed, finding.marks, "Example LLC", "001")
+
+        renamed = self.inbox / "renamed packet.pdf"
+        original.rename(renamed)
+        reopened = ScanQueue(self.inbox, self.queue.database)
+        self.index(ScanIntake(reopened, lambda _: []))
+        corrected, = reopened.records(True)
+        self.assertEqual((corrected["name"], corrected["status"]), (renamed.name, "Unrelated"))
+        new_filing = reopened.file(corrected, finding.marks, "Example LLC", "001")
+        self.assertEqual(new_filing.output, first.output)
+        self.assertEqual(reopened.original_for_recycling(new_filing), renamed)
+
     def test_hidden_text_attachment_and_rotated_crop_do_not_survive_as_source_objects(self):
         with pdf.PdfDocument(pdf_with_invisible_text()) as doc:
             doc[0].set_cropbox(2, 4, 500, 660)
@@ -664,7 +719,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             self.assertEqual(viewer.record["status"], "Filed")
             buttons = {button.text(): button for button in viewer.findChildren(QPushButton)}
             self.assertIn("Not a check", buttons)
-            self.assertFalse(buttons["Not a check"].isEnabled())
+            self.assertTrue(buttons["Not a check"].isEnabled())
             viewer.issuer.setText("Example LLC")
             self.assertEqual(viewer.destination.text(), str(repeated))
             viewer.show_page(1)
@@ -696,6 +751,63 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         self.assertEqual(new_pixels[point].max(), 0)
         self.assertEqual(old_pixels[point].min(), 255)
         self.assertEqual(self.queue.file(record, finding.marks, "Example LLC", "000482").output, original)
+
+    def test_filed_scan_can_be_marked_unrelated_from_preview(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+        from app.gui.pages.check_scans import CheckInbox, CheckReview
+
+        app = QApplication.instance() or QApplication([])
+        original = self.inbox / "packet.pdf"
+        original.write_bytes(self.source)
+        self.index(ScanIntake(self.queue))
+        record, = self.queue.records()
+        filing = self.queue.file(record, decode_finding(record).marks, "Example LLC", "001")
+        confirmations = iter((QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes))
+        recycled = self.root / "recycled.pdf"
+        summaries = []
+
+        def mark_in_preview(viewer):
+            button = next(button for button in viewer.findChildren(QPushButton) if button.text() == "Not a check")
+            button.click()
+            self.assertFalse(viewer.marked_unrelated)
+            self.assertTrue(filing.output.is_file())
+            self.assertEqual(self.queue.records(True)[0]["status"], "Filed")
+            button.click()
+            self.assertTrue(viewer.marked_unrelated)
+
+        def confirm(message):
+            self.assertIn(str(filing.output), message.detailedText())
+            self.assertEqual(message.defaultButton().text(), "Cancel")
+            return next(confirmations).value
+
+        def recycle(path):
+            path.rename(recycled)
+            return True
+
+        def read_summary(inbox, skipped, unrelated):
+            summaries.append((inbox.saved.copy(), skipped, unrelated))
+
+        with (patch("app.gui.pages.check_scans.start_check_scan_process"),
+              patch("app.gui.pages.check_scans.recycle_file", side_effect=recycle) as move,
+              patch.object(QMessageBox, "exec", confirm),
+              patch.object(CheckReview, "exec", mark_in_preview),
+              patch.object(CheckInbox, "show_completion", read_summary)):
+            view = CheckInbox(self.queue)
+            self.addCleanup(view.close)
+            view.saved.append(filing)
+            view.other.setChecked(True)
+            self.assertTrue(view.not_a_check_button.isEnabled())
+            view.review_one(view.listing.currentItem())
+            self.assertFalse(view.not_a_check_button.isEnabled())
+            move.assert_called_once_with(filing.output)
+            app.processEvents()
+
+        self.assertEqual(summaries, [([], [], [original.name])])
+        self.assertEqual(self.queue.records(True)[0]["status"], "Unrelated")
+        self.assertTrue(original.is_file())
+        self.assertTrue(recycled.is_file())
+        self.assertFalse(filing.output.exists())
 
     def test_uncertain_scans_can_be_marked_unrelated_from_queue_and_preview(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 import hashlib
@@ -47,6 +48,18 @@ def _file_digest(path: Path) -> str:
 def fingerprint(path: Path) -> tuple[int, int, int]:
     stat = path.stat()
     return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def _verify_filed_copy(path: Path, checksum: str) -> None:
+    if path.parent != check_scan_output_directory() or path.is_symlink():
+        raise ValueError("The redacted copy is outside the filing destination.")
+    try:
+        version = fingerprint(path)
+        unchanged = _file_digest(path) == checksum and fingerprint(path) == version
+    except OSError as error:
+        raise ValueError("The redacted copy is unavailable.") from error
+    if not unchanged or path.is_symlink():
+        raise ValueError("The redacted copy changed after approval.")
 
 
 def inbox_versions(inbox: Path) -> dict[str, tuple[int, int, int]]:
@@ -109,6 +122,10 @@ class ScanQueue:
                 CREATE TABLE IF NOT EXISTS publications (
                     digest TEXT PRIMARY KEY, target TEXT NOT NULL, checksum TEXT NOT NULL,
                     completed INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS repeat_publications (
+                    digest TEXT NOT NULL, target TEXT NOT NULL, checksum TEXT NOT NULL,
+                    PRIMARY KEY (digest, target));
+                CREATE TABLE IF NOT EXISTS filing_corrections (digest TEXT PRIMARY KEY);
             """)
             db.execute("UPDATE scans SET status=? WHERE status=?", (NEEDS_REVIEW, "Needs a look"))
             db.execute(
@@ -149,6 +166,58 @@ class ScanQueue:
             )
             return result.rowcount == 1
 
+    def filed_copies(self, digest: str) -> dict[Path, str]:
+        with self.connect() as db:
+            return self._filed_copies(db, digest)
+
+    @staticmethod
+    def _filed_copies(db: sqlite3.Connection, digest: str) -> dict[Path, str]:
+        rows = db.execute(
+            "SELECT target, checksum FROM publications WHERE digest=? AND completed=1 "
+            "UNION ALL SELECT target, checksum FROM repeat_publications WHERE digest=?",
+            (digest, digest),
+        )
+        return {Path(row["target"]): row["checksum"] for row in rows}
+
+    def correct_filing(
+        self, record, confirmed_copies: dict[Path, str], recycle: Callable[[Path], bool],
+    ) -> dict[Path, str]:
+        """Withdraw a mistaken filing and return copies that need manual cleanup."""
+        digest = record["digest"]
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute("SELECT status FROM scans WHERE name=? AND digest=?", (record["name"], digest))
+            row = current.fetchone()
+            if row is None or row["status"] != "Filed":
+                raise ValueError("The scan status changed. Reopen it to review the current filing.")
+            if self._filed_copies(db, digest) != confirmed_copies:
+                raise ValueError("The filed copies changed. Review the updated list before correcting the filing.")
+            self.source(record)
+
+            db.execute("INSERT OR IGNORE INTO filing_corrections VALUES(?)", (digest,))
+            db.execute("UPDATE scans SET status='Unrelated' WHERE digest=?", (digest,))
+            db.execute("DELETE FROM publications WHERE digest=?", (digest,))
+            db.execute("DELETE FROM repeat_publications WHERE digest=?", (digest,))
+            remaining = {}
+            for path, checksum in confirmed_copies.items():
+                other_owner = db.execute(
+                    "SELECT 1 FROM publications WHERE target=? COLLATE NOCASE "
+                    "UNION ALL SELECT 1 FROM repeat_publications WHERE target=? COLLATE NOCASE LIMIT 1",
+                    (str(path), str(path)),
+                ).fetchone()
+                if other_owner:
+                    remaining[path] = "This path is also recorded for another scan."
+                    continue
+                try:
+                    _verify_filed_copy(path, checksum)
+                    if not recycle(path):
+                        remaining[path] = "Could not move this copy to the Recycle Bin."
+                except ValueError as error:
+                    remaining[path] = str(error)
+                except OSError:
+                    remaining[path] = "Could not move this copy to the Recycle Bin."
+            return remaining
+
     def file(self, record, marks, issuer: str, number: str) -> FiledScan:
         if decode_finding(record).status == "Multiple check pages":
             raise ValueError("Separate or verify this multi-check packet manually before filing.")
@@ -161,6 +230,7 @@ class ScanQueue:
         digest = record["digest"]
         if not repeat_review:
             with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
                 old = db.execute("SELECT * FROM publications WHERE digest=?", (digest,)).fetchone()
                 if old and Path(old["target"]).is_file():
                     old_target = Path(old["target"])
@@ -186,10 +256,12 @@ class ScanQueue:
                 db.execute("BEGIN IMMEDIATE")
                 current = db.execute("SELECT status FROM scans WHERE name=? AND digest=?",
                                      (record["name"], digest)).fetchone()
-                if current is None or (current["status"] == "Filed") != repeat_review:
+                if current is None or current["status"] != record["status"]:
                     raise ValueError("The queue entry changed. Refresh before filing.")
                 if repeat_review:
-                    # Pilot copies leave the initial filing receipt available for deduplication.
+                    # Keep the initial receipt for deduplication and track repeat copies for corrections.
+                    db.execute("INSERT OR REPLACE INTO repeat_publications VALUES(?,?,?)",
+                               (digest, str(target), checksum))
                     _publish_copy(stage, target)
                     return filing
                 pending = db.execute("SELECT target FROM publications WHERE digest=?", (digest,)).fetchone()
@@ -204,6 +276,7 @@ class ScanQueue:
                     raise ValueError("Another review changed this filing. Reopen the queue.")
                 _publish_copy(stage, target)
                 db.execute("UPDATE publications SET completed=1 WHERE digest=?", (digest,))
+                db.execute("DELETE FROM filing_corrections WHERE digest=?", (digest,))
                 db.execute("UPDATE scans SET status='Filed' WHERE digest=?", (digest,))
             return filing
         finally:
@@ -211,15 +284,10 @@ class ScanQueue:
 
     def original_for_recycling(self, filing: FiledScan) -> Path:
         """Verify the filed bytes and the original immediately before recycling."""
-        if filing.output.parent != check_scan_output_directory() or filing.output.is_symlink():
-            raise ValueError("The redacted copy is outside the filing destination.")
-        try:
-            output_digest = _file_digest(filing.output)
-        except OSError as error:
-            raise ValueError("The redacted copy is unavailable.") from error
-        if output_digest != filing.output_digest:
-            raise ValueError("The redacted copy changed after approval.")
-
+        _verify_filed_copy(filing.output, filing.output_digest)
+        with self.connect() as db:
+            if db.execute("SELECT 1 FROM filing_corrections WHERE digest=?", (filing.source_digest,)).fetchone():
+                raise ValueError("The filing was withdrawn and the original scan was kept.")
         path = self.inbox / filing.source_name
         if path.parent != self.inbox or path.is_symlink() or not path.is_file():
             raise ValueError("The original scan is unavailable.")
@@ -287,7 +355,6 @@ class ScanIntake:
             digest = hashlib.sha256(data).hexdigest()
             with self.queue.connect() as db:
                 duplicate = db.execute("SELECT finding,status FROM scans WHERE digest=? LIMIT 1", (digest,)).fetchone()
-                filed = db.execute("SELECT completed FROM publications WHERE digest=?", (digest,)).fetchone()
             if duplicate:
                 info, status = duplicate
             else:
@@ -300,8 +367,6 @@ class ScanIntake:
                 except (OSError, ValueError, RuntimeError):
                     finding = Finding("Could not read")
                 info, status = json.dumps(asdict(finding)), finding.status
-            if filed and filed["completed"]:
-                status = "Filed"
             # A long OCR pass must not replace a newer scan or a cashier's decision.
             try:
                 if fingerprint(path) != version:
@@ -309,6 +374,13 @@ class ScanIntake:
             except OSError:
                 continue
             with self.queue.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                corrected = db.execute("SELECT 1 FROM filing_corrections WHERE digest=?", (digest,)).fetchone()
+                filed = db.execute("SELECT completed FROM publications WHERE digest=?", (digest,)).fetchone()
+                if corrected:
+                    status = "Unrelated"
+                elif filed and filed["completed"]:
+                    status = "Filed"
                 db.execute("""INSERT INTO scans VALUES(?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET
                     size=excluded.size,mtime=excluded.mtime,ctime=excluded.ctime,digest=excluded.digest,
                     status=CASE WHEN scans.digest=excluded.digest THEN scans.status ELSE excluded.status END,
