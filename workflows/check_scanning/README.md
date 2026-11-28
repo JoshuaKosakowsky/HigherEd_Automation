@@ -30,9 +30,9 @@ The pilot queue is stored at
 `%LOCALAPPDATA%/HigherEdAutomation/check-scanning/pilot-queue.sqlite3`.
 It stores source filenames, change information, content fingerprints, status,
 suggested company and serial, boxes, and filing receipts. Page images, full OCR
-text, MICR contents and signatures are not stored in the queue. Original PDFs
-remain in the scanner inbox. A renamed copy of previously filed content is
-recognized by its fingerprint on the same workstation.
+text, MICR contents and signatures are not stored in the queue. A renamed copy
+of previously filed content is recognized by its fingerprint on the same
+workstation.
 
 ## Recognition and review
 
@@ -75,9 +75,12 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
   require a fresh confirmation.
 - **Approve & Next** follows the batch selected when review started, including
   any previously filed scans explicitly selected for retesting. **Queue complete**
-  shows the saved files, skipped scans, and items marked unrelated. Closing
-  the summary ends the review session. The optional sign-in watcher can keep
-  checking for later scans.
+  shows the count and filenames of the saved copies, their destination, and
+  any skipped or unrelated scans. **Keep originals and close** is the default.
+  **Delete originals and close** asks for confirmation, then moves the approved
+  originals to the Recycle Bin after verifying the original and its redacted
+  copy still match the approval. The summary reports any originals it could
+  not move. Closing it ends the review session.
 
 ## Pilot output
 
@@ -95,7 +98,8 @@ embeds only those resulting images in a fresh PDF. This deliberately removes
 text layers, attachments and interactivity throughout the packet, including
 backup pages. Page sizes and order are preserved. The staged copy is reopened
 to verify its page count before publication. Existing destination files are
-never overwritten. During the pilot, originals stay in the PaperCut inbox.
+never overwritten. During the pilot, choose **Keep originals and close** when
+you want to reopen a scan for another redaction test.
 
 After pilot approval, the planned shared destination is the Controller's
 `Accounting/Accounting (Shared)/CASHIER/CASHNet Copies/FYxx` folder. The

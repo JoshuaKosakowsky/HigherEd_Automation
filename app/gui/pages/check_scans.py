@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 import sys
 
-from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, Qt, QTimer
+from PySide6.QtCore import QFile, QPointF, QRectF, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
@@ -21,7 +21,7 @@ from shared.mines_paths import get_papercut_scan_directory
 from workflows.check_scanning.detection import Box, Mark
 from workflows.check_scanning.documents import page_count, page_pixels
 from workflows.check_scanning.intake import (
-    ScanQueue, check_scan_output_directory, decode_finding, is_pending_review, missing_redactions,
+    FiledScan, ScanQueue, check_scan_output_directory, decode_finding, is_pending_review, missing_redactions,
     queue_path, review_output_path,
 )
 
@@ -160,7 +160,7 @@ class CheckReview(QDialog):
     def __init__(self, parent, queue, record, previous_output: Path | None = None, progress: str = ""):
         super().__init__(parent)
         self.queue, self.record = queue, record
-        self.saved_path: Path | None = None
+        self.filing: FiledScan | None = None
         self.marked_unrelated = False
         self.skipped = False
         self.source = queue.source(record)
@@ -287,7 +287,7 @@ class CheckReview(QDialog):
         if not self.approve.isEnabled():
             return
         try:
-            self.saved_path = self.queue.file(self.record, self.marks, self.issuer.text(), self.number.text())
+            self.filing = self.queue.file(self.record, self.marks, self.issuer.text(), self.number.text())
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
             QMessageBox.warning(self, "Check was not filed", str(exc))
             return
@@ -307,7 +307,7 @@ class CheckInbox(QDialog):
         super().__init__()
         self.queue = queue
         self.displayed = None
-        self.saved: list[tuple[str, Path]] = []
+        self.saved: list[FiledScan] = []
         self.checked: set[tuple[str, str]] = set()
         self.records_by_key: dict[tuple[str, str], dict] = {}
         self.visible_items: dict[tuple[str, str], QListWidgetItem] = {}
@@ -480,15 +480,15 @@ class CheckInbox(QDialog):
                 self.checked.discard(key)
                 continue
             try:
-                previous_output = self.saved[-1][1] if self.saved else None
+                previous_output = self.saved[-1].output if self.saved else None
                 viewer = CheckReview(self, self.queue, record, previous_output, f"Reviewing {index} of {len(keys)}")
             except (OSError, ValueError, RuntimeError):
                 skipped.append(f"{record['name']} (scan could not be opened)")
                 self.checked.discard(key)
                 continue
             viewer.exec()
-            if viewer.saved_path is not None:
-                self.saved.append((record["name"], viewer.saved_path))
+            if viewer.filing is not None:
+                self.saved.append(viewer.filing)
             elif viewer.marked_unrelated:
                 if self.mark_unrelated(record):
                     unrelated.append(record["name"])
@@ -512,15 +512,15 @@ class CheckInbox(QDialog):
         dialog.resize(680, 420)
         layout = QVBoxLayout(dialog)
         count = len(self.saved)
-        caption = "redacted PDF saved" if count == 1 else "redacted PDFs saved"
+        caption = "check saved as a redacted PDF" if count == 1 else "checks saved as redacted PDFs"
         layout.addWidget(QLabel(f"{count} {caption}."))
         locations = QFormLayout()
         layout.addLayout(locations)
         if self.saved:
-            folders = "\n".join(str(path) for path in dict.fromkeys(output.parent for _, output in self.saved))
-            locations.addRow("Redacted copies saved to", QLabel(folders, textFormat=Qt.TextFormat.PlainText, wordWrap=True))
-        locations.addRow("Original scans kept in", QLabel(str(self.queue.inbox), textFormat=Qt.TextFormat.PlainText, wordWrap=True))
-        details = [f"{source} → {output.name}" for source, output in self.saved]
+            folders = "\n".join(str(path) for path in dict.fromkeys(filing.output.parent for filing in self.saved))
+            locations.addRow("Redacted copies saved to", label(folders))
+        locations.addRow("PaperCut originals", label(str(self.queue.inbox)))
+        details = [f"{filing.source_name} → {filing.output.name}" for filing in self.saved]
         if unrelated:
             details.extend(["", "Marked unrelated", *unrelated])
         if skipped:
@@ -529,10 +529,52 @@ class CheckInbox(QDialog):
         files.setReadOnly(True)
         files.setAccessibleName("Scan results and filenames")
         layout.addWidget(files)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dialog.accept)
+        buttons = QDialogButtonBox()
+        keep_label = "Keep originals and close" if self.saved else "Close"
+        keep = buttons.addButton(keep_label, QDialogButtonBox.ButtonRole.AcceptRole)
+        keep.setObjectName("primary")
+        keep.setDefault(True)
+        keep.clicked.connect(dialog.accept)
+        if self.saved:
+            delete = buttons.addButton("Delete originals and close", QDialogButtonBox.ButtonRole.DestructiveRole)
+            delete.setAutoDefault(False)
+            delete.clicked.connect(lambda: self.recycle_originals(dialog))
         layout.addWidget(buttons)
+        keep.setFocus()
         dialog.exec()
+
+    def recycle_originals(self, dialog: QDialog):
+        originals = {filing.source_name: filing for filing in self.saved}
+        count = len(originals)
+        scans = "original scan" if count == 1 else "original scans"
+        answer = QMessageBox.question(
+            dialog, "Delete original scans?",
+            f"Move {count} {scans} from PaperCut to the Recycle Bin? "
+            "Keep the originals if you may need to redo the redactions.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        kept = []
+        for name, filing in originals.items():
+            try:
+                original = self.queue.original_for_recycling(filing)
+                recycled, _ = QFile.moveToTrash(str(original))
+                if not recycled:
+                    kept.append(f"{name} — Could not move this scan to the Recycle Bin.")
+            except ValueError as error:
+                kept.append(f"{name} — {error}")
+            except OSError:
+                kept.append(f"{name} — The original scan could not be verified or moved.")
+        if kept:
+            warning = QMessageBox(QMessageBox.Icon.Warning, "Some originals were kept",
+                                  f"Moved {count - len(kept)} of {count} originals to the Recycle Bin.",
+                                  QMessageBox.StandardButton.Ok, dialog)
+            warning.setDetailedText("\n".join(kept))
+            warning.exec()
+        dialog.accept()
 
     def done(self, result):
         self.timer.stop()

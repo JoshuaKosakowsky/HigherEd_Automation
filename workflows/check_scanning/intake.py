@@ -1,9 +1,9 @@
-"""Durable, per-user PaperCut scan inventory. Originals are read-only."""
+"""Durable, per-user PaperCut scan inventory and filing verification."""
 
 from __future__ import annotations
 
 from contextlib import closing, contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import hashlib
 from itertools import count
 import json
@@ -29,6 +29,19 @@ def queue_path() -> Path:
 
 def check_scan_output_directory() -> Path:
     return Path.home() / "Documents" / "Tests"
+
+
+@dataclass(frozen=True)
+class FiledScan:
+    source_name: str
+    source_digest: str
+    output: Path
+    output_digest: str
+
+
+def _file_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def fingerprint(path: Path) -> tuple[int, int, int]:
@@ -136,7 +149,7 @@ class ScanQueue:
             )
             return result.rowcount == 1
 
-    def file(self, record, marks, issuer: str, number: str) -> Path:
+    def file(self, record, marks, issuer: str, number: str) -> FiledScan:
         if decode_finding(record).status == "Multiple check pages":
             raise ValueError("Separate or verify this multi-check packet manually before filing.")
         target = review_output_path(record, issuer, number)
@@ -144,16 +157,18 @@ class ScanQueue:
         if missing_redactions(marks):
             raise ValueError("Mark the MICR band and the issuer signature before filing.")
         source = self.source(record)
+        name = record["name"]
         digest = record["digest"]
         if not repeat_review:
             with self.connect() as db:
                 old = db.execute("SELECT * FROM publications WHERE digest=?", (digest,)).fetchone()
                 if old and Path(old["target"]).is_file():
-                    if hashlib.sha256(Path(old["target"]).read_bytes()).hexdigest() != old["checksum"]:
+                    old_target = Path(old["target"])
+                    if _file_digest(old_target) != old["checksum"]:
                         raise ValueError("The previously filed copy has changed. Review the destination manually.")
                     db.execute("UPDATE publications SET completed=1 WHERE digest=?", (digest,))
                     db.execute("UPDATE scans SET status='Filed' WHERE digest=?", (digest,))
-                    return Path(old["target"])
+                    return FiledScan(name, digest, old_target, old["checksum"])
         if target.exists():
             raise FileExistsError("That filename already exists. Review the issuer and check number.")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -162,8 +177,8 @@ class ScanQueue:
             stage = Path(tmp.name)
         try:
             redact_pdf(source, marks, stage)
-            with stage.open("rb") as stream:
-                checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+            checksum = _file_digest(stage)
+            filing = FiledScan(name, digest, target, checksum)
             if page_count(stage.read_bytes()) != page_count(source):
                 raise ValueError("The output page count could not be verified.")
             self.source(record)
@@ -176,7 +191,7 @@ class ScanQueue:
                 if repeat_review:
                     # Pilot copies leave the initial filing receipt available for deduplication.
                     _publish_copy(stage, target)
-                    return target
+                    return filing
                 pending = db.execute("SELECT target FROM publications WHERE digest=?", (digest,)).fetchone()
                 if pending and Path(pending["target"]).exists():
                     raise ValueError("A copy was already filed. Reopen the queue to reconcile it.")
@@ -190,9 +205,28 @@ class ScanQueue:
                 _publish_copy(stage, target)
                 db.execute("UPDATE publications SET completed=1 WHERE digest=?", (digest,))
                 db.execute("UPDATE scans SET status='Filed' WHERE digest=?", (digest,))
-            return target
+            return filing
         finally:
             stage.unlink(missing_ok=True)
+
+    def original_for_recycling(self, filing: FiledScan) -> Path:
+        """Verify the filed bytes and the original immediately before recycling."""
+        if filing.output.parent != check_scan_output_directory() or filing.output.is_symlink():
+            raise ValueError("The redacted copy is outside the filing destination.")
+        try:
+            output_digest = _file_digest(filing.output)
+        except OSError as error:
+            raise ValueError("The redacted copy is unavailable.") from error
+        if output_digest != filing.output_digest:
+            raise ValueError("The redacted copy changed after approval.")
+
+        path = self.inbox / filing.source_name
+        if path.parent != self.inbox or path.is_symlink() or not path.is_file():
+            raise ValueError("The original scan is unavailable.")
+        version = fingerprint(path)
+        if _file_digest(path) != filing.source_digest or fingerprint(path) != version or path.is_symlink():
+            raise ValueError("The original scan changed after approval.")
+        return path
 
 
 def output_name(issuer: str, number: str) -> str:

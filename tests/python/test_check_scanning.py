@@ -183,7 +183,7 @@ class CheckScanTests(unittest.TestCase):
         self.assertEqual(collision.read_bytes(), b"an existing document")
         collision.unlink()
         folder.rmdir()
-        target = self.queue.file(record, finding.marks, finding.issuer, finding.number)
+        target = self.queue.file(record, finding.marks, finding.issuer, finding.number).output
         self.assertEqual(target, collision)
         self.assertEqual(list(shared.iterdir()), [])
         data = target.read_bytes()
@@ -205,7 +205,7 @@ class CheckScanTests(unittest.TestCase):
             self.assertEqual(interior.max(), 0)
         self.assertLess(np.abs(page_pixels(data,0).astype(float)-page_pixels(self.source,0)).mean(), 2.)
         self.assertEqual(self.queue.records(), [])
-        self.assertEqual(self.queue.file(record, finding.marks, finding.issuer, finding.number), target)
+        self.assertEqual(self.queue.file(record, finding.marks, finding.issuer, finding.number).output, target)
         self.assertEqual(list(folder.iterdir()), [target])
 
     def test_changed_source_and_invalid_geometry(self):
@@ -218,6 +218,28 @@ class CheckScanTests(unittest.TestCase):
             self.queue.source(record)
         with self.assertRaises(ValueError):
             redact_pdf(self.source, [Mark(0, "MICR", Box(.2,.3,.1,.4))], io.BytesIO())
+
+    def test_recycling_requires_the_approved_original_and_redacted_copy(self):
+        original = self.inbox / "packet.pdf"
+        original.write_bytes(self.source)
+        self.index(ScanIntake(self.queue))
+        record, = self.queue.records()
+        finding = decode_finding(record)
+        filing = self.queue.file(record, finding.marks, finding.issuer, finding.number)
+
+        self.assertEqual(self.queue.original_for_recycling(filing), original)
+        original.write_bytes(self.source + b"\n% replacement scan\n")
+        with self.assertRaisesRegex(ValueError, "original scan changed"):
+            self.queue.original_for_recycling(filing)
+        original.write_bytes(self.source)
+
+        filing.output.write_bytes(b"changed copy")
+        with self.assertRaisesRegex(ValueError, "redacted copy changed"):
+            self.queue.original_for_recycling(filing)
+        filing.output.unlink()
+        with self.assertRaisesRegex(ValueError, "redacted copy is unavailable"):
+            self.queue.original_for_recycling(filing)
+        self.assertTrue(original.is_file())
 
     def test_hidden_text_attachment_and_rotated_crop_do_not_survive_as_source_objects(self):
         with pdf.PdfDocument(pdf_with_invisible_text()) as doc:
@@ -507,13 +529,13 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             viewer.confirm.click()
             self.assertTrue(viewer.approve.isEnabled())
             viewer.approve.click()
-            self.assertIsNotNone(viewer.saved_path)
+            self.assertIsNotNone(viewer.filing)
 
         def read_summary(dialog):
             summaries.append(dialog.windowTitle())
             self.assertEqual(dialog.windowTitle(), "Queue complete")
             labels = [label.text() for label in dialog.findChildren(QLabel)]
-            self.assertIn("3 redacted PDFs saved.", labels)
+            self.assertIn("3 checks saved as redacted PDFs.", labels)
             self.assertIn(str(self.inbox), labels)
             self.assertIn(str(self.home / "Documents" / "Tests"), labels)
             files = dialog.findChild(QPlainTextEdit).toPlainText().splitlines()
@@ -524,7 +546,11 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
                 "", "Skipped", skipped_scan.name,
             ])
             buttons = dialog.findChild(QDialogButtonBox)
-            buttons.button(QDialogButtonBox.StandardButton.Close).click()
+            choices = {button.text(): button for button in buttons.buttons()}
+            self.assertIn("Delete originals and close", choices)
+            keep = choices["Keep originals and close"]
+            self.assertTrue(keep.isDefault())
+            keep.click()
             self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
 
         with (patch("app.gui.pages.check_scans.start_check_scan_process") as launch,
@@ -557,6 +583,68 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         self.assertTrue(third.is_file())
         self.assertEqual({record["name"] for record in self.queue.records()}, {skipped_scan.name, unselected.name})
 
+    def test_delete_originals_from_summary_recycles_only_verified_scans(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QFile
+        from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox
+        from app.gui.pages.check_scans import CheckInbox
+
+        app = QApplication.instance() or QApplication([])
+        first = self.inbox / "approved.pdf"
+        second = self.inbox / "missing copy.pdf"
+        unselected = self.inbox / "unselected.pdf"
+        first.write_bytes(self.source)
+        second.write_bytes(self.source + b"\n% second synthetic scan\n")
+        unselected.write_bytes(self.source + b"\n% unselected scan\n")
+        self.index(ScanIntake(self.queue))
+        records = {record["name"]: record for record in self.queue.records()}
+        filings = [
+            self.queue.file(records[original.name], decode_finding(records[original.name]).marks, "Example LLC", serial)
+            for original, serial in ((first, "001"), (second, "002"))
+        ]
+        filings[1].output.unlink()
+        recycled_path = self.root / "recycled.pdf"
+        warnings = []
+
+        def recycle(filename):
+            Path(filename).rename(recycled_path)
+            return True, str(recycled_path)
+
+        def read_summary(dialog):
+            buttons = dialog.findChild(QDialogButtonBox)
+            delete = next(button for button in buttons.buttons() if button.text() == "Delete originals and close")
+            delete.click()
+            self.assertTrue(first.is_file())
+            self.assertEqual(dialog.result(), QDialog.DialogCode.Rejected)
+            delete.click()
+            self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+        def read_warning(message):
+            warnings.append((message.text(), message.detailedText()))
+
+        with (patch("app.gui.pages.check_scans.start_check_scan_process"),
+              patch.object(QDialog, "exec", read_summary),
+              patch.object(QFile, "moveToTrash", side_effect=recycle) as move,
+              patch.object(QMessageBox, "exec", read_warning),
+              patch.object(QMessageBox, "question", side_effect=[
+                  QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes,
+              ])):
+            view = CheckInbox(self.queue)
+            self.addCleanup(view.close)
+            view.saved.extend(filings)
+            view.show_completion([], [])
+            move.assert_called_once_with(str(first))
+            app.processEvents()
+
+        self.assertFalse(first.exists())
+        self.assertEqual(recycled_path.read_bytes(), self.source)
+        self.assertTrue(filings[0].output.is_file())
+        self.assertTrue(second.is_file())
+        self.assertTrue(unselected.is_file())
+        self.assertEqual(warnings, [
+            ("Moved 1 of 2 originals to the Recycle Bin.", "missing copy.pdf — The redacted copy is unavailable."),
+        ])
+
     def test_filed_scan_can_be_reviewed_again_and_saves_numbered_test_copy(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6.QtWidgets import QApplication, QPushButton
@@ -567,7 +655,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         self.index(ScanIntake(self.queue))
         record, = self.queue.records()
         finding = decode_finding(record)
-        original = self.queue.file(record, finding.marks, "Example LLC", "000482")
+        original = self.queue.file(record, finding.marks, "Example LLC", "000482").output
         original_bytes = original.read_bytes()
         repeated = original.with_stem(f"{original.stem} (2)")
         summaries = []
@@ -597,7 +685,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             view.other.setChecked(True)
             self.assertEqual(view.listing.count(), 1)
             view.review_one(view.listing.currentItem())
-            self.assertEqual(view.saved, [("packet.pdf", repeated)])
+            self.assertEqual([(filing.source_name, filing.output) for filing in view.saved], [("packet.pdf", repeated)])
             self.assertEqual(summaries, [view.saved])
             app.processEvents()
 
@@ -607,7 +695,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         point = (int(new_pixels.shape[0] * .6), int(new_pixels.shape[1] * .6))
         self.assertEqual(new_pixels[point].max(), 0)
         self.assertEqual(old_pixels[point].min(), 255)
-        self.assertEqual(self.queue.file(record, finding.marks, "Example LLC", "000482"), original)
+        self.assertEqual(self.queue.file(record, finding.marks, "Example LLC", "000482").output, original)
 
     def test_uncertain_scans_can_be_marked_unrelated_from_queue_and_preview(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
