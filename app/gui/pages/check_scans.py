@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 import sys
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
@@ -21,7 +21,7 @@ from shared.mines_paths import get_papercut_scan_directory
 from workflows.check_scanning.detection import Box, Mark
 from workflows.check_scanning.documents import page_count, page_pixels
 from workflows.check_scanning.intake import (
-    ScanQueue, check_scan_output_directory, decode_finding, missing_redactions,
+    ScanQueue, check_scan_output_directory, decode_finding, is_pending_review, missing_redactions,
     queue_path, review_output_path,
 )
 
@@ -32,6 +32,10 @@ def control(text, action, layout):
     widget.clicked.connect(action)
     layout.addWidget(widget)
     return widget
+
+
+def scan_key(record) -> tuple[str, str]:
+    return record["name"], record["digest"]
 
 
 class PageCanvas(QWidget):
@@ -153,11 +157,12 @@ class PageCanvas(QWidget):
 
 
 class CheckReview(QDialog):
-    def __init__(self, parent, queue, record, previous_output: Path | None = None):
+    def __init__(self, parent, queue, record, previous_output: Path | None = None, progress: str = ""):
         super().__init__(parent)
         self.queue, self.record = queue, record
         self.saved_path: Path | None = None
         self.marked_unrelated = False
+        self.skipped = False
         self.source = queue.source(record)
         self.count = page_count(self.source)
         finding = decode_finding(record)
@@ -166,6 +171,8 @@ class CheckReview(QDialog):
         self.setWindowTitle("Review check and backup pages")
         self.resize(1050, 850)
         layout = QVBoxLayout(self)
+        if progress:
+            layout.addWidget(label(progress))
         if previous_output is not None:
             layout.addWidget(QLabel(f"Saved {previous_output.name}", textFormat=Qt.TextFormat.PlainText))
         layout.addWidget(QLabel(record["name"], textFormat=Qt.TextFormat.PlainText))
@@ -214,7 +221,7 @@ class CheckReview(QDialog):
         layout.addWidget(self.confirm)
         actions = QHBoxLayout()
         layout.addLayout(actions)
-        control("Skip for now", self.reject, actions)
+        control("Skip for now", self.skip, actions)
         if record["status"] not in ("Filed", "Unrelated"):
             control("Not a check", self.mark_not_a_check, actions)
         actions.addStretch()
@@ -288,6 +295,10 @@ class CheckReview(QDialog):
         self.marked_unrelated = True
         self.reject()
 
+    def skip(self):
+        self.skipped = True
+        self.reject()
+
 
 class CheckInbox(QDialog):
     def __init__(self, queue):
@@ -295,7 +306,9 @@ class CheckInbox(QDialog):
         self.queue = queue
         self.displayed = None
         self.saved: list[tuple[str, Path]] = []
-        self.awaiting_completion = False
+        self.checked: set[tuple[str, str]] = set()
+        self.records_by_key: dict[tuple[str, str], dict] = {}
+        self.visible_items: dict[tuple[str, str], QListWidgetItem] = {}
         self.setWindowTitle("Check Scan Review")
         self.resize(775, 560)
         layout = QVBoxLayout(self)
@@ -304,74 +317,136 @@ class CheckInbox(QDialog):
         layout.addWidget(self.status)
         self.other = QCheckBox("Show all scans, including filed, unrelated, and dismissed items")
         layout.addWidget(self.other)
+        controls = QHBoxLayout()
+        self.filename_filter = QLineEdit()
+        self.filename_filter.setPlaceholderText("Filter by filename")
+        self.filename_filter.setAccessibleName("Filter by filename")
+        controls.addWidget(self.filename_filter, 1)
+        self.sort_order = QComboBox()
+        self.sort_order.setAccessibleName("Sort scans")
+        self.sort_order.addItems(["Oldest first", "Newest first", "Filename"])
+        controls.addWidget(self.sort_order)
+        self.select_shown_button = control("Select shown", self.select_shown, controls)
+        self.clear_selection_button = control("Clear selection", self.clear_selection, controls)
+        layout.addLayout(controls)
+        layout.addWidget(label("Check the files you want to review, or double-click to review one."))
         self.listing = QListWidget()
         layout.addWidget(self.listing)
         actions = QHBoxLayout()
         layout.addLayout(actions)
-        self.open_button = control("Review selected", self.review, actions)
+        self.open_button = control("Review queue", lambda: self.review(), actions)
         self.dismiss_button = control("Dismiss from queue", self.dismiss, actions)
         self.not_a_check_button = control("Not a check", self.mark_selected_unrelated, actions)
         actions.addStretch()
         control("Close", self.close, actions)
-        self.listing.itemDoubleClicked.connect(lambda *_: self.review())
-        self.listing.currentItemChanged.connect(self.update_classification_action)
+        self.listing.itemDoubleClicked.connect(self.review_one)
+        self.listing.currentItemChanged.connect(self.update_actions)
+        self.listing.itemChanged.connect(self.update_selection)
         self.other.toggled.connect(self.refresh)
+        self.filename_filter.textChanged.connect(self.refresh)
+        self.sort_order.currentIndexChanged.connect(self.refresh)
         try:
             self.worker = start_check_scan_process("workflows.check_scanning.watch")
         except OSError:
             self.worker = None
         self.timer = QTimer(self, interval=3000)
         self.timer.timeout.connect(self.refresh)
-        self.timer.timeout.connect(self.check_completion)
         self.timer.start()
         self.refresh()
 
     def refresh(self, *_):
         previous = self.listing.currentItem()
-        name = previous.data(Qt.ItemDataRole.UserRole)["name"] if previous else ""
+        previous_key = scan_key(previous.data(Qt.ItemDataRole.UserRole)) if previous else None
         try:
-            records = self.queue.records(self.other.isChecked())
+            records = self.queue.records(True)
         except sqlite3.Error:
             self.status.setText("The queue is unavailable. Check the workstation’s local storage.")
             return
+        if self.sort_order.currentIndex() == 1:
+            records.reverse()
+        elif self.sort_order.currentIndex() == 2:
+            records.sort(key=lambda record: (record["name"].casefold(), record["name"]))
+        self.records_by_key = {scan_key(record): dict(record) for record in records}
+        self.checked.intersection_update(self.records_by_key)
+        query = self.filename_filter.text().strip().casefold()
+        records = [
+            record for record in self.records_by_key.values()
+            if (self.other.isChecked() or is_pending_review(record))
+            and query in record["name"].casefold()
+        ]
         displayed = [(r["name"], r["digest"], r["status"]) for r in records]
         if displayed != self.displayed:
             self.displayed = displayed
-            self.listing.clear()
-            for record in records:
-                item = QListWidgetItem(f"{record['status']}    {record['name']}")
-                item.setData(Qt.ItemDataRole.UserRole, dict(record))
-                self.listing.addItem(item)
-                if record["name"] == name:
-                    self.listing.setCurrentItem(item)
-            if self.listing.currentRow() < 0 and records:
-                self.listing.setCurrentRow(0)
+            with QSignalBlocker(self.listing):
+                self.listing.clear()
+                self.visible_items.clear()
+                for record in records:
+                    key = scan_key(record)
+                    item = QListWidgetItem(f"{record['status']}    {record['name']}")
+                    item.setData(Qt.ItemDataRole.UserRole, record)
+                    item.setCheckState(Qt.CheckState.Checked if key in self.checked else Qt.CheckState.Unchecked)
+                    self.listing.addItem(item)
+                    self.visible_items[key] = item
+                if previous_key in self.visible_items:
+                    self.listing.setCurrentItem(self.visible_items[previous_key])
+                elif records:
+                    self.listing.setCurrentRow(0)
         if not self.queue.inbox.is_dir():
             self.status.setText("The intake folder is unavailable. Check business OneDrive sync.")
         elif self.worker is None or self.worker.poll() is not None:
             self.status.setText("Scan recognition stopped. Rerun setup and reopen the queue.")
         elif not records:
-            self.status.setText("No scans to review. Watching for new scans.")
+            if query:
+                self.status.setText("No scans match that filename.")
+            else:
+                self.status.setText("No scans to review. Watching for new scans.")
         else:
             saved_status = f"{len(self.saved)} saved this session. " if self.saved else ""
-            self.status.setText(f"{saved_status}{len(records)} shown. New scans are checked automatically.")
-        self.open_button.setEnabled(bool(records))
-        self.dismiss_button.setEnabled(bool(records))
-        self.update_classification_action()
+            self.status.setText(f"{saved_status}{len(records)} shown. Watching for new scans.")
+        self.update_actions()
 
-    def update_classification_action(self):
+    def update_actions(self, *_):
         item = self.listing.currentItem()
+        count = len(self.checked)
+        self.open_button.setText(f"Review queue ({count})" if count else "Review queue")
+        self.open_button.setEnabled(bool(count))
+        self.select_shown_button.setEnabled(bool(self.visible_items))
+        self.clear_selection_button.setEnabled(bool(count))
+        self.dismiss_button.setEnabled(item is not None)
         self.not_a_check_button.setEnabled(
             item is not None and item.data(Qt.ItemDataRole.UserRole)["status"] not in ("Filed", "Unrelated")
         )
 
+    def update_selection(self, item):
+        key = scan_key(item.data(Qt.ItemDataRole.UserRole))
+        if item.checkState() == Qt.CheckState.Checked:
+            self.checked.add(key)
+        else:
+            self.checked.discard(key)
+        self.update_actions()
+
+    def select_shown(self):
+        self.checked.update(self.visible_items)
+        self.sync_checkboxes()
+
+    def clear_selection(self):
+        self.checked.clear()
+        self.sync_checkboxes()
+
+    def sync_checkboxes(self):
+        with QSignalBlocker(self.listing):
+            for key, item in self.visible_items.items():
+                item.setCheckState(Qt.CheckState.Checked if key in self.checked else Qt.CheckState.Unchecked)
+        self.update_actions()
+
     def dismiss(self):
         item = self.listing.currentItem()
         if item:
-            self.queue.dismiss(item.data(Qt.ItemDataRole.UserRole))
+            record = item.data(Qt.ItemDataRole.UserRole)
+            self.queue.dismiss(record)
+            self.checked.discard(scan_key(record))
             self.refresh()
-            self.awaiting_completion = bool(self.saved)
-            self.check_completion()
+            self.sync_checkboxes()
 
     def mark_selected_unrelated(self):
         item = self.listing.currentItem()
@@ -383,65 +458,64 @@ class CheckInbox(QDialog):
             changed = self.queue.mark_unrelated(record)
         except sqlite3.Error:
             QMessageBox.warning(self, "Queue unavailable", "Check local storage and try again.")
-            return
+            return False
+        if changed:
+            self.checked.discard(scan_key(record))
         self.refresh()
+        self.sync_checkboxes()
         if not changed:
             QMessageBox.information(self, "Scan changed", "Select the updated scan in the queue to review it.")
-        self.awaiting_completion = bool(self.saved)
-        self.check_completion()
+        return changed
 
-    def review(self):
-        self.awaiting_completion = False
-        while item := self.listing.currentItem():
-            record = item.data(Qt.ItemDataRole.UserRole)
+    def review_one(self, item):
+        self.review((scan_key(item.data(Qt.ItemDataRole.UserRole)),))
+
+    def review(self, keys: tuple[tuple[str, str], ...] | None = None):
+        self.refresh()
+        if keys is None:
+            keys = tuple(key for key in self.records_by_key if key in self.checked)
+        if not keys:
+            return
+
+        skipped = []
+        unrelated = []
+        for index, key in enumerate(keys, 1):
+            record = self.records_by_key.get(key)
+            if record is None:
+                skipped.append(f"{key[0]} (scan changed or is unavailable)")
+                continue
             if decode_finding(record).status == "Multiple check pages":
-                QMessageBox.information(self, "Multiple check faces",
-                                        "Verify and separate the packet or redact it manually in Acrobat.")
-                return
+                skipped.append(f"{record['name']} (multiple check faces)")
+                self.checked.discard(key)
+                continue
             try:
                 previous_output = self.saved[-1][1] if self.saved else None
-                viewer = CheckReview(self, self.queue, record, previous_output)
+                viewer = CheckReview(self, self.queue, record, previous_output, f"Reviewing {index} of {len(keys)}")
             except (OSError, ValueError, RuntimeError):
-                QMessageBox.warning(self, "Scan unavailable", "Check whether the complete PDF is synced and readable.")
-                return
+                skipped.append(f"{record['name']} (scan could not be opened)")
+                self.checked.discard(key)
+                continue
             viewer.exec()
-            saved_path = viewer.saved_path
-            marked_unrelated = viewer.marked_unrelated
+            if viewer.saved_path is not None:
+                self.saved.append((record["name"], viewer.saved_path))
+            elif viewer.marked_unrelated:
+                if self.mark_unrelated(record):
+                    unrelated.append(record["name"])
+                else:
+                    skipped.append(record["name"])
+            elif viewer.skipped:
+                skipped.append(record["name"])
+            else:
+                viewer.deleteLater()
+                return
             viewer.deleteLater()
-            if marked_unrelated:
-                self.mark_unrelated(record)
-                return
-            if saved_path is None:
-                self.refresh()
-                if self.listing.count():
-                    self.listing.setCurrentRow((self.listing.currentRow()+1) % self.listing.count())
-                return
-            self.saved.append((record["name"], saved_path))
+            self.checked.discard(key)
             self.refresh()
-            if self.other.isChecked():
-                break
-        self.awaiting_completion = bool(self.saved)
-        self.check_completion()
+            self.sync_checkboxes()
+        self.show_completion(skipped, unrelated)
+        self.accept()
 
-    def check_completion(self):
-        if not self.awaiting_completion:
-            return
-        try:
-            pending_intake = self.queue.has_pending_intake()
-            remaining = self.queue.records()
-        except (OSError, sqlite3.Error):
-            return
-        if remaining:
-            self.awaiting_completion = False
-        elif pending_intake:
-            if self.worker is not None and self.worker.poll() is None:
-                self.status.setText(f"Saved {len(self.saved)}. Checking remaining incoming scans…")
-        else:
-            self.awaiting_completion = False
-            self.show_completion()
-            self.accept()
-
-    def show_completion(self):
+    def show_completion(self, skipped: list[str], unrelated: list[str]):
         dialog = QDialog(self)
         dialog.setWindowTitle("Queue complete")
         dialog.resize(680, 420)
@@ -451,12 +525,18 @@ class CheckInbox(QDialog):
         layout.addWidget(QLabel(f"{count} {caption}."))
         locations = QFormLayout()
         layout.addLayout(locations)
-        folders = "\n".join(str(path) for path in dict.fromkeys(output.parent for _, output in self.saved))
-        locations.addRow("Redacted copies saved to", QLabel(folders, textFormat=Qt.TextFormat.PlainText, wordWrap=True))
+        if self.saved:
+            folders = "\n".join(str(path) for path in dict.fromkeys(output.parent for _, output in self.saved))
+            locations.addRow("Redacted copies saved to", QLabel(folders, textFormat=Qt.TextFormat.PlainText, wordWrap=True))
         locations.addRow("Original scans kept in", QLabel(str(self.queue.inbox), textFormat=Qt.TextFormat.PlainText, wordWrap=True))
-        files = QPlainTextEdit("\n".join(f"{source} → {output.name}" for source, output in self.saved))
+        details = [f"{source} → {output.name}" for source, output in self.saved]
+        if unrelated:
+            details.extend(["", "Marked unrelated", *unrelated])
+        if skipped:
+            details.extend(["", "Skipped", *skipped])
+        files = QPlainTextEdit("\n".join(details))
         files.setReadOnly(True)
-        files.setAccessibleName("Original scan and redacted copy filenames")
+        files.setAccessibleName("Scan results and filenames")
         layout.addWidget(files)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.accept)

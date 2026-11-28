@@ -60,6 +60,10 @@ def missing_redactions(marks: list[Mark]) -> tuple[str, ...]:
     return tuple(kind for kind in ("MICR", "Signature") if kind not in marked)
 
 
+def is_pending_review(record) -> bool:
+    return record["status"] not in ("Not a PDF", "Unrelated", "Dismissed", "Filed")
+
+
 def review_output_path(record, issuer: str, number: str) -> Path:
     target = check_scan_output_directory() / output_name(issuer, number)
     if record["status"] == "Filed" and target.exists():
@@ -106,21 +110,13 @@ class ScanQueue:
             yield db
 
     def records(self, include_other: bool = False):
-        clause = (
-            "WHERE status != 'Not a PDF'" if include_other
-            else "WHERE status NOT IN ('Not a PDF', 'Unrelated', 'Dismissed', 'Filed')"
-        )
         with self.connect() as db:
-            return db.execute(f"SELECT * FROM scans {clause} ORDER BY mtime, name").fetchall()
+            rows = db.execute("SELECT * FROM scans WHERE status != 'Not a PDF' ORDER BY mtime, name").fetchall()
+        return rows if include_other else [row for row in rows if is_pending_review(row)]
 
     def known_versions(self) -> dict[str, tuple[int, int, int]]:
         with self.connect() as db:
             return {r["name"]: tuple(r)[1:] for r in db.execute("SELECT name,size,mtime,ctime FROM scans")}
-
-    def has_pending_intake(self) -> bool:
-        files = inbox_versions(self.inbox)
-        known = self.known_versions()
-        return any(version[0] and known.get(name) != version for name, version in files.items())
 
     def source(self, record) -> bytes:
         path = self.inbox / record["name"]

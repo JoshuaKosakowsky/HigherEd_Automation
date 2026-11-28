@@ -471,27 +471,38 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
         target = self.home / "Documents" / "Tests" / "Example Inc. - 000483.pdf"
         self.assertEqual(page_count(target.read_bytes()), 2)
 
-    def test_queue_summarizes_approved_files_and_closes_after_intake_catches_up(self):
+    def test_selected_queue_advances_through_three_checks_including_a_filed_scan(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit
         from app.gui.pages.check_scans import CheckInbox, CheckReview
 
         app = QApplication.instance() or QApplication([])
         first = self.inbox / "first scan.pdf"
         second = self.inbox / "second scan.pdf"
+        third = self.inbox / "third scan.pdf"
         first.write_bytes(self.source)
         second.write_bytes(self.source + b"\n% second synthetic scan\n")
-        intake = ScanIntake(self.queue)
-        self.index(intake)
-        pending = self.inbox / "incoming memo.txt"
-        pending.write_text("This file should not interrupt check review.", encoding="utf-8")
-        self.assertTrue(self.queue.has_pending_intake())
+        third.write_bytes(self.source + b"\n% third synthetic scan\n")
+        skipped_scan = self.inbox / "skip scan.pdf"
+        skipped_scan.write_bytes(self.source + b"\n% skip this check\n")
+        unselected = self.inbox / "unselected scan.pdf"
+        unselected.write_bytes(self.source + b"\n% leave this check in the inbox\n")
+        self.index(ScanIntake(self.queue))
+        previously_filed = next(record for record in self.queue.records() if record["name"] == third.name)
+        self.queue.file(previously_filed, decode_finding(previously_filed).marks, "Example Company LLC", "000484")
 
-        serials = iter(("000482", "000483"))
+        serials = iter(("000482", "000483", "000484"))
+        reviewed = []
         summaries = []
 
         def approve(viewer):
+            reviewed.append(viewer.record["name"])
+            if viewer.record["name"] == skipped_scan.name:
+                viewer.skip()
+                return
             viewer.show_page(1)
+            viewer.issuer.setText("Example Company LLC")
             viewer.number.setText(next(serials))
             viewer.confirm.click()
             self.assertTrue(viewer.approve.isEnabled())
@@ -502,13 +513,15 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             summaries.append(dialog.windowTitle())
             self.assertEqual(dialog.windowTitle(), "Queue complete")
             labels = [label.text() for label in dialog.findChildren(QLabel)]
-            self.assertIn("2 redacted PDFs saved.", labels)
+            self.assertIn("3 redacted PDFs saved.", labels)
             self.assertIn(str(self.inbox), labels)
             self.assertIn(str(self.home / "Documents" / "Tests"), labels)
             files = dialog.findChild(QPlainTextEdit).toPlainText().splitlines()
             self.assertEqual(files, [
                 "first scan.pdf → Example Company LLC - 000482.pdf",
                 "second scan.pdf → Example Company LLC - 000483.pdf",
+                "third scan.pdf → Example Company LLC - 000484 (2).pdf",
+                "", "Skipped", skipped_scan.name,
             ])
             buttons = dialog.findChild(QDialogButtonBox)
             buttons.button(QDialogButtonBox.StandardButton.Close).click()
@@ -523,21 +536,26 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             self.addCleanup(view.close)
             view.show()
             app.processEvents()
-            view.review()
-            self.assertEqual(summaries, [])
-            self.assertTrue(view.isVisible())
-            self.assertIn("Checking remaining incoming scans", view.status.text())
-            with patch("workflows.check_scanning.intake.monotonic", side_effect=[7, 10]):
-                intake.poll()
-                intake.poll()
-            self.assertFalse(self.queue.has_pending_intake())
-            view.check_completion()
+            self.assertEqual(view.listing.count(), 4)
+            view.other.setChecked(True)
+            view.sort_order.setCurrentText("Filename")
+            view.filename_filter.setText("first")
+            view.select_shown_button.click()
+            view.filename_filter.clear()
+            self.assertEqual(view.listing.item(0).checkState(), Qt.CheckState.Checked)
+            view.listing.item(1).setCheckState(Qt.CheckState.Checked)
+            view.listing.item(2).setCheckState(Qt.CheckState.Checked)
+            view.listing.item(3).setCheckState(Qt.CheckState.Checked)
+            self.assertEqual(view.open_button.text(), "Review queue (4)")
+            view.open_button.click()
+            self.assertEqual(reviewed, [first.name, second.name, skipped_scan.name, third.name])
             self.assertEqual(summaries, ["Queue complete"])
             self.assertFalse(view.isVisible())
             worker.kill.assert_called_once()
         self.assertEqual(first.read_bytes(), self.source)
         self.assertTrue(second.is_file())
-        self.assertTrue(pending.is_file())
+        self.assertTrue(third.is_file())
+        self.assertEqual({record["name"] for record in self.queue.records()}, {skipped_scan.name, unselected.name})
 
     def test_filed_scan_can_be_reviewed_again_and_saves_numbered_test_copy(self):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -564,7 +582,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             self.assertTrue(viewer.approve.isEnabled())
             viewer.approve.click()
 
-        def record_summary(inbox):
+        def record_summary(inbox, skipped, unrelated):
             summaries.append(inbox.saved.copy())
 
         with (patch("app.gui.pages.check_scans.start_check_scan_process"),
@@ -575,7 +593,7 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
             self.assertEqual(view.listing.count(), 0)
             view.other.setChecked(True)
             self.assertEqual(view.listing.count(), 1)
-            view.open_button.click()
+            view.review_one(view.listing.currentItem())
             self.assertEqual(view.saved, [("packet.pdf", repeated)])
             self.assertEqual(summaries, [view.saved])
             app.processEvents()
@@ -616,15 +634,23 @@ assert not ctypes.windll.kernel32.GetConsoleWindow()
                     return
             self.fail("The preview is missing its classification action")
 
+        def verify_summary(inbox, skipped, unrelated):
+            self.assertEqual(skipped, [])
+            self.assertEqual(unrelated, [second.name])
+
         with (patch("app.gui.pages.check_scans.start_check_scan_process"),
-              patch.object(CheckReview, "exec", mark_in_preview)):
+              patch.object(CheckReview, "exec", mark_in_preview),
+              patch.object(CheckInbox, "show_completion", verify_summary)):
             view = CheckInbox(queue)
             self.addCleanup(view.close)
             self.assertEqual(view.listing.count(), 2)
             self.assertTrue(view.listing.currentItem().text().startswith("Needs Review"))
+            view.select_shown_button.click()
+            self.assertEqual(view.open_button.text(), "Review queue (2)")
             view.not_a_check_button.click()
             self.assertEqual(view.listing.count(), 1)
-            view.open_button.click()
+            self.assertEqual(view.open_button.text(), "Review queue (1)")
+            view.review_one(view.listing.currentItem())
             self.assertEqual(view.listing.count(), 0)
             view.other.setChecked(True)
             self.assertEqual(view.listing.count(), 2)

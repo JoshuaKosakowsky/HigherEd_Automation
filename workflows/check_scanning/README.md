@@ -54,12 +54,17 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
   the pilot, reopen a filed scan to test another redaction. When the desired
   filename exists, approval adds a number such as `(2)` to the new test copy.
   Dismissal leaves the source in place.
+- Filter by filename or sort the list by filename or scan date. Check the files
+  you want to process and choose **Review queue**. **Select shown** checks
+  the visible files. Checked files stay selected through filtering and sorting.
+  Double-click a file to review it on its own.
 - Verify the issuer and printed check number. A suggested MICR box covers the
   line as a unit. A printed signature label can locate a proposed signing area.
   Missing or inaccurate suggestions require manual correction. Use the page
   controls and zoom, select a box type and drag to draw, drag a box to move it,
   or drag a corner to resize. Delete and undo are available before approval.
-  **Skip for now** keeps the scan queued and discards unsaved edits.
+  **Skip for now** advances to the next selected scan and leaves the skipped
+  file available for a future review.
 - Inspect backup pages and the opaque **Redacted preview**. If a single scan
   contains separate checks or unrelated documents, separate the packet before
   filing. Multiple detected check pages are held for manual handling.
@@ -67,9 +72,9 @@ Ordinary invoice text alone is ignored. No confidence level files a PDF.
   MICR or signature boxes, and resolve filename errors. Then check the review
   confirmation to enable **Approve & Next**. Changes to the filename or boxes
   require a fresh confirmation.
-- The next review shows the filename just saved. Once the review queue is
-  empty and intake has caught up, **Queue complete** shows the session's count,
-  source and destination folders, and original and redacted filenames. Closing
+- **Approve & Next** follows the batch selected when review started, including
+  any previously filed scans explicitly selected for retesting. **Queue complete**
+  shows the saved files, skipped scans, and items marked unrelated. Closing
   the summary ends the review session. The optional sign-in watcher can keep
   checking for later scans.
 
