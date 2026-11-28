@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.services.check_scanning import start_check_scan_process
-from app.gui.theme import apply_theme
+from app.gui.theme import apply_theme, label
 from shared.mines_paths import get_papercut_scan_directory
 from workflows.check_scanning.detection import Box, Mark
 from workflows.check_scanning.documents import page_count, page_pixels
@@ -207,7 +207,7 @@ class CheckReview(QDialog):
         form.addRow("Check number", self.number)
         self.destination = QLabel(textFormat=Qt.TextFormat.PlainText, wordWrap=True)
         form.addRow("Test copy", self.destination)
-        self.approval_status = QLabel(textFormat=Qt.TextFormat.PlainText, wordWrap=True)
+        self.approval_status = label("", "warning")
         layout.addWidget(self.approval_status)
         self.confirm = QCheckBox("I reviewed every page, the MICR and signature coverage, and the filename.")
         layout.addWidget(self.confirm)
@@ -245,6 +245,7 @@ class CheckReview(QDialog):
         if not issues and not self.confirm.isChecked():
             issues.append("Check the review confirmation to enable approval.")
         self.approval_status.setText(" ".join(issues))
+        self.approval_status.setVisible(bool(issues))
 
     def show_page(self, page):
         self.canvas.load(self.source, page)
